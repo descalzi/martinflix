@@ -1,6 +1,6 @@
 # First-run installer
 
-Start with a Linux host and an account that can run Docker Engine and Docker Compose. The installer uses Python 3.10+ and its standard library. If Docker is missing, install [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/) for your distribution and confirm `docker info` works as your normal user.
+Start with a Linux host and an account that can run Docker Engine and Docker Compose. The installer uses Python 3.9+ and its standard library. If Docker is missing, install [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/) for your distribution and confirm `docker info` works as your normal user. See [Prepare the VM](../README.md#1-prepare-the-vm) if Python is missing or too old.
 
 From the checkout, run:
 

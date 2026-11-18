@@ -232,8 +232,15 @@ def main():
     parser.add_argument('--radarr-port', type=int, default=7878)
     parser.add_argument('--check', action='store_true', help='Check prerequisites without creating files or starting containers.')
     args = parser.parse_args()
-    if sys.platform != 'linux' or sys.version_info < (3, 10):
-        parser.exit(1, 'Use a Linux VM with Python 3.10 or newer. Check your version with: python3 --version\n')
+    if sys.platform != 'linux':
+        parser.exit(1, 'Run this installer on a Linux VM.\n')
+    if sys.version_info < (3, 9):
+        version = '.'.join(map(str, sys.version_info[:3]))
+        parser.exit(1, f'Python {version} is too old for this installer. Python 3.9 or newer is required.\n'
+                    'Run cat /etc/os-release to identify your Linux distribution. Install a newer Python 3 '
+                    'through its package manager, or upgrade the Linux release if it offers only older Python.\n'
+                    'Keep the system Python in place. If you installed a newer version alongside it, run it by name, '
+                    'for example: python3.11 deploy/bootstrap/install.py --check\n')
     os.umask(0o077)
     try:
         install(args)

@@ -12,7 +12,9 @@ A home media control room with a repeatable Docker setup. See which services are
 
 ### 1. Prepare the VM
 
-Use a Linux VM. Open a terminal and run `git --version` and `python3 --version`. If either command is missing, install Git and Python using your Linux distribution’s package manager. MartinFlix needs Python 3.10 or newer.
+Use a Linux VM. Open a terminal and run `git --version` and `python3 --version`. If either command is missing, install Git and Python using your Linux distribution’s package manager. The installer accepts **Python 3.9 or newer**, including 3.9.2. Use a currently supported Linux release for a new VM.
+
+If `python3 --version` shows an older version, run `cat /etc/os-release` to identify your distribution. Install a newer Python through its package manager. On Debian or Ubuntu, `sudo apt update` followed by `sudo apt install python3` installs the version available for your release. If that version is still too old, use a newer Linux release or install a supported Python alongside the system version and run the installer with it, for example `python3.11 deploy/bootstrap/install.py --check`. [Python version support](https://devguide.python.org/versions/)
 
 ### 2. Clone, choose how to connect, and install
 
