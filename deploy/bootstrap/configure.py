@@ -71,6 +71,20 @@ def ensure_quality_profile(api, app):
     api.request('qualityprofile', profile)
 
 
+def ensure_sonarr_exclusions(api):
+    name = 'Bad Stuff'
+    if any(profile['name'] == name for profile in api.request('releaseprofile')):
+        return
+    api.request('releaseprofile', {
+        'name': name,
+        'enabled': True,
+        'required': [],
+        'ignored': ['MeGusta', 'scr', 'exe', 'ETHEL'],
+        'indexerId': 0,
+        'tags': [],
+    })
+
+
 def ensure_root_folder(api, path):
     if not any(folder['path'].rstrip('/') == path for folder in api.request('rootfolder')):
         api.request('rootfolder', {'path': path})
@@ -115,6 +129,8 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
     for app, name in ARR_NAMES.items():
         api = AppApi(name, ports[app], arr_keys[app])
         ensure_quality_profile(api, app)
+        if app == 'sonarr':
+            ensure_sonarr_exclusions(api)
         if media_path:
             ensure_root_folder(api, ROOT_FOLDERS[app])
         if prowlarr:
