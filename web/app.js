@@ -38,8 +38,12 @@ const startupDependencies = {
   radarr: ['prowlarr', 'transmission-daemon'],
 };
 
+function serviceIsUp(service) {
+  return ['running', 'reachable'].includes(service.state);
+}
+
 function needsAttention(service) {
-  return service.state !== 'running' || service.status.toLowerCase().includes('unhealthy');
+  return !serviceIsUp(service) || service.status.toLowerCase().includes('unhealthy');
 }
 
 function serviceCard(service, groupServices) {
@@ -48,11 +52,12 @@ function serviceCard(service, groupServices) {
   const state = unhealthy ? 'unhealthy' : service.state;
   const label = state === 'exited' ? 'Stopped' : state === 'missing' ? 'Missing' :
     state.charAt(0).toUpperCase() + state.slice(1);
-  const tone = state === 'running' ? 'good' : ['unhealthy', 'exited'].includes(state) ? 'alert' :
+  const tone = serviceIsUp({state}) ? 'good' : ['unhealthy', 'exited', 'unreachable'].includes(state) ? 'alert' :
     state === 'missing' && service.name === 'bookshelf' ? 'muted' : 'warn';
   const down = tone === 'alert' || (state === 'missing' && tone !== 'muted') ||
     ['dead', 'paused', 'restarting', 'removing', 'created'].includes(state);
-  const dependencies = startupDependencies[service.name] ?? [];
+  const dependencies = (startupDependencies[service.name] ?? [])
+    .filter(name => groupServices.some(item => item.name === name));
   const dependencyNote = dependencies.length ? `<p class="service-dependency">
     Own network · Starts after ${dependencies.map(name => esc(apps[name][0])).join(' and ')} are healthy.
   </p>` : '';
@@ -76,9 +81,9 @@ function serviceCard(service, groupServices) {
   </li>`;
 }
 
-function serviceGroup(group) {
+function serviceGroup(group, countLabel) {
   const services = group.services;
-  const running = services.filter(service => service.state === 'running').length;
+  const running = services.filter(serviceIsUp).length;
   const nested = new Set();
   const branches = services.flatMap(parent => {
     const branch = stackBranches[parent.name];
@@ -100,7 +105,7 @@ function serviceGroup(group) {
   const standalone = services.filter(service => !nested.has(service.name));
   const compact = branches.length === 0 && services.length <= 2;
   return `<div class="service-group${compact ? ' service-group-compact' : ''}">
-    <div class="group-title"><h3>${esc(group.name)}</h3><small>${running} of ${services.length} running</small></div>
+    <div class="group-title"><h3>${esc(group.name)}</h3><small>${running} of ${services.length} ${countLabel}</small></div>
     ${branches.join('')}
     ${standalone.length ? `<ul class="service-items">${standalone.map(service => serviceCard(service, services)).join('')}</ul>` : ''}
   </div>`;
@@ -111,11 +116,16 @@ $('#seerr-link').href = window.location.protocol + '//' + window.location.hostna
 async function get(url){const response = await fetch(url, {cache:'no-store'}); if(!response.ok) throw new Error('Request failed'); return response.json()}
 function date(value){const d = new Date(value); return isNaN(d) ? 'Unknown' : d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}
 async function status(){
- try {const data = await get('/api/status'), docker = data.docker, services = docker.groups.flatMap(g=>g.services), running = services.filter(s=>s.state==='running');
+ try {const data = await get('/api/status'), docker = data.docker, services = docker.groups.flatMap(g=>g.services), running = services.filter(serviceIsUp);
+ const probes = docker.source === 'app-probes';
+ $('#services-metric-label').textContent = probes ? 'SERVICES REACHABLE' : 'SERVICES RUNNING';
+ $('#services-description').textContent = probes ? 'Live health checks for the library apps.' : 'Container status and configured service dependencies.';
+ $('#services-source').textContent = probes ? 'These checks show whether each app responds to the dashboard.' :
+   'Docker reports container status. Dependency lines show the configured stack and do not test VPN connectivity.';
  $('#running').textContent = docker.available ? `${running.length} / ${services.length}` : 'Unavailable';
  $('#system-status').textContent = !docker.available ? 'Unavailable' : services.some(s=>needsAttention(s) && s.name!=='bookshelf') ? 'Needs a look' : 'Looking good';
- $('#system-detail').textContent = docker.available ? 'Container state only' : docker.error;
- $('#services-content').innerHTML = docker.available ? docker.groups.map(serviceGroup).join('') : `<p class="empty">${esc(docker.error)}</p>`;
+ $('#system-detail').textContent = docker.available ? (probes ? 'App health checks' : 'Container state only') : docker.error;
+ $('#services-content').innerHTML = docker.available ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running')).join('') : `<p class="empty">${esc(docker.error)}</p>`;
  const backups=data.backups.snapshots; $('#latest-backup').textContent=backups.length ? date(backups[0].created) : 'None yet'; $('#backup-detail').textContent=backups.length ? (backups[0].errors?.length || backups[0].missing?.length ? 'Incomplete snapshot' : 'Snapshot recorded') : 'No snapshots found';
  $('#backups-content').innerHTML=backups.length ? backups.map(b=>`<div class="backup-row"><span>${esc(date(b.created))} <small> · ${esc(b.files ?? 0)} archives</small></span><span class="tag">${b.errors?.length || b.missing?.length ? 'Incomplete · '+esc([...(b.missing||[]),...(b.errors||[])].join(', ')) : 'Captured · restore untested'}</span></div>`).join('') : '<p class="empty">No MartinFlix snapshots found. See the backup guide to create and verify one.</p>';
  $('#updated').textContent='UPDATED '+new Date().toLocaleTimeString();

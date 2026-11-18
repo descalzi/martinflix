@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / 'web'
+ARR_COMPOSE_ADDRESSES = {'sonarr': 'http://sonarr:8989', 'radarr': 'http://radarr:7878'}
 STACKS = {
     'Core': ['tailscale', 'portainer'],
     'Media server': ['plex'],
@@ -47,8 +48,6 @@ def read_secret(name):
 
 
 def docker_status():
-    if os.environ.get('MARTINFLIX_DOCKER_STATUS_DISABLED') == '1':
-        return {'available': False, 'error': 'Docker status collection is not configured for this installation.', 'groups': []}
     try:
         snapshot = os.environ.get('MARTINFLIX_DOCKER_STATUS_FILE')
         if snapshot:
@@ -72,14 +71,33 @@ def docker_status():
         return {'available': False, 'error': 'Docker is unavailable or access was denied.', 'groups': []}
 
 
+def service_status():
+    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') != '1':
+        return docker_status()
+
+    services = []
+    for name, address in ARR_COMPOSE_ADDRESSES.items():
+        try:
+            with ARR_OPENER.open(address + '/ping', timeout=2) as response:
+                reachable = response.status == 200
+        except OSError:
+            reachable = False
+        services.append({
+            'name': name,
+            'state': 'reachable' if reachable else 'unreachable',
+            'status': 'Responded to health check' if reachable else 'Health check did not respond',
+        })
+    return {'available': True, 'source': 'app-probes',
+            'groups': [{'name': 'Library apps', 'services': services}]}
+
+
 def arr_connection(kind):
     key = read_secret('MARTINFLIX_' + kind.upper() + '_KEY')
     base = os.environ.get('MARTINFLIX_' + kind.upper() + '_URL', 'http://127.0.0.1:' + ('8989' if kind == 'sonarr' else '7878'))
     if not key:
         return None
     # The first-run Compose project has fixed Arr service names on its private bridge.
-    compose_address = {'sonarr': 'http://sonarr:8989', 'radarr': 'http://radarr:7878'}
-    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1' and base == compose_address.get(kind):
+    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1' and base == ARR_COMPOSE_ADDRESSES.get(kind):
         return base, key
     parsed = urllib.parse.urlparse(base)
     if (parsed.scheme != 'http' or parsed.hostname not in ('127.0.0.1', 'localhost', '::1')
@@ -207,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.urlsplit(self.path).path
         if path == '/api/status':
-            data = {'docker': docker_status(), 'backups': backup_status(), 'time': int(time.time())}
+            data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time())}
             self.send_json(data)
         elif path in ('/api/sonarr', '/api/radarr'):
             self.send_json(arr_data(path.rsplit('/', 1)[1]))

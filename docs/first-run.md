@@ -34,4 +34,4 @@ python3 deploy/bootstrap/install.py \
 
 Rerun with the same arguments to resume setup. The project name follows the state directory. The installer preserves app configurations and the dashboard password, refreshes the private copies of the Arr keys, and verifies both connections again. Keep the application data and password files outside the checkout. The dashboard has no Docker socket.
 
-This milestone starts Sonarr, Radarr, and dashboard library monitoring. Media storage, download clients, VPN, Prowlarr, Seerr, and Docker status collection are future installer stages. The legacy host deployment has its own Compose files, Docker status collector, and recovery process.
+The dashboard lists Sonarr and Radarr in Services & Status and checks whether each app responds over the Compose network. Media storage, download clients, VPN, Prowlarr, Seerr, and full Docker status collection are future installer stages. The legacy host deployment has its own Compose files, Docker status collector, and recovery process.

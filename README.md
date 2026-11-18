@@ -62,7 +62,7 @@ See the [first-run guide](docs/first-run.md) for using different ports or storag
 
 ## What’s included
 
-- **First-run stack** starts the dashboard, Sonarr, and Radarr. Fresh libraries start empty. Media mounts, Docker status collection, Prowlarr, VPN/download clients, and Seerr are later bootstrap stages.
+- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. Media mounts, full Docker status collection, Prowlarr, VPN/download clients, and Seerr are later bootstrap stages.
 - **Existing-host dashboard** includes Docker status and dependency groups, filtered poster views, and a Seerr link. Use the [dashboard runbook](docs/dashboard.md) when connecting an existing stack.
 - **Recovery tools** capture and verify selected app-generated archives. The [recovery notes](docs/backups.md) cover scope and restore rehearsals.
 

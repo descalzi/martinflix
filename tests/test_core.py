@@ -5,7 +5,7 @@ import base64
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import backup
 import server
 
@@ -35,6 +35,16 @@ class CoreTests(unittest.TestCase):
     def test_arr_rejects_remote_url(self):
         with patch.dict('os.environ', {'MARTINFLIX_SONARR_KEY': 'test', 'MARTINFLIX_SONARR_URL': 'http://example.com'}):
             self.assertIn('Only local', server.arr_data('sonarr')['error'])
+
+    def test_first_run_status_lists_both_apps_when_one_is_unreachable(self):
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        with patch.dict('os.environ', {'MARTINFLIX_ARR_COMPOSE_NETWORK': '1'}):
+            with patch.object(server.ARR_OPENER, 'open', side_effect=[response, OSError()]):
+                status = server.service_status()
+        self.assertEqual(status['source'], 'app-probes')
+        self.assertEqual([(app['name'], app['state']) for app in status['groups'][0]['services']],
+                         [('sonarr', 'reachable'), ('radarr', 'unreachable')])
 
     def test_arr_compose_origin_requires_opt_in_and_correct_service(self):
         settings = {
