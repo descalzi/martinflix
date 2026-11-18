@@ -84,11 +84,22 @@ def service_status():
     if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') != '1':
         return docker_status()
 
+    probes = {name: (address + '/ping', 200) for name, address in ARR_COMPOSE_ADDRESSES.items()}
+    downloads = os.environ.get('MARTINFLIX_DOWNLOAD_STACK') == '1'
+    if downloads:
+        probes.update({
+            'nordvpn': ('http://gluetun:9999/', 200),
+            'transmission-daemon': ('http://gluetun:9091/transmission/rpc', 401),
+            'prowlarr': ('http://gluetun:9696/ping', 200),
+        })
     services = []
-    for name, address in ARR_COMPOSE_ADDRESSES.items():
+    for name, (url, expected) in probes.items():
         try:
-            with ARR_OPENER.open(address + '/ping', timeout=2) as response:
-                reachable = response.status == 200
+            with ARR_OPENER.open(url, timeout=2) as response:
+                reachable = response.status == expected
+        except urllib.error.HTTPError as exc:
+            reachable = exc.code == expected
+            exc.close()
         except OSError:
             reachable = False
         services.append({
@@ -97,7 +108,7 @@ def service_status():
             'status': 'Responded to health check' if reachable else 'Health check did not respond',
         })
     return {'available': True, 'source': 'app-probes',
-            'groups': [{'name': 'Library apps', 'services': services}]}
+            'groups': [{'name': 'Downloads & automation' if downloads else 'Library apps', 'services': services}]}
 
 
 def arr_connection(kind):

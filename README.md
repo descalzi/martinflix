@@ -44,6 +44,8 @@ Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so
 
 The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Rerun with the same options to resume setup.
 
+**To set up media and downloads on the first run**, add `--media-path` and `--enable-downloads` to both commands above. Use a dedicated, writable media directory on the VM. The download option asks for NordVPN’s manual OpenVPN service credentials before it starts Gluetun, Transmission, and Prowlarr. You can also add this option later to an existing first-run installation. [Media and download setup](docs/first-run.md#media-and-downloads)
+
 ### 3. Open the dashboard
 
 Open the URL printed by the installer and sign in as **admin**. The default is **http://127.0.0.1:8765** on the VM. On first sign-in, view the temporary password on the VM:
@@ -64,7 +66,7 @@ See the [first-run guide](docs/first-run.md) for using different ports or storag
 
 ## What’s included
 
-- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. Media mounts, full Docker status collection, Prowlarr, VPN/download clients, and Seerr are later bootstrap stages.
+- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. The installer adds a MartinFlix HD quality profile and can also set up media folders, Gluetun, Transmission, and Prowlarr. Seerr and full Docker status collection are later stages.
 - **Existing-host dashboard** includes Docker status and dependency groups, filtered poster views, and a Seerr link. Use the [dashboard runbook](docs/dashboard.md) when connecting an existing stack.
 - **Recovery tools** capture and verify selected app-generated archives. The [recovery notes](docs/backups.md) cover scope and restore rehearsals.
 

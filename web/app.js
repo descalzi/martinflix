@@ -46,7 +46,7 @@ function needsAttention(service) {
   return !serviceIsUp(service) || service.status.toLowerCase().includes('unhealthy');
 }
 
-function serviceCard(service, groupServices) {
+function serviceCard(service, groupServices, countLabel) {
   const [name, role, icon] = apps[service.name] ?? [service.name, 'Container'];
   const unhealthy = service.status.toLowerCase().includes('unhealthy');
   const state = unhealthy ? 'unhealthy' : service.state;
@@ -59,7 +59,8 @@ function serviceCard(service, groupServices) {
   const dependencies = (startupDependencies[service.name] ?? [])
     .filter(name => groupServices.some(item => item.name === name));
   const dependencyNote = dependencies.length ? `<p class="service-dependency">
-    Own network · Starts after ${dependencies.map(name => esc(apps[name][0])).join(' and ')} are healthy.
+    Own network · ${countLabel === 'reachable' ? 'Uses' : 'Starts after'}
+    ${dependencies.map(name => esc(apps[name][0])).join(' and ')}${countLabel === 'reachable' ? '.' : ' are healthy.'}
   </p>` : '';
   const unavailable = dependencies.filter(name => {
     const dependency = groupServices.find(item => item.name === name);
@@ -93,12 +94,12 @@ function serviceGroup(group, countLabel) {
     nested.add(parent.name);
     children.forEach(child => nested.add(child.name));
     return [`<div class="stack-branch">
-      <ul class="stack-parent">${serviceCard(parent, services)}</ul>
+      <ul class="stack-parent">${serviceCard(parent, services, countLabel)}</ul>
       <div class="stack-children">
         <h4>${esc(branch.title)}</h4>
         <p>${esc(branch.description)}</p>
         ${needsAttention(parent) ? `<p class="dependency-warning">Upstream: check ${esc(apps[parent.name][0])}</p>` : ''}
-        <ul class="service-items">${children.map(child => serviceCard(child, services)).join('')}</ul>
+        <ul class="service-items">${children.map(child => serviceCard(child, services, countLabel)).join('')}</ul>
       </div>
     </div>`];
   });
@@ -107,7 +108,7 @@ function serviceGroup(group, countLabel) {
   return `<div class="service-group${compact ? ' service-group-compact' : ''}">
     <div class="group-title"><h3>${esc(group.name)}</h3><small>${running} of ${services.length} ${countLabel}</small></div>
     ${branches.join('')}
-    ${standalone.length ? `<ul class="service-items">${standalone.map(service => serviceCard(service, services)).join('')}</ul>` : ''}
+    ${standalone.length ? `<ul class="service-items">${standalone.map(service => serviceCard(service, services, countLabel)).join('')}</ul>` : ''}
   </div>`;
 }
 
@@ -126,7 +127,7 @@ async function status(){
  try {const data = await get('/api/status'), docker = data.docker, services = docker.groups.flatMap(g=>g.services), running = services.filter(serviceIsUp);
  const probes = docker.source === 'app-probes';
  $('#services-metric-label').textContent = probes ? 'SERVICES REACHABLE' : 'SERVICES RUNNING';
- $('#services-description').textContent = probes ? 'Live health checks for the library apps.' : 'Container status and configured service dependencies.';
+ $('#services-description').textContent = probes ? 'Live health checks for configured services.' : 'Container status and configured service dependencies.';
  $('#services-source').textContent = probes ? 'These checks show whether each app responds to the dashboard.' :
    'Docker reports container status. Dependency lines show the configured stack and do not test VPN connectivity.';
  $('#running').textContent = docker.available ? `${running.length} / ${services.length}` : 'Unavailable';

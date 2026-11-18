@@ -16,7 +16,7 @@ Inventory actual running containers, ownership, image versions, mounts, networks
 
 ## Next capabilities
 
-1. Extend the first-run bootstrap with media mounts, project-scoped Docker status, and verified app integrations. Run a fresh-host VM trial.
+1. Extend the first-run bootstrap beyond Sonarr, Radarr, media mounts, and the optional VPN download stack. Add project-scoped Docker status and verify provider connectivity on a clean VM. Run a fresh-host VM trial.
 2. Real recovery workflows, off-host encrypted backups, retention, scheduling, visibility, and tested restores.
 3. Authenticated admin and household roles, using an appropriate identity provider; protect any network-facing interface.
 4. Restricted, auditable service operations with clear progress and cancellation; preserve VPN and dependency safety. Do not expose a general shell or Docker socket to the browser.

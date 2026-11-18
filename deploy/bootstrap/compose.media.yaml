@@ -1,0 +1,15 @@
+services:
+  sonarr:
+    volumes:
+      - type: bind
+        source: ${MARTINFLIX_MEDIA_PATH}
+        target: /data
+        bind:
+          create_host_path: false
+  radarr:
+    volumes:
+      - type: bind
+        source: ${MARTINFLIX_MEDIA_PATH}
+        target: /data
+        bind:
+          create_host_path: false

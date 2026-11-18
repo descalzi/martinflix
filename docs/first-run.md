@@ -34,4 +34,23 @@ python3 deploy/bootstrap/install.py \
 
 Rerun with the same arguments to resume setup. The project name follows the state directory. The installer preserves app configurations and the password set on first sign-in, refreshes the private copies of the Arr keys, and verifies both connections again. Keep the application data and password files outside the checkout. The dashboard has no Docker socket.
 
-The dashboard lists Sonarr and Radarr in Services & Status and checks whether each app responds over the Compose network. Media storage, download clients, VPN, Prowlarr, Seerr, and full Docker status collection are future installer stages. The legacy host deployment has its own Compose files, Docker status collector, and recovery process.
+## Media and downloads
+
+Use a dedicated directory for your media. It can be a mounted NAS share or a directory on the VM. Set up the mount first if you use a share, and make sure your normal account can write there. The installer creates missing `TV Shows`, `Movies`, and `downloads` directories inside it.
+
+For library folders without the download services, pass only `--media-path`. To install the download services too, run the following in a terminal. Replace the sample path and use your usual `--dashboard-bind` option if you access the dashboard from another device.
+
+```sh
+python3 deploy/bootstrap/install.py --media-path "/mnt/media" --enable-downloads --check
+python3 deploy/bootstrap/install.py --media-path "/mnt/media" --enable-downloads
+```
+
+The download option requires `/dev/net/tun` and [manual OpenVPN service credentials from your Nord Account](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup). The installer prompts for the credentials without echoing them and saves them in private files outside the repo. Gluetun uses NordVPN and defaults to Prague, matching the reference Compose file. Transmission and Prowlarr share Gluetun’s network and wait for its health check. Their setup screens are on VM loopback at ports 9091 and 9696 by default. The installer prints how to retrieve the generated Transmission password.
+
+- Choose **MartinFlix HD (720p/1080p)** when adding titles. The installer creates the profile from the reference host’s allowed qualities and upgrade behavior. Existing titles keep their assigned profiles.
+- Sonarr and Radarr use separate `sonarr` and `radarr` Transmission categories and map Transmission’s `/downloads` path to the shared `/data/downloads` folder for imports.
+- Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. The installer does not import the reference host’s credentials or trigger searches.
+
+The media path and enabled download services are remembered when you rerun setup. The installer fills in missing connections and preserves existing named records, including any edits you make in the apps. A different media root requires a separate installation or a planned storage migration.
+
+The dashboard checks whether the configured services respond over the Compose network. Full Docker status collection, Seerr, Bazarr, and FlareSolverr are separate installer stages. The existing-host deployment has its own Compose files, status collector, and recovery process.

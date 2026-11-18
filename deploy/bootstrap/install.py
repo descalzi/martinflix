@@ -2,6 +2,7 @@
 """Start or resume the first-run MartinFlix Compose project."""
 import argparse
 import errno
+import getpass
 import hashlib
 import ipaddress
 import json
@@ -17,10 +18,77 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
+from configure import configure_apps
+
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
 APPS = ('sonarr', 'radarr')
 DOCKER_INSTALL = 'https://docs.docker.com/engine/install/'
 COMPOSE_INSTALL = 'https://docs.docker.com/compose/install/linux/'
+
+BANNER = r"""
+     /\        __  __            _   _       _____ _ _
+    /  \      |  \/  | __ _ _ __| |_(_)_ __ |  ___| (_)_  __
+   /____\     | |\/| |/ _` | '__| __| | '_ \| |_  | | \ \/ /
+   | >  |     | |  | | (_| | |  | |_| | | | |  _| | | |>  <
+   |____|     |_|  |_|\__,_|_|   \__|_|_| |_|_|   |_|_/_/\_\
+
+              Home media setup
+"""
+MEDIA_FOLDERS = ('TV Shows', 'Movies', 'downloads')
+DOWNLOAD_APPS = ('prowlarr', 'transmission')
+
+
+def saved_options(state):
+    try:
+        options = json.loads((state / 'install-options.json').read_text())
+    except FileNotFoundError:
+        return {}
+    if not isinstance(options, dict):
+        raise ValueError('The saved installation options are invalid.')
+    return options
+
+
+def media_root(value, state):
+    path = Path(value).expanduser().resolve()
+    repo = COMPOSE_FILE.parents[2]
+    if path.is_relative_to(state) or state.is_relative_to(path) or path.is_relative_to(repo) or repo.is_relative_to(path):
+        raise ValueError('Choose a dedicated media directory separate from the checkout and installer state.')
+    if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
+        raise ValueError(f'The media directory must already exist and be writable: {path}')
+    for name in MEDIA_FOLDERS:
+        folder = path / name
+        if folder.is_symlink() or (folder.exists() and (
+                not folder.is_dir() or not os.access(folder, os.W_OK | os.X_OK))):
+            raise ValueError(f'The media subdirectory must be writable and cannot be a link: {folder}')
+    return path
+
+
+def private_secret(path):
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
+        raise ValueError(f'{path} must be a private file owned by your account.')
+    return path.read_text().strip() or None
+
+
+def prepare_download_secrets(path):
+    private_directory(path)
+    credentials = {name: private_secret(path / name) for name in ('openvpn_user', 'openvpn_password')}
+    if not all(credentials.values()):
+        if not sys.stdin.isatty():
+            raise ValueError('Run setup in a terminal to enter your NordVPN OpenVPN service credentials.')
+        print('Enter the manual OpenVPN service credentials from your Nord Account.', flush=True)
+        for name, prompt in [('openvpn_user', 'NordVPN service username: '), ('openvpn_password', 'NordVPN service password: ')]:
+            if not credentials[name]:
+                credentials[name] = getpass.getpass(prompt).strip()
+            if not credentials[name]:
+                raise ValueError('Both NordVPN service credentials are needed.')
+    for name, value in credentials.items():
+        write_secret(path / name, value, trailing_newline=False)
+    password = private_secret(path / 'transmission_password') or secrets.token_urlsafe(24)
+    # LinuxServer loads every byte from FILE__PASS, including any trailing newline.
+    write_secret(path / 'transmission_password', password, trailing_newline=False)
+    return password
 
 
 def private_directory(path):
@@ -29,17 +97,18 @@ def private_directory(path):
         raise ValueError(f'{path} must be a private directory owned by the current account (mode 0700).')
 
 
-def write_secret(path, value):
+def write_secret(path, value, trailing_newline=True):
+    content = value + '\n' if trailing_newline else value
     if path.is_symlink():
         raise ValueError(f'{path} must be a regular file.')
     if path.exists():
         if not path.is_file() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
             raise ValueError(f'{path} must be private and owned by the current account.')
-        if path.read_text().strip() == value:
+        if path.read_text() == content:
             return
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
         temporary = Path(output.name)
-        output.write(value + '\n')
+        output.write(content)
     try:
         temporary.replace(path)
     finally:
@@ -118,7 +187,8 @@ def check_ports(compose, environment, bindings):
         if entry.get('Protocol') == 'tcp'
     }
     for app, address, port in bindings:
-        if (app, address, port) in published:
+        owner = 'gluetun' if app in DOWNLOAD_APPS else app
+        if (owner, address, port) in published:
             continue
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -139,16 +209,31 @@ def install(args):
 
     if os.getuid() == 0:
         raise ValueError('Run the installer without sudo as the Linux account that will own the stack data.')
-    print('\nMartinFlix setup\n───────────────', flush=True)
+    print(BANNER, flush=True)
     print('1. Checking Docker, storage, and network ports…', flush=True)
     docker_root = preflight_docker()
 
     state = args.state_dir.expanduser().resolve()
     if state.is_relative_to(COMPOSE_FILE.parents[2]):
         raise ValueError('Choose a state directory outside the repository for application data and secrets.')
-    ports = (args.dashboard_port, args.sonarr_port, args.radarr_port)
-    if len(set(ports)) != len(ports) or any(not 1024 <= port <= 65535 for port in ports):
-        raise ValueError('Choose three distinct ports between 1024 and 65535.')
+    previous = saved_options(state)
+    old_media = previous.get('media_path')
+    media = media_root(args.media_path or old_media, state) if args.media_path or old_media else None
+    if old_media and str(media) != old_media:
+        raise ValueError('This installation already uses a media directory. Move or remount it at the same path, '
+                         'or use a separate --state-dir for a different library.')
+    downloads = bool(args.enable_downloads or previous.get('downloads'))
+    if downloads and not media:
+        raise ValueError('To install Prowlarr and Transmission, specify your dedicated media directory with --media-path.')
+    if downloads and not Path('/dev/net/tun').is_char_device():
+        raise ValueError('The VPN needs /dev/net/tun on this VM. Try sudo modprobe tun. If it is still unavailable, '
+                         'enable TUN access in your VM settings and rerun setup.')
+    options = {'media_path': str(media) if media else None, 'downloads': downloads}
+    ports = {'dashboard': args.dashboard_port, 'sonarr': args.sonarr_port, 'radarr': args.radarr_port}
+    if downloads:
+        ports.update(prowlarr=args.prowlarr_port, transmission=args.transmission_port)
+    if len(set(ports.values())) != len(ports) or any(not 1024 <= port <= 65535 for port in ports.values()):
+        raise ValueError('Choose distinct ports between 1024 and 65535 for the selected services.')
     try:
         bind = ipaddress.IPv4Address(args.dashboard_bind)
     except ipaddress.AddressValueError as exc:
@@ -158,22 +243,34 @@ def install(args):
 
     suffix = hashlib.sha256(os.fsencode(state)).hexdigest()[:16]
     project = f'martinflix-first-run-{suffix}'
-    compose = ['docker', 'compose', '--env-file', '/dev/null', '-f', str(COMPOSE_FILE), '-p', project]
+    compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
+    if media:
+        compose += ['-f', str(COMPOSE_FILE.with_name('compose.media.yaml'))]
+    if downloads:
+        compose += ['-f', str(COMPOSE_FILE.with_name('compose.downloads.yaml'))]
     environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state),
                        MARTINFLIX_UID=str(os.getuid()), MARTINFLIX_GID=str(os.getgid()),
-                       MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_DASHBOARD_PORT=str(ports[0]),
-                       MARTINFLIX_SONARR_PORT=str(ports[1]), MARTINFLIX_RADARR_PORT=str(ports[2]))
+                       MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_MEDIA_PATH=str(media) if media else '')
+    environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
+    app_dirs = (*APPS, *DOWNLOAD_APPS) if downloads else APPS
 
-    for directory in (state, state / 'dashboard-secrets', state / 'dashboard-auth', *(state / app for app in APPS)):
-        check_directory(directory)
-    check_ports(compose, environment, [('dashboard', str(bind), ports[0]),
-                                         ('sonarr', '127.0.0.1', ports[1]), ('radarr', '127.0.0.1', ports[2])])
+    for name in ('dashboard-secrets', 'dashboard-auth', *app_dirs):
+        check_directory(state / name)
+    check_directory(state)
+    if downloads:
+        check_directory(state / 'download-secrets')
+    check_ports(compose, environment, [
+        (service, str(bind) if service == 'dashboard' else '127.0.0.1', port)
+        for service, port in ports.items()
+    ])
     try:
         if shutil.disk_usage(docker_root).free < 2 * 1024**3:
             print('Docker storage has less than 2 GiB free. Free up space if the image download or build fails.', flush=True)
     except OSError:
         pass
     if args.check:
+        if downloads:
+            print('Download stack selected. Setup will use your NordVPN OpenVPN service credentials.')
         print('Preflight passed. Run the same command without --check to start the installation.')
         return
     private_directory(state)
@@ -197,11 +294,19 @@ def install(args):
 
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if saved_options(state) != previous:
+            raise ValueError('Setup options changed while this command was waiting. Run the installer again.')
+        transmission_password = prepare_download_secrets(state / 'download-secrets') if downloads else None
+        if media:
+            for folder in MEDIA_FOLDERS:
+                (media / folder).mkdir(mode=0o700, exist_ok=True)
+        if options != previous:
+            write_secret(state / 'install-options.json', json.dumps(options))
         secret_dir = state / 'dashboard-secrets'
         private_directory(secret_dir)
         auth_dir = state / 'dashboard-auth'
         private_directory(auth_dir)
-        for app in APPS:
+        for app in app_dirs:
             private_directory(state / app)
         password = secret_dir / 'admin-password'
         if password.exists() or password.is_symlink():
@@ -213,9 +318,20 @@ def install(args):
             write_secret(password, secrets.token_urlsafe(32))
 
         compose_step('2. Starting Sonarr and Radarr. The first download may take a few minutes…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
-        for app in APPS:
-            write_secret(secret_dir / f'{app}-key', wait_for_key(state / app / 'config.xml'))
-        compose_step('3. Building and starting your dashboard…', ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])
+        arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
+        for app, key in arr_keys.items():
+            write_secret(secret_dir / f'{app}-key', key)
+        step = 3
+        prowlarr_key = None
+        if downloads:
+            compose_step(f'{step}. Connecting the VPN, then starting Transmission and Prowlarr…',
+                         ['up', '-d', '--wait', '--wait-timeout', '210', *DOWNLOAD_APPS])
+            prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
+            step += 1
+        print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
+        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password)
+        compose_step(f'{step + 1}. Building and starting your dashboard…',
+                     ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])
         verify = '''
 import server
 for app in ('sonarr', 'radarr'):
@@ -224,11 +340,11 @@ for app in ('sonarr', 'radarr'):
         raise SystemExit(f'{app} verification failed: {result.get("error", "key unavailable")}')
     print(f'{app} monitoring connected', flush=True)
 '''
-        compose_step('4. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
+        compose_step(f'{step + 2}. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
     print('\nSetup complete · Sonarr and Radarr are connected.\n')
     print('Open your dashboard')
     print('───────────────────')
-    print(f'Address   http://{bind}:{ports[0]}')
+    print(f'Address   http://{bind}:{ports["dashboard"]}')
     print('Username  admin')
     if (auth_dir / 'password-hash').is_file():
         print('Password  Use the password you set on first sign-in.')
@@ -237,8 +353,12 @@ for app in ('sonarr', 'radarr'):
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
     print('\nApp setup on this VM')
-    print(f'Sonarr    http://127.0.0.1:{ports[1]}')
-    print(f'Radarr    http://127.0.0.1:{ports[2]}')
+    for app in app_dirs:
+        print(f'{app.capitalize():13} http://127.0.0.1:{ports[app]}')
+    if downloads:
+        password_path = shlex.quote(str(state / 'download-secrets/transmission_password'))
+        print(f'\nTransmission username: martinflix. To show its password: cat {password_path}')
+        print('Add your indexers in Prowlarr. The installer connected both library apps.')
 
 
 def main():
@@ -246,6 +366,11 @@ def main():
     parser.add_argument('--state-dir', type=Path, default=Path.home() / '.local/state/martinflix-first-run')
     parser.add_argument('--dashboard-bind', default='127.0.0.1')
     parser.add_argument('--dashboard-port', type=int, default=8765)
+    parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, and downloads.')
+    parser.add_argument('--enable-downloads', action='store_true',
+                        help='Install Gluetun, Transmission, and Prowlarr. Requires --media-path and NordVPN service credentials.')
+    parser.add_argument('--prowlarr-port', type=int, default=9696)
+    parser.add_argument('--transmission-port', type=int, default=9091)
     parser.add_argument('--sonarr-port', type=int, default=8989)
     parser.add_argument('--radarr-port', type=int, default=7878)
     parser.add_argument('--check', action='store_true', help='Check prerequisites without creating files or starting containers.')
