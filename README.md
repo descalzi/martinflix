@@ -10,31 +10,41 @@ A home media control room with a repeatable Docker setup. See which services are
 
 ## Quick start
 
-### 1. Check the VM
+### 1. Prepare the VM
 
-Use a Linux VM with Git, Python 3.10+, Docker Engine, and the Docker Compose plugin. Run these as the account that will own the stack:
+Use a Linux VM. Open a terminal and run `git --version` and `python3 --version`. If either command is missing, install Git and Python using your Linux distribution’s package manager. MartinFlix needs Python 3.10 or newer.
 
-```sh
-python3 --version
-docker info
-docker compose version
-```
-
-If Docker or Compose is missing, follow the [Docker installation instructions](https://docs.docker.com/engine/install/) for your Linux distribution.
-
-### 2. Clone and install
+### 2. Clone, choose how to connect, and install
 
 ```sh
 git clone git@github.com:descalzi/martinflix.git
 cd martinflix
+```
+
+Run one of the following sets of commands as your normal user. The check creates no stack files or containers and explains how to fix missing prerequisites. Run the install command once the check passes.
+
+**If your browser is on the VM**, use the defaults:
+
+```sh
+python3 deploy/bootstrap/install.py --check
 python3 deploy/bootstrap/install.py
 ```
 
-The installer starts Sonarr and Radarr, waits for them to initialize, and connects the dashboard using the keys they generate. It prints the service URLs and dashboard password file. Rerun the same command to resume or verify the setup.
+**If your browser is on another machine**, set the VM’s LAN IPv4 address before the first install. Replace the example address with your VM’s address:
+
+```sh
+VM_IP=192.168.1.50
+python3 deploy/bootstrap/install.py --check --dashboard-bind "$VM_IP"
+python3 deploy/bootstrap/install.py --dashboard-bind "$VM_IP"
+```
+
+Use LAN access on a trusted home network. HTTP Basic sends credentials unencrypted, so keep the dashboard off the public internet. Sonarr and Radarr’s setup screens remain local to the VM.
+
+The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and prints the dashboard URL and password file. Rerun with the same options to resume setup.
 
 ### 3. Open the dashboard
 
-On the VM, open **http://127.0.0.1:8765** and sign in as **admin**. View the generated password locally:
+Open the URL printed by the installer and sign in as **admin**. The default is **http://127.0.0.1:8765** on the VM. View the generated password on the VM:
 
 ```sh
 cat ~/.local/state/martinflix-first-run/dashboard-secrets/admin-password
@@ -46,7 +56,7 @@ cat ~/.local/state/martinflix-first-run/dashboard-secrets/admin-password
 | Sonarr | `http://127.0.0.1:8989` |
 | Radarr | `http://127.0.0.1:7878` |
 
-For a browser on another machine, rerun the installer with `--dashboard-bind` and the VM’s LAN IPv4 address, then use that address on port 8765. The dashboard uses HTTP Basic, which sends credentials unencrypted over the network. Keep it on a trusted LAN and off the public internet. App setup screens stay on loopback. See the [first-run guide](docs/first-run.md) for using different ports or storage.
+See the [first-run guide](docs/first-run.md) for using different ports or storage.
 
 ## What’s included
 
