@@ -49,7 +49,8 @@
           <details>
             <summary>Customize ports and storage</summary>
             <label for="state">Installation state directory</label>
-            <input id="state" type="text" placeholder="Use the installer default">
+            <input id="state" type="text" placeholder="~/.local/state/martinflix-first-run" aria-describedby="state-help">
+            <small id="state-help">Stores app settings and databases so they survive Docker restarts. Leave blank to use <code>~/.local/state/martinflix-first-run</code> on the Linux host. Enter an absolute path to use a different folder.</small>
             <div id="ports"></div>
           </details>
         </section>
