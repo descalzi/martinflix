@@ -6,8 +6,8 @@
   <meta name="description" content="Build a MartinFlix installer command for your Linux host.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Set up MartinFlix</title>
-  <link rel="stylesheet" href="./setup.css">
-  <script src="./setup.js" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-2">
+  <script src="./setup.js?v=wizard-2" defer></script>
 </head>
 <body>
   <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
@@ -21,7 +21,7 @@
       <li><span>4</span> Review</li>
     </ol>
     <div class="layout">
-      <form id="options" autocomplete="off">
+      <form id="options" autocomplete="off" novalidate>
         <section class="step" aria-labelledby="access-title">
           <h2 id="access-title" tabindex="-1">Dashboard access</h2>
           <fieldset>
@@ -61,7 +61,7 @@
         <p id="step-error" role="alert" hidden></p>
         <div class="step-nav">
           <button type="button" id="back" hidden>Back</button>
-          <button type="submit" id="next">Next</button>
+          <button type="submit" id="next" disabled>Next</button>
         </div>
       </form>
       <section class="commands" aria-labelledby="commands-title">

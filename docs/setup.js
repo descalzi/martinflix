@@ -134,8 +134,7 @@ function showStep(index) {
   steps[index].querySelector('h2').focus();
 }
 
-root.addEventListener('submit', event => {
-  event.preventDefault();
+function nextStep() {
   if (activeStep === steps.length - 1) return;
   const options = currentOptions();
   const defaults = Object.fromEntries(portOptions.map(([name]) => [name, '']));
@@ -154,6 +153,15 @@ root.addEventListener('submit', event => {
     error.textContent = issue.message;
     error.hidden = false;
   }
+}
+
+root.addEventListener('submit', event => {
+  event.preventDefault();
+  nextStep();
+});
+byId('next').addEventListener('click', event => {
+  event.preventDefault();
+  nextStep();
 });
 byId('back').addEventListener('click', () => showStep(activeStep - 1));
 root.addEventListener('input', update);
@@ -171,3 +179,4 @@ for (const button of copyButtons) {
   });
 }
 update();
+byId('next').disabled = false;
