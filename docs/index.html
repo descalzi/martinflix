@@ -14,35 +14,58 @@
   <main>
     <h1>Set up MartinFlix</h1>
     <p>Choose how to run MartinFlix, then copy the commands to your Linux terminal. Your answers stay in this browser tab.</p>
+    <ol class="steps" aria-label="Setup progress">
+      <li aria-current="step"><span>1</span> Access</li>
+      <li><span>2</span> Media</li>
+      <li><span>3</span> Options</li>
+      <li><span>4</span> Review</li>
+    </ol>
     <div class="layout">
       <form id="options" autocomplete="off">
-        <fieldset>
-          <legend>Where will you open the dashboard?</legend>
-          <label><input type="radio" name="access" value="local" checked> On the Linux host</label>
-          <label><input type="radio" name="access" value="lan"> On another device on my home network</label>
-          <div id="lan-options" hidden>
-            <label for="address">Linux host’s LAN IPv4 address</label>
-            <input id="address" type="text" inputmode="decimal" placeholder="192.168.1.50" aria-describedby="lan-help">
-            <small id="lan-help">Use a trusted network. The dashboard uses HTTP.</small>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Media and downloads</legend>
+        <section class="step" aria-labelledby="access-title">
+          <h2 id="access-title" tabindex="-1">Dashboard access</h2>
+          <fieldset>
+            <legend>Where will you open the dashboard?</legend>
+            <label><input type="radio" name="access" value="local" checked> On the Linux host</label>
+            <label><input type="radio" name="access" value="lan"> On another device on my home network</label>
+            <div id="lan-options" hidden>
+              <label for="address">Linux host’s LAN IPv4 address</label>
+              <input id="address" type="text" inputmode="decimal" placeholder="192.168.1.50" aria-describedby="lan-help">
+              <small id="lan-help">Use a trusted network. The dashboard uses HTTP.</small>
+            </div>
+          </fieldset>
+        </section>
+        <section class="step" aria-labelledby="media-title" hidden>
+          <h2 id="media-title" tabindex="-1">Media and downloads</h2>
           <label for="media">Media directory <small>Optional for library monitoring</small></label>
           <input id="media" type="text" placeholder="/mnt/media">
           <small>Use an existing writable directory on the Linux host.</small>
           <label><input id="downloads" type="checkbox"> Add Transmission and Prowlarr behind NordVPN</label>
           <small>The installer asks for your NordVPN service credentials in the terminal.</small>
-        </fieldset>
-        <details>
-          <summary>Advanced options</summary>
-          <label for="state">Installation state directory</label>
-          <input id="state" type="text" placeholder="Use the installer default">
-          <div id="ports"></div>
-        </details>
+        </section>
+        <section class="step" aria-labelledby="options-title" hidden>
+          <h2 id="options-title" tabindex="-1">Installation options</h2>
+          <p>Keep the defaults unless you need to change a port or store app data somewhere else.</p>
+          <details>
+            <summary>Customize ports and storage</summary>
+            <label for="state">Installation state directory</label>
+            <input id="state" type="text" placeholder="Use the installer default">
+            <div id="ports"></div>
+          </details>
+        </section>
+        <section class="step" aria-labelledby="review-title" hidden>
+          <h2 id="review-title" tabindex="-1">Ready to install</h2>
+          <dl id="review"></dl>
+          <p>Copy the prerequisite check, then run the install command once the check passes.</p>
+        </section>
+        <p id="step-error" role="alert" hidden></p>
+        <div class="step-nav">
+          <button type="button" id="back" hidden>Back</button>
+          <button type="submit" id="next">Next</button>
+        </div>
       </form>
       <section class="commands" aria-labelledby="commands-title">
-        <h2 id="commands-title">Your terminal commands</h2>
+        <h2 id="commands-title">Command preview</h2>
         <p>Clone MartinFlix once, then run both commands from the checkout. Run the check first and install after it passes.</p>
         <pre>git clone https://github.com/descalzi/martinflix.git
 cd martinflix</pre>

@@ -48,6 +48,9 @@ function installArguments({lan, address, media, downloads, state, ports}) {
 const byId = id => document.getElementById(id);
 const root = byId('options');
 const copyButtons = document.querySelectorAll('[data-copy]');
+const steps = [...root.querySelectorAll('.step')];
+const progress = [...document.querySelectorAll('.steps li')];
+let activeStep = 0;
 for (const [name, label, fallback] of portOptions) {
   const row = document.createElement('div');
   const caption = document.createElement('label');
@@ -63,35 +66,96 @@ for (const [name, label, fallback] of portOptions) {
   byId('ports').append(row);
 }
 
+function currentOptions() {
+  return {
+    lan: root.elements.access.value === 'lan',
+    downloads: byId('downloads').checked,
+    address: byId('address').value.trim(),
+    media: byId('media').value.trim(),
+    state: byId('state').value.trim(),
+    ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value])),
+  };
+}
+
 function update() {
-  const lan = root.elements.access.value === 'lan';
-  const downloads = byId('downloads').checked;
-  byId('lan-options').hidden = !lan;
-  for (const name of ['prowlarr', 'transmission']) byId(name + '-port').parentElement.hidden = !downloads;
+  const options = currentOptions();
+  byId('lan-options').hidden = !options.lan;
+  for (const name of ['prowlarr', 'transmission']) byId(name + '-port').parentElement.hidden = !options.downloads;
   const error = byId('error');
   byId('copy-status').textContent = '';
-  const check = byId('check-command');
-  const install = byId('install-command');
+  byId('step-error').hidden = true;
   try {
-    const args = installArguments({
-      lan, downloads, address: byId('address').value.trim(), media: byId('media').value.trim(),
-      state: byId('state').value.trim(), ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value])),
-    });
-    const command = ['python3 deploy/bootstrap/install.py', ...args].join(' ');
-    check.value = command + ' --check';
-    install.value = command;
+    const command = ['python3 deploy/bootstrap/install.py', ...installArguments(options)].join(' ');
+    byId('check-command').value = command + ' --check';
+    byId('install-command').value = command;
     error.hidden = true;
     for (const button of copyButtons) button.disabled = false;
   } catch (issue) {
-    check.value = '';
-    install.value = '';
-    error.textContent = issue.message;
+    error.textContent = 'Preview paused. ' + issue.message;
     error.hidden = false;
     for (const button of copyButtons) button.disabled = true;
   }
 }
 
-root.addEventListener('submit', event => event.preventDefault());
+function showStep(index) {
+  activeStep = index;
+  steps.forEach((step, number) => {
+    step.hidden = number !== index;
+    progress[number].classList.toggle('complete', number < index);
+    if (number === index) progress[number].setAttribute('aria-current', 'step');
+    else progress[number].removeAttribute('aria-current');
+  });
+  byId('step-error').hidden = true;
+  byId('back').hidden = index === 0;
+  byId('next').hidden = index === steps.length - 1;
+  byId('next').textContent = index === steps.length - 2 ? 'Review setup' : 'Next';
+  if (index === steps.length - 1) {
+    const options = currentOptions();
+    const summary = [
+      ['Dashboard', options.lan ? options.address : 'On the Linux host'],
+      ['Media directory', options.media || 'Configure later'],
+      ['Download services', options.downloads ? 'Transmission and Prowlarr via NordVPN' : 'Configure later'],
+    ];
+    if (options.state) summary.push(['Installation state', options.state]);
+    for (const [name, label, fallback] of portOptions.slice(0, options.downloads ? 5 : 3)) {
+      const port = options.ports[name];
+      if (port && Number(port) !== fallback) summary.push([label + ' port', port]);
+    }
+    const review = byId('review');
+    review.replaceChildren();
+    for (const [label, value] of summary) {
+      const term = document.createElement('dt');
+      const definition = document.createElement('dd');
+      term.textContent = label;
+      definition.textContent = value;
+      review.append(term, definition);
+    }
+  }
+  steps[index].querySelector('h2').focus();
+}
+
+root.addEventListener('submit', event => {
+  event.preventDefault();
+  if (activeStep === steps.length - 1) return;
+  const options = currentOptions();
+  const defaults = Object.fromEntries(portOptions.map(([name]) => [name, '']));
+  try {
+    installArguments({
+      ...options,
+      lan: activeStep === 0 && options.lan,
+      downloads: activeStep > 0 && options.downloads,
+      media: activeStep > 0 ? options.media : '',
+      state: activeStep > 1 ? options.state : '',
+      ports: activeStep > 1 ? options.ports : defaults,
+    });
+    showStep(activeStep + 1);
+  } catch (issue) {
+    const error = byId('step-error');
+    error.textContent = issue.message;
+    error.hidden = false;
+  }
+});
+byId('back').addEventListener('click', () => showStep(activeStep - 1));
 root.addEventListener('input', update);
 for (const button of copyButtons) {
   button.addEventListener('click', async () => {
