@@ -46,6 +46,7 @@ services:
       - "${MARTINFLIX_DASHBOARD_BIND}:${MARTINFLIX_DASHBOARD_PORT}:8765"
     environment:
       MARTINFLIX_BIND: 0.0.0.0
+      MARTINFLIX_ADMIN_STATE_FILE: /run/dashboard-auth/password-hash
       MARTINFLIX_ADMIN_PASSWORD_FILE: /run/dashboard-secrets/admin-password
       MARTINFLIX_SONARR_KEY_FILE: /run/dashboard-secrets/sonarr-key
       MARTINFLIX_RADARR_KEY_FILE: /run/dashboard-secrets/radarr-key
@@ -54,6 +55,7 @@ services:
       MARTINFLIX_RADARR_URL: http://radarr:7878
     volumes:
       - "${MARTINFLIX_STATE_DIR}/dashboard-secrets:/run/dashboard-secrets:ro"
+      - "${MARTINFLIX_STATE_DIR}/dashboard-auth:/run/dashboard-auth"
     healthcheck:
       test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 8765), 2).close()"]
       interval: 3s

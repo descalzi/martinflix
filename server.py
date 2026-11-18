@@ -5,10 +5,15 @@ import base64
 import binascii
 import calendar
 from datetime import date, datetime, timezone
+import hashlib
 import hmac
+import html
 import os
 import re
+import secrets
 import subprocess
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -217,13 +222,18 @@ def backup_status():
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authorized():
-            self.send_response(401)
-            self.send_header('WWW-Authenticate', 'Basic realm="MartinFlix admin", charset="UTF-8"')
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('Content-Length', '0')
-            self.end_headers()
+            self.require_login()
             return
         path = urllib.parse.urlsplit(self.path).path
+        if path == '/setup-password':
+            if self.server.password_setup_required:
+                self.send_password_setup()
+            else:
+                self.redirect('/')
+            return
+        if self.server.password_setup_required and path != '/style.css':
+            self.redirect('/setup-password')
+            return
         if path == '/api/status':
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time())}
             self.send_json(data)
@@ -268,6 +278,81 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != '/setup-password':
+            self.send_error(404)
+            return
+        if not self.authorized():
+            self.require_login()
+            return
+        if not self.server.password_setup_required:
+            self.redirect('/')
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 4096 or self.headers.get_content_type() != 'application/x-www-form-urlencoded':
+                raise ValueError
+            fields = urllib.parse.parse_qs(self.rfile.read(length).decode('utf-8'), max_num_fields=4)
+        except (OSError, ValueError):
+            self.send_error(400, 'Invalid password form')
+            return
+        token = fields.get('token', [''])[0]
+        if not hmac.compare_digest(token.encode(), self.server.password_setup_token.encode()):
+            self.send_error(403, 'Reopen the password setup page and try again.')
+            return
+        password = fields.get('password', [''])[0]
+        confirmation = fields.get('confirm', [''])[0]
+        if not 16 <= len(password) <= 128 or not password.isprintable() or not password.strip():
+            self.send_password_setup('Use 16 to 128 printable characters.', 400)
+            return
+        if password != confirmation:
+            self.send_password_setup('The passwords don’t match. Enter the same password twice.', 400)
+            return
+        with self.server.password_setup_lock:
+            if not self.server.password_setup_required:
+                self.require_login()
+                return
+            if hmac.compare_digest(password.encode(), self.server.admin_password.encode()):
+                self.send_password_setup('Choose a password different from the temporary password.', 400)
+                return
+            try:
+                verifier = PasswordVerifier.create(password)
+                save_admin_password(self.server.admin_state_file, verifier.encoded)
+            except OSError:
+                self.send_password_setup('Could not save the password. Check the dashboard’s storage and try again.', 500)
+                return
+            self.server.password_verifier = verifier
+            self.server.admin_password = ''
+            self.server.password_setup_required = False
+        self.redirect('/')
+
+    def require_login(self):
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="MartinFlix admin", charset="UTF-8"')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def redirect(self, location):
+        self.send_response(303)
+        self.send_header('Location', location)
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def send_password_setup(self, message='', status=200):
+        template = (WEB / 'setup-password.html').read_text()
+        error = f'<p class="setup-error" role="alert">{html.escape(message)}</p>' if message else ''
+        body = template.replace('{{TOKEN}}', html.escape(self.server.password_setup_token)).replace('{{ERROR}}', error).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Content-Security-Policy', "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+        self.end_headers()
+        self.wfile.write(body)
+
     def authorized(self):
         header = self.headers.get('Authorization', '')
         try:
@@ -278,8 +363,13 @@ class Handler(BaseHTTPRequestHandler):
             user, password = supplied.split(':', 1)
         except (ValueError, UnicodeDecodeError, binascii.Error):
             return False
-        return (hmac.compare_digest(user.encode(), self.server.admin_user.encode()) and
-                hmac.compare_digest(password.encode(), self.server.admin_password.encode()))
+        if not hmac.compare_digest(user.encode(), self.server.admin_user.encode()):
+            return False
+        verifier = getattr(self.server, 'password_verifier', None)
+        if verifier:
+            return verifier.matches(password)
+        return hmac.compare_digest(password.encode(), self.server.admin_password.encode())
+
 
     def send_json(self, data):
         body = json.dumps(data).encode()
@@ -291,15 +381,79 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class PasswordVerifier:
+    def __init__(self, encoded):
+        salt, digest = encoded.split(':', 1)
+        self.salt = bytes.fromhex(salt)
+        self.digest = bytes.fromhex(digest)
+        if len(self.salt) != 16 or len(self.digest) != 32:
+            raise ValueError('Invalid password verifier.')
+        self.encoded = encoded
+        self.cache_key = secrets.token_bytes(32)
+        self.cached_match = b''
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def derive(password, salt):
+        return hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+
+    @classmethod
+    def create(cls, password):
+        salt = secrets.token_bytes(16)
+        return cls(f'{salt.hex()}:{cls.derive(password, salt).hex()}')
+
+    def matches(self, password):
+        if len(password) > 128:
+            return False
+        signature = hmac.digest(self.cache_key, password.encode(), 'sha256')
+        if hmac.compare_digest(signature, self.cached_match):
+            return True
+        # Limit concurrent scrypt operations and avoid rehashing successful Basic auth on every asset.
+        with self.lock:
+            if hmac.compare_digest(signature, self.cached_match):
+                return True
+            if not hmac.compare_digest(self.derive(password, self.salt), self.digest):
+                return False
+            self.cached_match = signature
+            return True
+
+
+def save_admin_password(path, encoded):
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as output:
+        temporary = Path(output.name)
+        output.write(encoded + '\n')
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 if __name__ == '__main__':
     user = os.environ.get('MARTINFLIX_ADMIN_USER', 'admin')
-    password = read_secret('MARTINFLIX_ADMIN_PASSWORD')
-    if not user or ':' in user or len(password) < 16:
+    state = os.environ.get('MARTINFLIX_ADMIN_STATE_FILE')
+    state_file = Path(state) if state else None
+    setup_required = False
+    verifier = None
+    if state_file is None:
+        password = read_secret('MARTINFLIX_ADMIN_PASSWORD')
+    else:
+        try:
+            verifier = PasswordVerifier(state_file.read_text(encoding='utf-8').strip())
+            password = ''
+        except FileNotFoundError:
+            password = read_secret('MARTINFLIX_ADMIN_PASSWORD')
+            setup_required = True
+    if not user or ':' in user or (verifier is None and len(password) < 16):
         raise SystemExit('Configure an admin username and a password of at least 16 characters.')
     port = int(os.environ.get('MARTINFLIX_PORT', '8765'))
     host = os.environ.get('MARTINFLIX_BIND', '127.0.0.1')
     server = ThreadingHTTPServer((host, port), Handler)
     server.admin_user = user
     server.admin_password = password
+    server.password_verifier = verifier
+    server.admin_state_file = state_file
+    server.password_setup_required = setup_required
+    server.password_setup_token = secrets.token_urlsafe(32) if setup_required else ''
+    server.password_setup_lock = threading.Lock()
     print('MartinFlix listening on %s:%d' % (host, port), flush=True)
     server.serve_forever()

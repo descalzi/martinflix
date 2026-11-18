@@ -42,15 +42,17 @@ python3 deploy/bootstrap/install.py --dashboard-bind "$VM_IP"
 
 Use LAN access on a trusted home network. HTTP Basic sends credentials unencrypted, so keep the dashboard off the public internet. Sonarr and Radarr’s setup screens remain local to the VM.
 
-The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and prints the dashboard URL and password file. Rerun with the same options to resume setup.
+The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Rerun with the same options to resume setup.
 
 ### 3. Open the dashboard
 
-Open the URL printed by the installer and sign in as **admin**. The default is **http://127.0.0.1:8765** on the VM. View the generated password on the VM:
+Open the URL printed by the installer and sign in as **admin**. The default is **http://127.0.0.1:8765** on the VM. On first sign-in, view the temporary password on the VM:
 
 ```sh
 cat ~/.local/state/martinflix-first-run/dashboard-secrets/admin-password
 ```
+
+Sign in with it, choose a password of at least 16 characters, then sign in again with your new password.
 
 | Service | Local address |
 | --- | --- |

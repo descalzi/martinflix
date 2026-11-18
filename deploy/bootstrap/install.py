@@ -139,7 +139,8 @@ def install(args):
 
     if os.getuid() == 0:
         raise ValueError('Run the installer without sudo as the Linux account that will own the stack data.')
-    print('Checking Docker Engine and Compose…', flush=True)
+    print('\nMartinFlix setup\n───────────────', flush=True)
+    print('1. Checking Docker, storage, and network ports…', flush=True)
     docker_root = preflight_docker()
 
     state = args.state_dir.expanduser().resolve()
@@ -163,8 +164,7 @@ def install(args):
                        MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_DASHBOARD_PORT=str(ports[0]),
                        MARTINFLIX_SONARR_PORT=str(ports[1]), MARTINFLIX_RADARR_PORT=str(ports[2]))
 
-    print('Checking storage and service ports…', flush=True)
-    for directory in (state, state / 'dashboard-secrets', *(state / app for app in APPS)):
+    for directory in (state, state / 'dashboard-secrets', state / 'dashboard-auth', *(state / app for app in APPS)):
         check_directory(directory)
     check_ports(compose, environment, [('dashboard', str(bind), ports[0]),
                                          ('sonarr', '127.0.0.1', ports[1]), ('radarr', '127.0.0.1', ports[2])])
@@ -180,20 +180,27 @@ def install(args):
 
     def compose_step(label, command):
         print(label, flush=True)
-        try:
-            subprocess.run(compose + command, env=environment, check=True)
-        except subprocess.CalledProcessError as exc:
-            list_command = shlex.join(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={project}'])
-            raise ValueError(f'{label} failed. Check the Docker error above. If an image could not be downloaded, '
-                             'check the VM’s internet connection and Docker storage.\n'
-                             f'To find the containers, run: {list_command}\n'
-                             'For a failed container, run docker logs followed by its name. '
-                             'Then rerun setup with the same options.') from exc
+        with tempfile.TemporaryFile() as log:
+            result = subprocess.run(compose + command, env=environment, stdout=log, stderr=subprocess.STDOUT)
+            if result.returncode == 0:
+                return
+            log.seek(max(0, log.tell() - 12000))
+            details = log.read().decode(errors='replace').strip()
+        if details:
+            print(f'\nDocker details\n{details}\n', file=sys.stderr)
+        list_command = shlex.join(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={project}'])
+        raise ValueError('This step could not finish. Check the Docker details above. '
+                         'If an image could not be downloaded, check this VM’s internet connection and Docker storage.\n'
+                         f'To find the containers, run: {list_command}\n'
+                         'For a failed container, run docker logs followed by its name. '
+                         'Then rerun setup with the same options.')
 
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         secret_dir = state / 'dashboard-secrets'
         private_directory(secret_dir)
+        auth_dir = state / 'dashboard-auth'
+        private_directory(auth_dir)
         for app in APPS:
             private_directory(state / app)
         password = secret_dir / 'admin-password'
@@ -205,11 +212,10 @@ def install(args):
         else:
             write_secret(password, secrets.token_urlsafe(32))
 
-        print(f'Setting up Compose project {project}', flush=True)
-        compose_step('Starting Sonarr and Radarr', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
+        compose_step('2. Starting Sonarr and Radarr. The first download may take a few minutes…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         for app in APPS:
             write_secret(secret_dir / f'{app}-key', wait_for_key(state / app / 'config.xml'))
-        compose_step('Building and starting the dashboard', ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])
+        compose_step('3. Building and starting your dashboard…', ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])
         verify = '''
 import server
 for app in ('sonarr', 'radarr'):
@@ -218,9 +224,21 @@ for app in ('sonarr', 'radarr'):
         raise SystemExit(f'{app} verification failed: {result.get("error", "key unavailable")}')
     print(f'{app} monitoring connected', flush=True)
 '''
-        compose_step('Verifying the Sonarr and Radarr connections', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
-    print(f'Dashboard: http://{bind}:{ports[0]} (admin, password file: {password})')
-    print(f'Sonarr: http://127.0.0.1:{ports[1]}  Radarr: http://127.0.0.1:{ports[2]}')
+        compose_step('4. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
+    print('\nSetup complete · Sonarr and Radarr are connected.\n')
+    print('Open your dashboard')
+    print('───────────────────')
+    print(f'Address   http://{bind}:{ports[0]}')
+    print('Username  admin')
+    if (auth_dir / 'password-hash').is_file():
+        print('Password  Use the password you set on first sign-in.')
+    else:
+        print('Password  Run this on the VM to show your temporary password:')
+        print(f'          cat {shlex.quote(str(password))}')
+        print('          Sign in with it, then choose your own password on the setup screen.')
+    print('\nApp setup on this VM')
+    print(f'Sonarr    http://127.0.0.1:{ports[1]}')
+    print(f'Radarr    http://127.0.0.1:{ports[2]}')
 
 
 def main():
