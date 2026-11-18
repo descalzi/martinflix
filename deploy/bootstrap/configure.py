@@ -24,14 +24,14 @@ class AppApi:
         self.base = f'http://127.0.0.1:{port}/api/v{version}/'
         self.key = key
 
-    def request(self, route, payload=None):
+    def request(self, route, payload=None, method=None):
         headers = {'X-Api-Key': self.key, 'Accept': 'application/json'}
         body = None
         if payload is not None:
             body = json.dumps(payload).encode()
             headers['Content-Type'] = 'application/json'
         try:
-            request = urllib.request.Request(self.base + route, data=body, headers=headers)
+            request = urllib.request.Request(self.base + route, data=body, headers=headers, method=method)
             with OPENER.open(request, timeout=30) as response:
                 data = response.read()
             return json.loads(data) if data else None
@@ -85,6 +85,14 @@ def ensure_sonarr_exclusions(api):
     })
 
 
+def seed_sonarr_indexer_defaults(api):
+    config = api.request('config/indexer')
+    updates = {'minimumAge': 120, 'maximumSize': 3000}
+    updates = {name: value for name, value in updates.items() if config.get(name) == 0}
+    if updates:
+        api.request(f'config/indexer/{config["id"]}', {**config, **updates}, method='PUT')
+
+
 def ensure_root_folder(api, path):
     if not any(folder['path'].rstrip('/') == path for folder in api.request('rootfolder')):
         api.request('rootfolder', {'path': path})
@@ -124,13 +132,15 @@ def ensure_download_path(api):
         })
 
 
-def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None):
+def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *, seed_indexers=False):
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1) if prowlarr_key else None
     for app, name in ARR_NAMES.items():
         api = AppApi(name, ports[app], arr_keys[app])
         ensure_quality_profile(api, app)
         if app == 'sonarr':
             ensure_sonarr_exclusions(api)
+            if seed_indexers:
+                seed_sonarr_indexer_defaults(api)
         if media_path:
             ensure_root_folder(api, ROOT_FOLDERS[app])
         if prowlarr:

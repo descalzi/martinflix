@@ -258,7 +258,7 @@ def install(args):
         raise ValueError('The VPN needs /dev/net/tun on this VM. Try sudo modprobe tun. If it is still unavailable, '
                          'enable TUN access in your VM settings and rerun setup.')
     project = compose_project(state, previous)
-    options = {'media_path': str(media) if media else None, 'downloads': downloads, 'project': project}
+    options = {**previous, 'media_path': str(media) if media else None, 'downloads': downloads, 'project': project}
     ports = {'dashboard': args.dashboard_port, 'sonarr': args.sonarr_port, 'radarr': args.radarr_port}
     if downloads:
         ports.update(prowlarr=args.prowlarr_port, transmission=args.transmission_port)
@@ -357,7 +357,11 @@ def install(args):
             prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
             step += 1
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
-        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password)
+        seed_indexers = not options.get('sonarr_indexer_defaults_applied')
+        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers)
+        if seed_indexers:
+            options['sonarr_indexer_defaults_applied'] = True
+            write_secret(state / 'install-options.json', json.dumps(options))
         compose_step(f'{step + 1}. Building and starting your dashboard…',
                      ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])
         verify = '''
