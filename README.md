@@ -50,10 +50,10 @@ The installer starts Sonarr and Radarr, connects the dashboard using their gener
 
 ### 3. Open the dashboard
 
-Open the URL printed by the installer and sign in as **admin**. The default is **http://127.0.0.1:8765** on the VM. On first sign-in, view the temporary password on the VM:
+Open the URL printed by the installer and sign in as **admin**. The default is **http://127.0.0.1:8765** on the VM. On first sign-in, run the password command printed by the installer. On a new install with default options, it is:
 
 ```sh
-cat ~/.local/state/martinflix-first-run/dashboard-secrets/admin-password
+cat ~/.local/state/martinflix/dashboard-secrets/admin-password
 ```
 
 Sign in with it, choose a password of at least eight characters, then sign in again with your new password.

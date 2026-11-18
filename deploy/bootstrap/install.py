@@ -48,6 +48,35 @@ def saved_options(state):
     return options
 
 
+def has_installation(path):
+    return (path / 'install-options.json').exists() or (path / 'dashboard-secrets/admin-password').exists()
+
+
+def resolve_state_directory(requested):
+    if requested is not None:
+        return requested.expanduser().resolve()
+    state_home = Path.home() / '.local/state'
+    current = state_home / 'martinflix'
+    legacy = state_home / 'martinflix-first-run'
+    if has_installation(legacy):
+        if has_installation(current):
+            raise ValueError('Two MartinFlix installations were found. Choose one with --state-dir.')
+        return legacy.resolve()
+    return current.resolve()
+
+
+def compose_project(state, previous):
+    suffix = hashlib.sha256(os.fsencode(state)).hexdigest()[:16]
+    current = f'martinflix-{suffix}'
+    legacy = f'martinflix-first-run-{suffix}'
+    project = previous.get('project')
+    if project is None:
+        return legacy if has_installation(state) else current
+    if project not in (current, legacy):
+        raise ValueError('The saved Docker project does not match this state directory. Use the original --state-dir.')
+    return project
+
+
 def media_root(value, state):
     path = Path(value).expanduser().resolve()
     repo = COMPOSE_FILE.parents[2]
@@ -213,7 +242,7 @@ def install(args):
     print('1. Checking Docker, storage, and network ports…', flush=True)
     docker_root = preflight_docker()
 
-    state = args.state_dir.expanduser().resolve()
+    state = resolve_state_directory(args.state_dir)
     if state.is_relative_to(COMPOSE_FILE.parents[2]):
         raise ValueError('Choose a state directory outside the repository for application data and secrets.')
     previous = saved_options(state)
@@ -228,7 +257,8 @@ def install(args):
     if downloads and not Path('/dev/net/tun').is_char_device():
         raise ValueError('The VPN needs /dev/net/tun on this VM. Try sudo modprobe tun. If it is still unavailable, '
                          'enable TUN access in your VM settings and rerun setup.')
-    options = {'media_path': str(media) if media else None, 'downloads': downloads}
+    project = compose_project(state, previous)
+    options = {'media_path': str(media) if media else None, 'downloads': downloads, 'project': project}
     ports = {'dashboard': args.dashboard_port, 'sonarr': args.sonarr_port, 'radarr': args.radarr_port}
     if downloads:
         ports.update(prowlarr=args.prowlarr_port, transmission=args.transmission_port)
@@ -241,8 +271,6 @@ def install(args):
     if bind.is_unspecified or bind.is_multicast:
         raise ValueError('Choose loopback or a specific host IPv4 address for the dashboard.')
 
-    suffix = hashlib.sha256(os.fsencode(state)).hexdigest()[:16]
-    project = f'martinflix-first-run-{suffix}'
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.media.yaml'))]
@@ -363,7 +391,8 @@ for app in ('sonarr', 'radarr'):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--state-dir', type=Path, default=Path.home() / '.local/state/martinflix-first-run')
+    parser.add_argument('--state-dir', type=Path,
+                        help='Where app data is stored. Defaults to ~/.local/state/martinflix for new installs.')
     parser.add_argument('--dashboard-bind', default='127.0.0.1')
     parser.add_argument('--dashboard-port', type=int, default=8765)
     parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, and downloads.')
