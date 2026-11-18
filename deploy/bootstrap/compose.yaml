@@ -1,0 +1,62 @@
+services:
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${MARTINFLIX_UID:?Run the bootstrap script}"
+      PGID: "${MARTINFLIX_GID:?Run the bootstrap script}"
+    ports:
+      - "127.0.0.1:${MARTINFLIX_SONARR_PORT}:8989"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/sonarr:/config"
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8989/ping]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 15s
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${MARTINFLIX_UID:?Run the bootstrap script}"
+      PGID: "${MARTINFLIX_GID:?Run the bootstrap script}"
+    ports:
+      - "127.0.0.1:${MARTINFLIX_RADARR_PORT}:7878"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/radarr:/config"
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:7878/ping]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 15s
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: deploy/dashboard/Dockerfile
+    restart: unless-stopped
+    user: "${MARTINFLIX_UID}:${MARTINFLIX_GID}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - "${MARTINFLIX_DASHBOARD_BIND}:${MARTINFLIX_DASHBOARD_PORT}:8765"
+    environment:
+      MARTINFLIX_BIND: 0.0.0.0
+      MARTINFLIX_ADMIN_PASSWORD_FILE: /run/dashboard-secrets/admin-password
+      MARTINFLIX_SONARR_KEY_FILE: /run/dashboard-secrets/sonarr-key
+      MARTINFLIX_RADARR_KEY_FILE: /run/dashboard-secrets/radarr-key
+      MARTINFLIX_ARR_COMPOSE_NETWORK: "1"
+      MARTINFLIX_SONARR_URL: http://sonarr:8989
+      MARTINFLIX_RADARR_URL: http://radarr:7878
+      MARTINFLIX_DOCKER_STATUS_DISABLED: "1"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/dashboard-secrets:/run/dashboard-secrets:ro"
+    healthcheck:
+      test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 8765), 2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 10

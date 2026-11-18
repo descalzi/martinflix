@@ -1,0 +1,7 @@
+[Unit]
+Description=Collect MartinFlix container status
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/libexec/martinflix-collect-status
+TimeoutStartSec=30

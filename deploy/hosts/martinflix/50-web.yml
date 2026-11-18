@@ -1,0 +1,54 @@
+# martinflix · web — homepage, seerr, tautulli
+# Replaces: homepage.sh, seerr.sh, tautulli.sh
+name: martinflix-web
+
+services:
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    network_mode: bridge
+    ports: ["3000:3000"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/London}
+      HOMEPAGE_ALLOWED_HOSTS: "*"
+    volumes:
+      - /var/lib/homepage:/app/config   # <- the path gethomepage actually uses
+      - /var/lib/homepage:/config
+      - /var/lib/homepage:/kavita/config
+      - /tmp/homepage:/tmp/homepage
+
+  seerr:
+    image: seerr/seerr:latest
+    container_name: seerr
+    restart: unless-stopped
+    network_mode: bridge
+    ports: ["5055:5055"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - /var/lib/seerr:/app/config      # <- the path seerr actually uses
+      - /var/lib/seerr:/config
+      - /var/lib/seerr:/kavita/config
+      - /tmp/seerr:/tmp/seerr
+
+  tautulli:
+    image: ghcr.io/tautulli/tautulli
+    container_name: tautulli
+    restart: unless-stopped
+    network_mode: bridge
+    ports: ["8181:8181"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - /var/lib/tautulli:/config       # <- the path tautulli actually uses
+      - /var/lib/tautulli:/app/config
+      - /var/lib/tautulli:/kavita/config
+      - /tmp/tautulli:/tmp/tautulli

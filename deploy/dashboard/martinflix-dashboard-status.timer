@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh MartinFlix container status every minute
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

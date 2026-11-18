@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+directory="$HOME/.local/state/martinflix-dashboard/status"
+install -d -m 0700 "$directory"
+snapshot=$(mktemp "$directory/.containers.XXXXXX")
+trap 'rm -f "$snapshot"' EXIT
+docker ps -a --format '{"Names":{{json .Names}},"State":{{json .State}},"Status":{{json .Status}}}' > "$snapshot"
+chmod 0600 "$snapshot"
+mv -f "$snapshot" "$directory/containers.jsonl"

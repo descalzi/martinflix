@@ -1,0 +1,22 @@
+# martinflix · bookshelf — replaced readarr, currently NOT running.
+# Flagged `manual` in stacks.conf: excluded from `up --all`.
+# Start with:  stackctl up bookshelf
+# Replaces: bookshelf.sh (upgrade_container.sh MODE 3)
+name: martinflix-bookshelf
+
+services:
+  bookshelf:
+    image: ghcr.io/pennydreadful/bookshelf:hardcover
+    container_name: bookshelf
+    restart: unless-stopped
+    network_mode: bridge      # matches bookshelf.sh (MODE 3)
+    ports: ["8787:8787"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - /var/lib/bookshelf:/config
+      - /tmp/bookshelf:/tmp/bookshelf
+      - /mnt/martinflix:/mnt/martinflix
+      - /var/lib/transmission-daemon/downloads:/var/lib/transmission-daemon/downloads

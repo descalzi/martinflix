@@ -1,0 +1,21 @@
+# martinflix · plex — host networking, hardware transcode paths
+# Replaces: plex.sh (upgrade_container.sh MODE 7)
+name: martinflix-plex
+
+services:
+  plex:
+    image: lscr.io/linuxserver/plex
+    container_name: plex
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}      # was GUID=1000 in upgrade_container.sh — a typo the image ignored
+      TZ: ${TZ:-Europe/London}
+    volumes:
+      - /var/lib/plex:/config          # <- the one this image actually uses
+      - /var/lib/plex:/app/config      # carried over from MODE 7; unused by plex
+      - /var/lib/plex:/kavita/config   # carried over from MODE 7; unused by plex
+      - /tmp/plex:/tmp/plex
+      - /mnt/martinflix:/mnt/martinflix
+      - /var/lib/transmission-daemon/downloads:/var/lib/transmission-daemon/downloads

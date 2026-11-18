@@ -1,0 +1,17 @@
+# MartinFlix live inventory
+
+Observed on 18 November 2026 using Docker metadata, host mount information, and read-only app requests. The six files under `deploy/hosts/martinflix/*.yml` and `stacks.conf` matched the legacy copies byte for byte. Docker Compose labels on the running legacy containers point to the corresponding files under `/mnt/martinflix/Data/Syncthing/Docker/hosts/martinflix`. Effective settings supplied by environment files, startup scripts, and Docker overrides need separate validation before cutover.
+
+| Group | Observed live configuration | Recovery sources |
+|---|---|---|
+| Core | Tailscale uses host networking and the TUN device. Portainer publishes 9443 and mounts the Docker socket. | Tailscale state under `/var/lib/tailscale/state`. Portainer uses the external `portainer_data` volume. |
+| Plex | Host networking. Media and downloads are separate mounts from its configuration. | `/var/lib/plex`, the media share, and host-specific device and identity settings. |
+| Downloads and automation | Transmission, FlareSolverr, Prowlarr and Bazarr share the running Gluetun network namespace. Gluetun publishes 6767, 9091, 9696, and 51155 TCP/UDP. Sonarr and Radarr use bridge networking and publish 8989 and 7878. Docker health checks on Gluetun and its four dependants reported healthy. | Per-app directories under `/var/lib`, app-generated backups, the downloads directory, and VPN credentials supplied outside Git. VPN fail-closed behavior still requires rehearsal. |
+| BookOrbit | App and Postgres share `martinflix-books_default`. The app publishes 3001. Postgres has no published port and uses the pinned pgvector image specified in Compose. | `/var/lib/bookorbit/app`, an app-consistent PostgreSQL backup, database settings, `/mnt/martinflix/Books` and `/mnt/martinflix/AudioBooks`. |
+| Web | Homepage, Seerr and Tautulli use bridge networking and publish 3000, 5055 and 8181. | `/var/lib/homepage`, `/var/lib/seerr`, and `/var/lib/tautulli`. |
+| Optional and retired | Bookshelf is stopped and has no Compose project label. Its old container also has compatibility and temporary mounts absent from the proposed optional Compose file. Stacks and Shelfarr are stopped and reference an older container network namespace. | Confirm data retention and ownership before touching any of the three stopped containers. |
+| Dashboard | Separate Compose project. Host networking on 192.168.5.204:8765, with read-only secret and status mounts. | Private files under `~/.config/martinflix/dashboard-secrets`. The user timer can regenerate status. |
+
+The media share is an NFS automount at `/mnt/martinflix`. Downloads under `/var/lib/transmission-daemon/downloads` are on the host's local ext4 filesystem. The legacy user backup entry is scheduled daily at 03:15 local time. It uses `rsync --delete` to mirror selected data into `/mnt/martinflix/Data/backup` on the same NFS share. Arr scheduled archives and Seerr database files are present at the destination. The script has no BookOrbit data or logical PostgreSQL dump step. Seerr is copied as a live directory, so the mirror has no demonstrated SQLite consistency guarantee. An end-to-end successful run and restore history remain unverified.
+
+The Arr applications' existing configuration supplies both dashboard API keys. The dashboard reads separate 0600 copies from its private mount and connects to the two loopback ports. Verified 54 monitored series and 300 monitored films. A rotation in either app also requires updating its dashboard copy.

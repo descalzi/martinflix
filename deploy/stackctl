@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# stackctl — one command to manage the docker stacks on this host.
+#
+#   stackctl                      show this usage
+#   stackctl -i                   pick stacks and action interactively
+#   stackctl status               what is running (changes nothing)
+#   stackctl update --all         pull/build, then recreate
+#
+# Mutating actions print a plan and ask before doing anything; -y skips that.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=lib/ui.sh
+source "$ROOT/lib/ui.sh"
+# shellcheck source=lib/engine.sh
+source "$ROOT/lib/engine.sh"
+
+ACTION=""; ALL=0; DRY=0; ADOPT=0; PRUNE=1; YES=0; INTERACTIVE=0; HELP=0
+declare -a WANT=()
+STACK_HOST="$(hostname | tr '[:upper:]' '[:lower:]')"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        up|update|restart|stop|status|logs|dryrun) ACTION="$1"; shift ;;
+        --all)       ALL=1; shift ;;
+        --dry-run)   DRY=1; shift ;;
+        --adopt)     ADOPT=1; shift ;;
+        --no-prune)  PRUNE=0; shift ;;
+        -y|--yes)    YES=1; shift ;;
+        -i|--interactive) INTERACTIVE=1; shift ;;
+        --host)      STACK_HOST="$2"; shift 2 ;;
+        --timeout)   HEALTH_TIMEOUT="$2"; shift 2 ;;
+        -h|--help)   HELP=1; shift ;;
+        -*)          ui_error "unknown flag: $1"; exit 2 ;;
+        *)           WANT+=("$1"); shift ;;
+    esac
+done
+[[ "$ACTION" == dryrun ]] && { ACTION=update; DRY=1; }
+
+# Arguments but no recognised action: fail with a reason, instead of silently
+# dropping into the interactive picker and ignoring what was typed.
+if [[ -z "$ACTION" ]] && [[ ${#WANT[@]} -gt 0 || $ALL -eq 1 ]]; then
+    ACTIONS=(up update restart stop status logs dryrun)
+    _sorted() { printf '%s' "$1" | fold -w1 | sort | tr -d '\n'; }
+    ui_error "no action given — expected one of: ${ACTIONS[*]}"
+    for w in "${WANT[@]}"; do
+        lw="${w,,}"; hint=""
+        for a in "${ACTIONS[@]}"; do
+            if [[ "$lw" == "$a" ]] \
+               || [[ "$(_sorted "$lw")" == "$(_sorted "$a")" ]] \
+               || [[ ${#lw} -ge 3 && "$a" == "$lw"* ]]; then
+                hint="$a"; break
+            fi
+        done
+        if [[ "$w" == *[![:ascii:]]* ]]; then
+            ui_error "  '$w' contains a non-ASCII character (pasted dash or space?) — retype it"
+        elif [[ -n "$hint" ]]; then
+            ui_error "  '$w' — did you mean '$hint'?"
+        fi
+    done
+    ui_error "usage: stackctl <action> [stack…] [--all]    or just: stackctl"
+    exit 2
+fi
+
+HOSTDIR="$ROOT/hosts/$STACK_HOST"
+STATE_DIR="$ROOT/state/$STACK_HOST"
+LOG_DIR="$STATE_DIR/logs"
+[[ -d "$HOSTDIR" ]] || { ui_error "no config for host '$STACK_HOST' (looked in $HOSTDIR)"; exit 1; }
+mkdir -p "$LOG_DIR"
+
+# Under sudo, $HOME becomes /root and the host secrets file is not found.
+# martin is in the docker group on both hosts, so sudo is never needed.
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    ui_error "run stackctl without sudo — ${SUDO_USER} is in the docker group,"
+    ui_error "and under sudo \$HOME is /root so ~/.config/docker-stacks/ isn't found."
+    exit 2
+fi
+
+engine_detect_docker
+engine_load_conf "$HOSTDIR/stacks.conf"
+
+# ---- usage ------------------------------------------------------------------
+usage() {
+    printf '\n%sstackctl%s — manage the docker stacks on %s%s%s\n\n' "$C_B" "$C_RST" "$C_B" "$STACK_HOST" "$C_RST"
+    printf '  %susage%s  stackctl <action> [stack…] [--all] [flags]\n' "$C_DIM" "$C_RST"
+    printf '         stackctl -i                 pick interactively\n\n'
+    printf '  %sactions%s\n' "$C_DIM" "$C_RST"
+    printf '    %-9s %s\n' \
+        up      "start containers / apply config changes (no pull)" \
+        update  "pull or build new images, then recreate" \
+        restart "restart containers in place" \
+        stop    "stop the stack (data is untouched)" \
+        status  "show what is running — changes nothing" \
+        logs    "follow logs for one stack" \
+        dryrun  "print what update would do, change nothing"
+    printf '\n  %sflags%s\n' "$C_DIM" "$C_RST"
+    printf '    %-16s %s\n' \
+        "--all"          "every stack on this host (skips 'manual' ones)" \
+        "-y, --yes"      "do not ask for confirmation (cron, scripts)" \
+        "--dry-run"      "print what would happen, change nothing" \
+        "--adopt"        "take over containers owned by another project" \
+        "--no-prune"     "skip the single image prune at the end" \
+        "--host <name>"  "use another host's config" \
+        "--timeout <s>"  "seconds to wait for health (default ${HEALTH_TIMEOUT})"
+    printf '\n  %sstacks on %s%s\n' "$C_DIM" "$STACK_HOST" "$C_RST"
+    local id
+    for id in "${STACK_IDS[@]}"; do
+        engine_is_manual "$id" \
+            && printf '    %-10s %s%s%s  %smanual%s\n' "$id" "$C_DIM" "${S_TITLE[$id]}" "$C_RST" "$C_YEL" "$C_RST" \
+            || printf '    %-10s %s%s%s\n' "$id" "$C_DIM" "${S_TITLE[$id]}" "$C_RST"
+    done
+    printf '\n  %sexamples%s  stackctl status · stackctl update --all · stackctl up arr\n\n' "$C_DIM" "$C_RST"
+}
+
+# Bare `stackctl` (or -h) prints usage. It no longer runs anything by accident;
+# the interactive picker is behind -i.
+if [[ $HELP -eq 1 ]] || { [[ -z "$ACTION" ]] && [[ $INTERACTIVE -eq 0 ]]; }; then
+    usage
+    exit 0
+fi
+
+# ---- interactive ------------------------------------------------------------
+if [[ -z "$ACTION" ]]; then
+    declare -a specs=()
+    for id in "${STACK_IDS[@]}"; do
+        engine_is_manual "$id" && d=OFF || d=ON
+        specs+=("$id:${S_TITLE[$id]}:$d")
+    done
+    mapfile -t WANT < <(ui_pick_stacks "${specs[@]}")
+    [[ ${#WANT[@]} -eq 0 ]] && { ui_info "nothing selected."; exit 0; }
+    ACTION="$(ui_pick_action)" || exit 0
+    [[ -z "$ACTION" ]] && exit 0
+    [[ "$ACTION" == dryrun ]] && { ACTION=update; DRY=1; }
+fi
+
+if [[ $ALL -eq 1 || ${#WANT[@]} -eq 0 ]]; then
+    mapfile -t WANT < <(engine_default_stacks)
+fi
+
+# ---- simple actions ---------------------------------------------------------
+if [[ "$ACTION" == status ]]; then
+    ui_header "$STACK_HOST" "status"
+
+    # One docker call for every container on the host, stopped ones included.
+    declare -A CT_STATUS=() CT_STATE=() CT_PROJ=()
+    while IFS=$'\t' read -r n st state proj; do
+        CT_STATUS[$n]="$st"; CT_STATE[$n]="$state"; CT_PROJ[$n]="$proj"
+    done < <("${DOCKER[@]}" ps -a --format '{{.Names}}\t{{.Status}}\t{{.State}}\t{{.Label "com.docker.compose.project"}}')
+
+    declare -a problems=()
+    for id in "${STACK_IDS[@]}"; do
+        # What the stack SHOULD contain — so a dead or missing container shows
+        # up red instead of silently vanishing from the list.
+        # Read from `compose config`, not the raw file: it emits normalised block
+        # YAML with ${VARS} and <<: merges resolved, whatever style the file uses.
+        mapfile -t names < <(engine_stack_containers "$id")
+
+        manual=0; engine_is_manual "$id" && manual=1
+        up=0; lines=()
+        for n in "${names[@]}"; do
+            [[ -z "$n" ]] && continue
+            st="${CT_STATUS[$n]:-not created}"; state="${CT_STATE[$n]:-missing}"; proj="${CT_PROJ[$n]:-}"
+            case "$state" in
+                running)
+                    if [[ "$st" == *"(unhealthy)"* ]]; then
+                        g="$GLYPH_ERR"; col="$C_RED"; problems+=("$n unhealthy")
+                    elif [[ "$st" == *"health: starting"* ]]; then
+                        g="${C_YEL}▸${C_RST}"; col="$C_YEL"; up=$((up + 1))
+                    else
+                        g="$GLYPH_OK"; col="$C_GRN"; up=$((up + 1))
+                    fi ;;
+                restarting|paused)
+                    g="${C_YEL}!${C_RST}"; col="$C_YEL"; problems+=("$n $state") ;;
+                *)  # exited, dead, created, missing
+                    if (( manual )); then
+                        g="$GLYPH_IDLE"; col="$C_DIM"          # expected: not auto-started
+                    else
+                        g="$GLYPH_ERR"; col="$C_RED"; problems+=("$n ${state/missing/not created}")
+                    fi ;;
+            esac
+            note=""
+            [[ "$state" != missing && "$proj" != "${S_PROJ[$id]}" ]] \
+                && note="  ${C_YEL}not adopted (${proj:-docker run})${C_RST}"
+            lines+=("$(printf '    %s %-20s %s%s%s%s' "$g" "$n" "$col" "$st" "$C_RST" "$note")")
+        done
+
+        total=${#lines[@]}
+        # A stack we can't find any containers for is a problem, never "all up".
+        if (( total == 0 )) && ! (( manual )); then
+            problems+=("$id has no containers")
+            lines+=("$(printf '    %s %s%s%s' "$GLYPH_ERR" "$C_RED" "no containers found — compose file broken, or never started?" "$C_RST")")
+        fi
+        if   (( up == total && total > 0 )); then hc="$C_GRN"
+        elif (( manual && up == 0 ));        then hc="$C_DIM"
+        else                                      hc="$C_RED"; fi
+        tag=""; (( manual )) && tag="  ${C_YEL}manual${C_RST}"
+        printf '  %s%-10s%s %s%-36s%s %s%d/%d up%s%s\n' \
+            "$C_B" "$id" "$C_RST" "$C_DIM" "${S_TITLE[$id]}" "$C_RST" "$hc" "$up" "$total" "$C_RST" "$tag"
+        printf '%s\n' "${lines[@]}"
+    done
+
+    echo
+    if [[ ${#problems[@]} -eq 0 ]]; then
+        printf '  %s✔ everything up%s\n\n' "$C_GRN" "$C_RST"
+        exit 0
+    fi
+    printf '  %s✘ %d problem(s):%s ' "$C_RED" "${#problems[@]}" "$C_RST"
+    ( IFS=','; printf '%s\n\n' "${problems[*]}" | sed 's/,/, /g' )
+    exit 1
+fi
+
+if [[ "$ACTION" == logs ]]; then
+    [[ ${#WANT[@]} -eq 1 ]] || { ui_error "logs takes exactly one stack"; exit 2; }
+    exec_id="${WANT[0]}"
+    engine_compose "$exec_id" logs -f --tail=100
+    exit 0
+fi
+
+# ---- ordered run ------------------------------------------------------------
+mapfile -t ORDER < <(engine_resolve "${WANT[@]}")
+# Containers a stack will touch, with their state right now. Shown before
+# confirming, so "arr" is not an opaque label.
+print_stack_preview() {
+    local id="$1" n st
+    while read -r n; do
+        [[ -z "$n" ]] && continue
+        st="${PREV_STATUS[$n]:-not created}"
+        printf '        %s· %-20s %s%s\n' "$C_DIM" "$n" "$st" "$C_RST"
+    done < <(engine_stack_containers "$id")
+}
+
+# ---- confirm ----------------------------------------------------------------
+if [[ $DRY -eq 0 && $YES -eq 0 ]]; then
+    case "$ACTION" in
+        up)      effect="start containers and apply config changes (no image pull)" ;;
+        update)  effect="pull or build new images, then recreate changed containers" ;;
+        restart) effect="restart containers in place" ;;
+        stop)    effect="stop containers — volumes and config are untouched" ;;
+    esac
+    printf '\n  %son %s, %s will:%s\n' "$C_B" "$STACK_HOST" "$ACTION" "$C_RST"
+    printf '    %s\n\n' "$effect"
+    declare -A PREV_STATUS=()
+    while IFS=$'\t' read -r a b; do PREV_STATUS[$a]="$b"; done \
+        < <("${DOCKER[@]}" ps -a --format '{{.Names}}\t{{.Status}}')
+    for id in "${ORDER[@]}"; do
+        printf '    %-10s %s%s%s\n' "$id" "$C_DIM" "${S_TITLE[$id]}" "$C_RST"
+        print_stack_preview "$id"
+    done
+    [[ $ADOPT -eq 1 ]] && printf '\n    %s--adopt: containers owned by another project will be REMOVED and recreated%s\n' "$C_YEL" "$C_RST"
+    printf '\n'
+    if ! ui_have_tty; then
+        ui_error "no terminal to confirm on — re-run with --yes"
+        exit 3
+    fi
+    ui_confirm "Proceed with '$ACTION' on ${#ORDER[@]} stack(s)?" || { ui_info "cancelled."; exit 0; }
+fi
+
+DRYLABEL=""; [[ $DRY -eq 1 ]] && DRYLABEL=" · dry run"
+ui_header "$STACK_HOST" "${ACTION}${DRYLABEL} · ${#ORDER[@]} stack(s)"
+
+declare -A FAILED=()
+rc_total=0
+ADOPT_HINT=""
+
+# After a stack finishes, list its containers so it is clear what actually
+# moved — "arr" alone says nothing about its seven services.
+print_stack_detail() {
+    local id="$1" n st state manual=0
+    engine_is_manual "$id" && manual=1
+    declare -A D_STATUS=() D_STATE=()
+    while IFS=$'\t' read -r a b c; do D_STATUS[$a]="$b"; D_STATE[$a]="$c"; done \
+        < <("${DOCKER[@]}" ps -a --format '{{.Names}}\t{{.Status}}\t{{.State}}')
+    while read -r n; do
+        [[ -z "$n" ]] && continue
+        st="${D_STATUS[$n]:-not created}"; state="${D_STATE[$n]:-missing}"
+        IFS=$'\t' read -r g col _ < <(engine_glyph_for "$st" "$state" "$manual")
+        printf '      %b %-20s %s%s%s\n' "$g" "$n" "$col" "$st" "$C_RST"
+    done < <(engine_stack_containers "$id")
+}
+
+stack_skipped_because() {
+    local id="$1" dep
+    IFS=',' read -ra _d <<< "${S_NEEDS[$id]}"
+    for dep in "${_d[@]}"; do
+        dep="$(engine_trim "$dep")"
+        [[ -n "$dep" && -n "${FAILED[$dep]:-}" ]] && { printf '%s' "$dep"; return 0; }
+    done
+    return 1
+}
+
+for id in "${ORDER[@]}"; do
+    if blocker="$(stack_skipped_because "$id")"; then
+        ui_step_begin "$id"; ui_step_end skip "skipped (needs $blocker)"
+        FAILED[$id]=1; continue
+    fi
+
+    LOG="$LOG_DIR/${id}.log"; : > "$LOG"
+    ui_step_begin "$id"
+
+    if [[ $DRY -eq 1 ]]; then
+        ui_step_end skip "would: ${ACTION} ${S_PROJ[$id]} (-f ${S_FILE[$id]})"
+        continue
+    fi
+
+    # -- containers owned by another project would collide on container_name.
+    # Only detected here; removal happens later, right before `compose up`, so
+    # a failed pull/build can never leave a service deleted.
+    conflicts=()
+    if [[ "$ACTION" != stop ]]; then
+        mapfile -t conflicts < <(engine_conflicts "$id")
+        [[ -z "${conflicts[0]:-}" ]] && conflicts=()
+        if [[ ${#conflicts[@]} -gt 0 ]] && [[ $ADOPT -eq 0 || "$ACTION" == restart ]]; then
+            # restart can't adopt: compose would remove the old container
+            # and then have nothing of its own to restart.
+            ui_step_end fail "needs up --adopt: ${#conflicts[@]} container(s) owned elsewhere"
+            ADOPT_HINT=1
+            for c in "${conflicts[@]}"; do
+                ui_substep "$GLYPH_IDLE" "${c%%$'\t'*}" "currently project: ${c##*$'\t'}"
+            done
+            FAILED[$id]=1; rc_total=1; continue
+        fi
+    fi
+
+    case "$ACTION" in
+      stop)
+        if ui_run "stopping" "$LOG" engine_compose "$id" stop; then
+            ui_step_end ok "stopped"; print_stack_detail "$id"
+        else
+            ui_step_end fail "stop failed"; ui_tail_log "$LOG"; FAILED[$id]=1; rc_total=1
+        fi
+        ;;
+
+      restart)
+        if ui_run "restarting" "$LOG" engine_compose "$id" restart; then
+            if engine_wait_health "$id"; then
+                ui_step_end ok "restarted · healthy"; print_stack_detail "$id"
+            else FAILED[$id]=1; rc_total=1; fi
+        else
+            ui_step_end fail "restart failed"; ui_tail_log "$LOG"; FAILED[$id]=1; rc_total=1
+        fi
+        ;;
+
+      up|update)
+        engine_record_digests "$id"
+        summary=""
+        if [[ "$ACTION" == update ]]; then
+            # A failed pull must NOT touch the running container.
+            if engine_has_build "$id"; then
+                if ! ui_run "building" "$LOG" engine_compose "$id" build --pull; then
+                    ui_step_end fail "build failed — stack left running, untouched"
+                    ui_tail_log "$LOG"; FAILED[$id]=1; rc_total=1; continue
+                fi
+                summary="built"
+            else
+                if ! ui_run "pulling" "$LOG" engine_compose "$id" pull; then
+                    ui_step_end fail "pull failed — stack left running, untouched"
+                    ui_tail_log "$LOG"; FAILED[$id]=1; rc_total=1; continue
+                fi
+                summary="pulled"
+            fi
+        fi
+        for c in "${conflicts[@]}"; do
+            ui_step_status "adopting ${c%%$'\t'*}"
+            "${DOCKER[@]}" rm -f "${c%%$'\t'*}" >>"$LOG" 2>&1 || true
+        done
+        if ui_run "applying" "$LOG" engine_compose "$id" up -d --remove-orphans; then
+            if engine_wait_health "$id"; then
+                ui_step_end ok "${summary:+$summary · }up · healthy"
+                print_stack_detail "$id"
+            else
+                ui_tail_log "$LOG"; FAILED[$id]=1; rc_total=1
+            fi
+        else
+            ui_step_end fail "up failed"; ui_tail_log "$LOG"; FAILED[$id]=1; rc_total=1
+        fi
+        ;;
+    esac
+done
+
+# ---- one prune, at the end --------------------------------------------------
+if [[ "$ACTION" == update && $PRUNE -eq 1 && $DRY -eq 0 && $rc_total -eq 0 ]]; then
+    freed=$("${DOCKER[@]}" image prune -f 2>/dev/null | tail -1)
+    ui_info "${freed:-images pruned}"
+fi
+
+echo
+if [[ $rc_total -eq 0 ]]; then
+    printf '  %s all %d stack(s) ok%s\n\n' "$C_GRN" "${#ORDER[@]}" "$C_RST"
+else
+    printf '  %s%d stack(s) failed:%s %s\n' "$C_RED" "${#FAILED[@]}" "$C_RST" "${!FAILED[*]}"
+    retry_action="$ACTION"
+    [[ -n "$ADOPT_HINT" && "$ACTION" == restart ]] && retry_action=up   # restart can't adopt
+    retry_flag=""
+    [[ -n "$ADOPT_HINT" || $ADOPT -eq 1 ]] && retry_flag=" --adopt"
+    printf '  %sretry:%s stackctl %s %s%s\n\n' "$C_DIM" "$C_RST" "$retry_action" "${!FAILED[*]}" "$retry_flag"
+fi
+exit $rc_total
