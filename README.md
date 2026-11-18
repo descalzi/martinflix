@@ -10,6 +10,8 @@ A home media control room with a repeatable Docker setup. See which services are
 
 ## Quick start
 
+The browser-based command builder lives in [`docs/index.html`](docs/index.html). To preview it locally, run `python3 -m http.server 8000 --bind 127.0.0.1 --directory docs` from the checkout and open `http://127.0.0.1:8000`.
+
 ### 1. Prepare the VM
 
 Use a Linux VM. Open a terminal and run `git --version` and `python3 --version`. If either command is missing, install Git and Python using your Linux distribution’s package manager. The installer accepts **Python 3.9 or newer**, including 3.9.2. Use a currently supported Linux release for a new VM.

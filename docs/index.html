@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Build a MartinFlix installer command for your Linux host.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Set up MartinFlix</title>
+  <link rel="stylesheet" href="./setup.css">
+  <script src="./setup.js" defer></script>
+</head>
+<body>
+  <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
+  <main>
+    <h1>Set up MartinFlix</h1>
+    <p>Choose how to run MartinFlix, then copy the commands to your Linux terminal. Your answers stay in this browser tab.</p>
+    <div class="layout">
+      <form id="options" autocomplete="off">
+        <fieldset>
+          <legend>Where will you open the dashboard?</legend>
+          <label><input type="radio" name="access" value="local" checked> On the Linux host</label>
+          <label><input type="radio" name="access" value="lan"> On another device on my home network</label>
+          <div id="lan-options" hidden>
+            <label for="address">Linux host’s LAN IPv4 address</label>
+            <input id="address" type="text" inputmode="decimal" placeholder="192.168.1.50" aria-describedby="lan-help">
+            <small id="lan-help">Use a trusted network. The dashboard uses HTTP.</small>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Media and downloads</legend>
+          <label for="media">Media directory <small>Optional for library monitoring</small></label>
+          <input id="media" type="text" placeholder="/mnt/media">
+          <small>Use an existing writable directory on the Linux host.</small>
+          <label><input id="downloads" type="checkbox"> Add Transmission and Prowlarr behind NordVPN</label>
+          <small>The installer asks for your NordVPN service credentials in the terminal.</small>
+        </fieldset>
+        <details>
+          <summary>Advanced options</summary>
+          <label for="state">Installation state directory</label>
+          <input id="state" type="text" placeholder="Use the installer default">
+          <div id="ports"></div>
+        </details>
+      </form>
+      <section class="commands" aria-labelledby="commands-title">
+        <h2 id="commands-title">Your terminal commands</h2>
+        <p>Clone MartinFlix once, then run both commands from the checkout. Run the check first and install after it passes.</p>
+        <pre>git clone https://github.com/descalzi/martinflix.git
+cd martinflix</pre>
+        <p id="error" role="status" hidden></p>
+        <div class="command-head"><label for="check-command">Check prerequisites</label><button type="button" data-copy="check-command">Copy check</button></div>
+        <textarea id="check-command" rows="3" readonly spellcheck="false"></textarea>
+        <div class="command-head"><label for="install-command">Install</label><button type="button" data-copy="install-command">Copy install</button></div>
+        <textarea id="install-command" rows="3" readonly spellcheck="false"></textarea>
+        <p id="copy-status" role="status"></p>
+        <a href="https://github.com/descalzi/martinflix/blob/main/docs/first-run.md">Read the first-run guide</a>
+        <noscript>Enable JavaScript to generate commands, or use the first-run guide.</noscript>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
