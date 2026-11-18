@@ -1,3 +1,80 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#111b1b"><title>MartinFlix — Control room</title><meta name="description" content="A local view of your MartinFlix services and media."><link rel="icon" href="/assets/martinflix-mark.webp" type="image/webp"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
-<body><a class="skip" href="#main">Skip to content</a><div class="layout"><aside class="sidebar"><a href="#overview" class="brand"><img class="brand-mark" src="/assets/martinflix-mark.webp" width="41" height="41" alt=""><span>MartinFlix</span></a><nav aria-label="Main navigation"><a href="#overview">Overview</a><a href="#services">Services</a><a href="#library">Library</a><a href="#backups">Backups</a></nav><div class="sidebar-foot"><span class="live-dot"></span> LOCAL CONNECTION<br><small>Built for your own corner of the internet.</small></div></aside><main id="main"><header class="topbar"><span>YOUR MEDIA SYSTEM <b>/</b> CONTROL ROOM</span><button id="refresh" type="button">↻ &nbsp; Refresh</button></header><section id="overview" class="hero"><h1><img src="/assets/martinflix-masthead.webp" width="1600" height="533" alt="MartinFlix"></h1></section><section class="summary" aria-label="System overview"><div><span class="metric-label">SYSTEM STATUS</span><strong id="system-status">Checking…</strong><small id="system-detail">Connecting to your host</small></div><div><span class="metric-label" id="services-metric-label">SERVICES</span><strong id="running">—</strong><small>Across configured groups</small></div><div><span class="metric-label">LATEST BACKUP</span><strong id="latest-backup">—</strong><small id="backup-detail">Checking snapshots</small></div></section><section id="services" class="section"><div class="section-head"><div><h2>Services <em>&amp; status.</em></h2></div><p id="services-description">Service health and dependencies.</p></div><div id="services-content" class="service-list" aria-live="polite"><p class="empty">Checking services…</p></div><p class="footnote" id="services-source"></p></section><section id="library" class="section library"><div class="section-head"><div><h2>On the <em>radar.</em></h2></div><p>See what’s airing next and which films are missing.</p></div><div class="library-controls"><div class="tabs" role="group" aria-label="Library type"><button class="active" aria-pressed="true" data-kind="sonarr">Series <span>Sonarr</span></button><button aria-pressed="false" data-kind="radarr">Films <span>Radarr</span></button></div><label class="search"><span class="sr-only">Filter titles</span><input id="filter" type="search" placeholder="Filter titles…"></label></div><p class="library-scope" id="library-scope">Monitored series · Upcoming or continuing · Next airing within 12 months</p><div id="library-content" class="library-content" aria-live="polite"><p class="empty">Loading library…</p></div><div class="library-bottom"><span>Requests &amp; discovery</span><a id="seerr-link" href="http://localhost:5055/" target="_blank" rel="noopener noreferrer">Open Seerr ↗</a></div></section><section id="backups" class="section"><div class="section-head"><div><p class="eyebrow">03 / PEACE OF MIND</p><h2>Backups <em>&amp; recovery.</em></h2></div><p>A record of captured app backups. A snapshot is only as useful as its tested recovery.</p></div><div id="backups-content" class="backup-list"><p class="empty">Checking snapshots…</p></div><p class="footnote">This first backup tool captures selected existing app-generated archives only. It does not yet protect the entire host or media library.</p></section><footer><span class="footer-brand">MartinFlix<span>.</span></span><span>MADE FOR HOME &nbsp; / &nbsp; <span id="updated">WAITING FOR DATA</span></span><a href="#overview">BACK TO TOP ↑</a></footer></main></div></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111b1b">
+  <title>MartinFlix — Control room</title>
+  <meta name="description" content="A local view of your MartinFlix services and media.">
+  <link rel="icon" href="/assets/martinflix-mark.webp" type="image/webp">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body data-page="overview">
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="layout">
+    <aside class="sidebar">
+      <a href="/" class="brand"><img class="brand-mark" src="/assets/martinflix-mark.webp" width="41" height="41" alt=""><span>MartinFlix</span></a>
+      <nav aria-label="Main navigation">
+        <a href="/" id="nav-overview">Overview</a><a href="/services" id="nav-services">Services</a>
+        <a href="/#series">Series</a><a href="/#films">Films</a><a href="/#backups">Backups</a>
+      </nav>
+    </aside>
+    <main id="main">
+      <header class="topbar"><span id="page-name">OVERVIEW</span><button id="refresh" type="button">↻ &nbsp; Refresh</button></header>
+      <div class="overview-page">
+        <section id="overview" class="hero"><h1><img src="/assets/martinflix-masthead.webp" width="1600" height="533" alt="MartinFlix"></h1></section>
+        <section class="summary" aria-label="System overview">
+          <a id="service-summary" href="/services">
+            <span class="metric-label" id="services-metric-label">SERVICES</span>
+            <strong id="running">—</strong>
+            <small id="services-summary-detail">Checking service status</small>
+          </a>
+          <div>
+            <span class="metric-label">PLEX STREAMS</span>
+            <strong id="plex-streams">—</strong>
+            <small id="plex-detail">Checking playback activity</small>
+          </div>
+          <a href="#backups">
+            <span class="metric-label">LATEST BACKUP</span>
+            <strong id="latest-backup">—</strong>
+            <small id="backup-detail">Checking snapshots</small>
+          </a>
+        </section>
+        <section id="now-playing" class="section now-playing" hidden>
+          <div class="section-head"><h2>Now playing</h2></div>
+          <ul id="streams-list" class="streams-list"></ul>
+        </section>
+        <section id="series" class="section library" data-library="sonarr">
+          <div class="section-head"><h2>Upcoming <em>series.</em></h2><p>Monitored series airing in the next 12 months.</p></div>
+          <div class="library-controls">
+            <p class="library-count"></p>
+            <label class="search"><span class="sr-only">Find a series</span><input type="search" placeholder="Find a series…"></label>
+          </div>
+          <div class="library-content" aria-live="polite"><p class="empty">Loading series…</p></div>
+        </section>
+        <section id="films" class="section library" data-library="radarr">
+          <div class="section-head"><h2>Missing <em>films.</em></h2><p>Monitored films without a file, sorted by release date.</p></div>
+          <div class="library-controls">
+            <p class="library-count"></p>
+            <label class="search"><span class="sr-only">Find a film</span><input type="search" placeholder="Find a film…"></label>
+          </div>
+          <div class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
+          <div class="library-bottom" id="seerr-row" hidden><span>Requests &amp; discovery</span><a id="seerr-link" href="http://localhost:5055/" target="_blank" rel="noopener noreferrer">Open Seerr</a></div>
+        </section>
+        <section id="backups" class="section">
+          <div class="section-head"><h2>Backups <em>&amp; recovery.</em></h2><p>Snapshots of selected app backups.</p></div>
+          <div id="backups-content" class="backup-list"><p class="empty">Checking snapshots…</p></div>
+          <p class="footnote">Snapshot checksums verify the copied files. A recovery rehearsal verifies they can be restored.</p>
+        </section>
+      </div>
+      <section id="services" class="section services-page">
+        <div class="section-head"><h1>Services <em>&amp; status.</em></h1><p id="services-description">Service health and dependencies.</p></div>
+        <div id="services-content" class="service-list" aria-live="polite"><p class="empty">Checking services…</p></div>
+        <p class="footnote" id="services-source"></p>
+      </section>
+      <footer><span class="footer-brand">MartinFlix<span>.</span></span><span id="updated">WAITING FOR DATA</span><a href="#main">BACK TO TOP ↑</a></footer>
+    </main>
+  </div>
+</body>
+</html>

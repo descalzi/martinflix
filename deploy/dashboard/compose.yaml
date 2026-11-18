@@ -16,6 +16,7 @@ services:
       MARTINFLIX_BIND: "${MARTINFLIX_LAN_ADDRESS:-192.168.5.204}"
       MARTINFLIX_ADMIN_PASSWORD_FILE: /run/dashboard-secrets/admin-password
       MARTINFLIX_SONARR_KEY_FILE: /run/dashboard-secrets/sonarr-key
+      MARTINFLIX_TAUTULLI_KEY_FILE: /run/dashboard-secrets/tautulli-key
       MARTINFLIX_RADARR_KEY_FILE: /run/dashboard-secrets/radarr-key
       MARTINFLIX_DOCKER_STATUS_FILE: /run/host-status/containers.jsonl
       MARTINFLIX_BACKUP_DIR: /run/backup-manifests

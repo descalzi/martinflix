@@ -112,8 +112,13 @@ function serviceGroup(group, countLabel) {
   </div>`;
 }
 
-let kind = 'sonarr', library = {};
+const servicesPage = document.body.dataset.page === 'services';
+if (!servicesPage && window.location.hash === '#services') window.location.replace('/services');
+if (!servicesPage && window.location.hash === '#library') window.location.replace('/#series');
+$(servicesPage ? '#nav-services' : '#nav-overview').setAttribute('aria-current', 'page');
+$('#page-name').textContent = servicesPage ? 'SERVICES' : 'OVERVIEW';
 $('#seerr-link').href = window.location.protocol + '//' + window.location.hostname + ':5055/';
+
 async function get(url) {
   const response = await fetch(url, {cache: 'no-store'});
   if (response.status === 401 && response.headers.get('X-MartinFlix-Login') === 'required') {
@@ -122,51 +127,83 @@ async function get(url) {
   if (!response.ok) throw new Error('Request failed');
   return response.json();
 }
-function date(value){const d = new Date(value); return isNaN(d) ? 'Unknown' : d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}
-async function status(){
- try {const data = await get('/api/status'), docker = data.docker, services = docker.groups.flatMap(g=>g.services), running = services.filter(serviceIsUp);
- const probes = docker.source === 'app-probes';
- $('#services-metric-label').textContent = probes ? 'SERVICES REACHABLE' : 'SERVICES RUNNING';
- $('#services-description').textContent = probes ? 'Live health checks for configured services.' : 'Container status and configured service dependencies.';
- $('#services-source').textContent = probes ? 'These checks show whether each app responds to the dashboard.' :
-   'Docker reports container status. Dependency lines show the configured stack and do not test VPN connectivity.';
- $('#running').textContent = docker.available ? `${running.length} / ${services.length}` : 'Unavailable';
- $('#system-status').textContent = !docker.available ? 'Unavailable' : services.some(s=>needsAttention(s) && s.name!=='bookshelf') ? 'Needs a look' : 'Looking good';
- $('#system-detail').textContent = docker.available ? (probes ? 'App health checks' : 'Container state only') : docker.error;
- $('#services-content').innerHTML = docker.available ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running')).join('') : `<p class="empty">${esc(docker.error)}</p>`;
- const backups=data.backups.snapshots; $('#latest-backup').textContent=backups.length ? date(backups[0].created) : 'None yet'; $('#backup-detail').textContent=backups.length ? (backups[0].errors?.length || backups[0].missing?.length ? 'Incomplete snapshot' : 'Snapshot recorded') : 'No snapshots found';
- $('#backups-content').innerHTML=backups.length ? backups.map(b=>`<div class="backup-row"><span>${esc(date(b.created))} <small> · ${esc(b.files ?? 0)} archives</small></span><span class="tag">${b.errors?.length || b.missing?.length ? 'Incomplete · '+esc([...(b.missing||[]),...(b.errors||[])].join(', ')) : 'Captured · restore untested'}</span></div>`).join('') : '<p class="empty">No MartinFlix snapshots found. See the backup guide to create and verify one.</p>';
- $('#updated').textContent='UPDATED '+new Date().toLocaleTimeString();
- } catch(e){$('#system-status').textContent='Disconnected';$('#system-detail').textContent='Could not reach the local server.';$('#services-content').innerHTML='<p class="empty">Could not load status. Check the local server and try again.</p>'}
-}
-const libraryContent = $('#library-content');
-const libraryFilter = $('#filter');
-libraryContent.addEventListener('error', event => {
-  if (event.target.matches('.poster-art img')) event.target.hidden = true;
-}, true);
-libraryContent.addEventListener('click', event => {
-  const poster = event.target.closest('.poster-art');
-  if (!poster) return;
-  const opened = poster.getAttribute('aria-expanded') === 'true';
-  libraryContent.querySelector('.poster-art[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false');
-  poster.setAttribute('aria-expanded', String(!opened));
-});
-libraryContent.addEventListener('keydown', event => {
-  if (event.key === 'Escape') event.target.closest('.poster-art')?.setAttribute('aria-expanded', 'false');
-});
 
-async function loadLibrary() {
-  const current = kind;
-  libraryContent.innerHTML = '<p class="empty">Loading titles…</p>';
+function date(value) {
+  const stamp = new Date(value);
+  return isNaN(stamp) ? 'Unknown' : stamp.toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
+}
+
+function renderOverview(docker, services, backups, probes) {
+  const required = services.filter(service => service.name !== 'bookshelf');
+  const attention = required.filter(needsAttention);
+  $('#service-summary').classList.toggle('needs-attention', !docker.available || attention.length > 0);
+  $('#services-metric-label').textContent = probes ? 'SERVICES REACHABLE' : 'SERVICES RUNNING';
+  $('#running').textContent = docker.available ? `${required.filter(serviceIsUp).length} / ${required.length}` : 'Unavailable';
+  $('#services-summary-detail').textContent = !docker.available ? 'Open service status'
+    : attention.length ? `${attention.length} need attention · View services` : 'All required services up · View services';
+  $('#seerr-row').hidden = !services.some(service => service.name === 'seerr' && serviceIsUp(service));
+
+  const latest = backups[0];
+  $('#latest-backup').textContent = latest ? date(latest.created) : 'None yet';
+  $('#backup-detail').textContent = latest ? (latest.errors?.length || latest.missing?.length ? 'Incomplete snapshot' : 'Snapshot recorded') : 'No snapshots found';
+  $('#backups-content').innerHTML = backups.length
+    ? backups.map(backup => `<div class="backup-row"><span>${esc(date(backup.created))} <small> · ${esc(backup.files ?? 0)} archives</small></span><span class="tag">${backup.errors?.length || backup.missing?.length ? 'Incomplete · ' + esc([...(backup.missing || []), ...(backup.errors || [])].join(', ')) : 'Captured · restore untested'}</span></div>`).join('')
+    : '<p class="empty">No MartinFlix snapshots found.</p>';
+}
+
+async function status() {
   try {
-    library[current] = await get('/api/' + current);
-    if (kind === current) renderLibrary();
+    const data = await get('/api/status');
+    const docker = data.docker;
+    const probes = docker.source === 'app-probes';
+    if (servicesPage) {
+      $('#services-description').textContent = probes ? 'Live health checks for configured services.' : 'Container status and configured service dependencies.';
+      $('#services-source').textContent = probes ? 'These checks show whether each app responds to the dashboard.'
+        : 'Docker reports container status. Dependency lines show the configured stack and do not test VPN connectivity.';
+      $('#services-content').innerHTML = docker.available
+        ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running')).join('')
+        : `<p class="empty">${esc(docker.error)}</p>`;
+    } else {
+      renderOverview(docker, docker.groups.flatMap(group => group.services), data.backups.snapshots, probes);
+    }
+    $('#updated').textContent = 'UPDATED ' + new Date().toLocaleTimeString();
   } catch {
-    if (kind === current) libraryContent.innerHTML = '<p class="empty">Could not load titles.</p>';
+    $('#running').textContent = 'Unavailable';
+    $('#services-summary-detail').textContent = 'Could not load status · View services';
+    $('#service-summary').classList.add('needs-attention');
+    $('#services-content').innerHTML = '<p class="empty">Could not load status. Check the local server and try again.</p>';
   }
 }
 
-function posterCard(item, index) {
+const libraries = {};
+const queues = {};
+
+async function activity() {
+  try {
+    const data = await get('/api/activity');
+    const plex = data.plex;
+    $('#plex-streams').textContent = plex.streams ?? '—';
+    $('#plex-detail').textContent = !plex.configured ? 'Plex activity not connected' : plex.error ||
+      (plex.streams ? 'Active via Tautulli' : 'Nothing streaming right now');
+    const streams = plex.sessions || [];
+    $('#now-playing').hidden = streams.length === 0;
+    $('#streams-list').innerHTML = streams.map(stream =>
+      `<li><strong>${esc(stream.title)}</strong><span>${esc(stream.state)}</span></li>`
+    ).join('');
+    Object.assign(queues, data.queues);
+    for (const library of Object.values(libraries)) renderLibraryCount(library);
+  } catch {
+    $('#plex-streams').textContent = '—';
+    $('#plex-detail').textContent = 'Could not load Plex activity';
+    $('#now-playing').hidden = true;
+    for (const library of Object.values(libraries)) {
+      delete queues[library.kind];
+      renderLibraryCount(library);
+    }
+  }
+}
+
+function posterCard(item, index, kind) {
   const airing = item.nextAiring && new Date(item.nextAiring);
   const dateFormat = {day: 'numeric', month: 'short', year: 'numeric'};
   const release = item.releaseDate && new Date(item.releaseDate + 'T00:00:00Z');
@@ -177,7 +214,7 @@ function posterCard(item, index) {
   const title = item.year ? `${item.title} (${item.year})` : item.title;
   const hint = airing ? 'Series' : 'Missing film';
   return `<li class="poster-card">
-    <button type="button" class="poster-art" aria-label="${esc(title)}" aria-describedby="poster-details-${index}" aria-expanded="false">
+    <button type="button" class="poster-art" aria-label="${esc(title)}" aria-describedby="poster-details-${kind}-${index}" aria-expanded="false">
       <span class="poster-placeholder" aria-hidden="true">${esc(title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" width="250" height="375">` : ''}
       <span class="poster-overlay" aria-hidden="true">
@@ -185,42 +222,85 @@ function posterCard(item, index) {
         <strong>${esc(title)}</strong>
         <span>${esc(detail)}</span>
       </span>
-      <span class="sr-only" id="poster-details-${index}">${esc(hint)}. ${esc(detail)}.</span>
+      <span class="sr-only" id="poster-details-${kind}-${index}">${esc(hint)}. ${esc(detail)}.</span>
     </button>
   </li>`;
 }
 
-function renderLibrary() {
-  const data = library[kind];
-  if (!data) return;
-  if (!data.configured || data.error) {
-    const message = data.error || `Connect ${kind === 'sonarr' ? 'Sonarr' : 'Radarr'} using the dashboard setup guide.`;
-    libraryContent.innerHTML = `<p class="empty">${esc(message)}</p>`;
+function renderLibraryCount({kind, data, count}) {
+  if (!data?.configured || data.error) {
+    count.textContent = '';
     return;
   }
-  const search = libraryFilter.value.trim().toLowerCase();
-  const items = data.items.filter(item => item.title.toLowerCase().includes(search));
-  libraryContent.innerHTML = items.length
-    ? `<ul class="poster-grid">${items.map(posterCard).join('')}</ul>`
-    : `<p class="empty">${search ? 'No titles match your search.' :
-      kind === 'sonarr' ? 'No monitored series have a next airing within 12 months.' : 'No monitored films are missing.'}</p>`;
+  const queued = queues[kind];
+  count.textContent = `${data.items.length} ${kind === 'sonarr' ? 'upcoming' : 'missing'}${queued == null ? '' : ` · ${queued} queued`}`;
 }
 
-const tabs = $('.tabs');
-tabs.addEventListener('click', event => {
-  const button = event.target.closest('button[data-kind]');
-  if (!button) return;
-  kind = button.dataset.kind;
-  tabs.querySelectorAll('button').forEach(tab => {
-    tab.classList.toggle('active', tab === button);
-    tab.setAttribute('aria-pressed', String(tab === button));
+function renderLibrary(library) {
+  const {kind, data, content, filter} = library;
+  renderLibraryCount(library);
+  if (!data) return;
+  const series = kind === 'sonarr';
+  if (!data.configured || data.error) {
+    const message = data.error || `Connect ${series ? 'Sonarr' : 'Radarr'} using the dashboard setup guide.`;
+    content.innerHTML = `<p class="empty">${esc(message)}</p>`;
+    return;
+  }
+  const search = filter.value.trim().toLowerCase();
+  const items = data.items.filter(item => item.title.toLowerCase().includes(search));
+  content.innerHTML = items.length
+    ? `<ul class="poster-grid">${items.map((item, index) => posterCard(item, index, kind)).join('')}</ul>`
+    : `<p class="empty">${search ? 'No titles match your search.' :
+      series ? 'No monitored series have a next airing within 12 months.' : 'No monitored films are missing.'}</p>`;
+}
+
+function libraryPanel(section) {
+  const kind = section.dataset.library;
+  const content = section.querySelector('.library-content');
+  const filter = section.querySelector('input');
+  const library = {kind, content, filter, count: section.querySelector('.library-count')};
+  content.addEventListener('error', event => {
+    if (event.target.matches('.poster-art img')) event.target.hidden = true;
+  }, true);
+  content.addEventListener('click', event => {
+    const poster = event.target.closest('.poster-art');
+    if (!poster) return;
+    const opened = poster.getAttribute('aria-expanded') === 'true';
+    content.querySelector('.poster-art[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false');
+    poster.setAttribute('aria-expanded', String(!opened));
   });
-  $('#library-scope').textContent = kind === 'sonarr'
-    ? 'Monitored series · Upcoming or continuing · Next airing within 12 months'
-    : 'Missing · Monitored films without a file';
-  loadLibrary();
-});
-libraryFilter.addEventListener('input', renderLibrary);
-$('#refresh').addEventListener('click', () => { status(); loadLibrary(); });
-status();
-loadLibrary();
+  content.addEventListener('keydown', event => {
+    if (event.key === 'Escape') event.target.closest('.poster-art')?.setAttribute('aria-expanded', 'false');
+  });
+  filter.addEventListener('input', () => renderLibrary(library));
+  return library;
+}
+
+async function loadLibrary(library) {
+  try {
+    library.data = await get('/api/' + library.kind);
+    renderLibrary(library);
+  } catch {
+    library.data = null;
+    library.count.textContent = '';
+    library.content.innerHTML = '<p class="empty">Could not load titles.</p>';
+  }
+}
+
+if (!servicesPage) {
+  for (const section of document.querySelectorAll('[data-library]')) {
+    const library = libraryPanel(section);
+    libraries[library.kind] = library;
+  }
+}
+
+function refresh() {
+  status();
+  if (!servicesPage) {
+    activity();
+    for (const library of Object.values(libraries)) loadLibrary(library);
+  }
+}
+
+$('#refresh').addEventListener('click', refresh);
+refresh();

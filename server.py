@@ -4,6 +4,7 @@ import json
 import base64
 import binascii
 import calendar
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 import hashlib
 import hmac
@@ -218,6 +219,46 @@ def arr_poster(kind, media_id):
     return None
 
 
+def plex_activity():
+    try:
+        key = read_secret('MARTINFLIX_TAUTULLI_KEY')
+        if not key:
+            return {'configured': False}
+        query = urllib.parse.urlencode({'cmd': 'get_activity', 'apikey': key})
+        with ARR_OPENER.open('http://127.0.0.1:8181/api/v2?' + query, timeout=3) as response:
+            result = json.load(response)['response']
+        if result['result'] != 'success':
+            raise ValueError('Tautulli rejected the request')
+        data = result['data']
+        sessions = [
+            {'title': item.get('full_title') or item.get('title') or 'Untitled',
+             'state': item.get('state', 'unknown')}
+            for item in data['sessions']
+        ]
+        return {'configured': True, 'streams': int(data['stream_count']), 'sessions': sessions}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {'configured': True, 'error': 'Plex activity is unavailable.'}
+
+
+def queued_downloads(kind):
+    try:
+        connection = arr_connection(kind)
+        if connection:
+            with arr_open(connection, '/api/v3/queue/status') as response:
+                return int(json.load(response)['totalCount'])
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
+def dashboard_activity():
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        plex = pool.submit(plex_activity)
+        sonarr = pool.submit(queued_downloads, 'sonarr')
+        radarr = pool.submit(queued_downloads, 'radarr')
+        return {'plex': plex.result(), 'queues': {'sonarr': sonarr.result(), 'radarr': radarr.result()}}
+
+
 def backup_status():
     directory = Path(os.environ.get('MARTINFLIX_BACKUP_DIR', str(Path.home() / '.local/share/martinflix/backups'))).expanduser()
     try:
@@ -264,6 +305,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/status':
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time())}
             self.send_json(data)
+        elif path == '/api/activity':
+            self.send_json(dashboard_activity())
         elif path in ('/api/sonarr', '/api/radarr'):
             self.send_json(arr_data(path.rsplit('/', 1)[1]))
         elif poster := re.fullmatch(r'/api/posters/(sonarr|radarr)/([1-9][0-9]{0,9})', path):
@@ -278,13 +321,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
             self.wfile.write(body)
-        elif path in ('/', '/app.js', '/style.css'):
+        elif path in ('/', '/services', '/app.js', '/style.css'):
             static = {
                 '/': ('index.html', 'text/html'),
+                '/services': ('index.html', 'text/html'),
                 '/app.js': ('app.js', 'text/javascript'),
                 '/style.css': ('style.css', 'text/css'),
             }
-            self.send_web_file(*static[path])
+            if path == '/services':
+                page = (WEB / 'index.html').read_bytes().replace(b'data-page="overview"', b'data-page="services"', 1)
+                self.send_web_file(*static[path], body=page)
+            else:
+                self.send_web_file(*static[path])
         elif re.fullmatch(r'/assets/[a-z0-9-]+\.webp', path):
             try:
                 body = (WEB / path[1:]).read_bytes()

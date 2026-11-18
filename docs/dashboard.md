@@ -31,6 +31,10 @@ The dashboard UID and GID match the account owning the private mounts. Both moun
 
 Save each API key from the corresponding application's settings as one line in `sonarr-key` or `radarr-key` inside the secrets directory, with mode 0600. The app reads them from disk on each monitoring request. It sends the key only to the configured local HTTP service and declines redirects. The defaults on MartinFlix are Sonarr at 127.0.0.1:8989 and Radarr at 127.0.0.1:7878. App API keys may have broader permissions than the dashboard uses, so keep them private.
 
+Overview shows the service count, upcoming series, missing films, download queue counts from Sonarr and Radarr, and the latest backup. Open **Services** for the full dependency tree.
+
+For Plex playback activity, save a Tautulli API key in `tautulli-key` in the same private directory, with mode 0600. The existing-host dashboard reads playback activity from Tautulli at `127.0.0.1:8181` and displays the stream count, titles, and playback states. The first-run stack can show Arr queue counts as soon as the apps are connected.
+
 The current deployment has no backup manifests configured. The existing backup scheduler and archives remain independent. Use the [backup and recovery notes](backups.md) to interpret prototype snapshots.
 
 ## Stop or remove the dashboard

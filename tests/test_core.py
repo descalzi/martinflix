@@ -106,6 +106,18 @@ class CoreTests(unittest.TestCase):
             ('Physical', '2026-09-01'), ('Unknown', None),
         ])
 
+    def test_plex_activity_projects_only_title_and_playback_state(self):
+        payload = {'response': {'result': 'success', 'data': {'stream_count': '1', 'sessions': [
+            {'full_title': 'Example title', 'state': 'playing', 'user': 'private-viewer', 'ip_address': '192.0.2.2'},
+        ]}}}
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(payload)
+        with patch.object(server, 'read_secret', return_value='test-key'):
+            with patch.object(server.ARR_OPENER, 'open', return_value=response):
+                activity = server.plex_activity()
+        self.assertEqual(activity, {'configured': True, 'streams': 1,
+                                    'sessions': [{'title': 'Example title', 'state': 'playing'}]})
+
     def test_dashboard_authentication(self):
         handler = object.__new__(server.Handler)
         handler.server = SimpleNamespace(admin_user='admin', admin_password='long test password')
