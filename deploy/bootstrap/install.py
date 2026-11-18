@@ -288,7 +288,7 @@ def install(args):
     if downloads:
         check_directory(state / 'download-secrets')
     check_ports(compose, environment, [
-        (service, str(bind) if service == 'dashboard' else '127.0.0.1', port)
+        (service, str(bind) if service not in DOWNLOAD_APPS else '127.0.0.1', port)
         for service, port in ports.items()
     ])
     try:
@@ -358,7 +358,7 @@ def install(args):
             step += 1
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
-        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers)
+        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers, arr_address=str(bind))
         if seed_indexers:
             options['sonarr_indexer_defaults_applied'] = True
             write_secret(state / 'install-options.json', json.dumps(options))
@@ -384,9 +384,10 @@ for app in ('sonarr', 'radarr'):
         print('Password  Run this on the VM to show your temporary password:')
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
-    print('\nApp setup on this VM')
+    print('\nApp setup')
     for app in app_dirs:
-        print(f'{app.capitalize():13} http://127.0.0.1:{ports[app]}')
+        address = '127.0.0.1' if app in DOWNLOAD_APPS else bind
+        print(f'{app.capitalize():13} http://{address}:{ports[app]}')
     if downloads:
         password_path = shlex.quote(str(state / 'download-secrets/transmission_password'))
         print(f'\nTransmission username: martinflix. To show its password: cat {password_path}')
@@ -397,7 +398,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state-dir', type=Path,
                         help='Where app data is stored. Defaults to ~/.local/state/martinflix for new installs.')
-    parser.add_argument('--dashboard-bind', default='127.0.0.1')
+    parser.add_argument('--dashboard-bind', default='127.0.0.1',
+                        help='IPv4 address for the dashboard, Sonarr, and Radarr.')
     parser.add_argument('--dashboard-port', type=int, default=8765)
     parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, and downloads.')
     parser.add_argument('--enable-downloads', action='store_true',

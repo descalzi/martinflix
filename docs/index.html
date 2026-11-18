@@ -25,13 +25,13 @@
         <section class="step" aria-labelledby="access-title">
           <h2 id="access-title" tabindex="-1">Dashboard access</h2>
           <fieldset>
-            <legend>Where will you open the dashboard?</legend>
+            <legend>Where will you open MartinFlix, Sonarr, and Radarr?</legend>
             <label><input type="radio" name="access" value="local" checked> On the Linux host</label>
             <label><input type="radio" name="access" value="lan"> On another device on my home network</label>
             <div id="lan-options" hidden>
               <label for="address">Linux host’s LAN IPv4 address</label>
               <input id="address" type="text" inputmode="decimal" placeholder="192.168.1.50" aria-describedby="lan-help">
-              <small id="lan-help">Use a trusted network. The dashboard uses HTTP.</small>
+              <small id="lan-help">All three apps use this address. Use a trusted network for HTTP access.</small>
             </div>
           </fieldset>
         </section>

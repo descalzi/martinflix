@@ -19,9 +19,9 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect
 
 
 class AppApi:
-    def __init__(self, name, port, key, version=3):
+    def __init__(self, name, port, key, version=3, address='127.0.0.1'):
         self.name = name
-        self.base = f'http://127.0.0.1:{port}/api/v{version}/'
+        self.base = f'http://{address}:{port}/api/v{version}/'
         self.key = key
 
     def request(self, route, payload=None, method=None):
@@ -132,10 +132,10 @@ def ensure_download_path(api):
         })
 
 
-def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *, seed_indexers=False):
+def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *, seed_indexers=False, arr_address='127.0.0.1'):
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1) if prowlarr_key else None
     for app, name in ARR_NAMES.items():
-        api = AppApi(name, ports[app], arr_keys[app])
+        api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
         ensure_quality_profile(api, app)
         if app == 'sonarr':
             ensure_sonarr_exclusions(api)

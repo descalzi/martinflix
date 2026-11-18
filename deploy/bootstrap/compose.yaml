@@ -6,7 +6,7 @@ services:
       PUID: "${MARTINFLIX_UID:?Run the bootstrap script}"
       PGID: "${MARTINFLIX_GID:?Run the bootstrap script}"
     ports:
-      - "127.0.0.1:${MARTINFLIX_SONARR_PORT}:8989"
+      - "${MARTINFLIX_DASHBOARD_BIND}:${MARTINFLIX_SONARR_PORT}:8989"
     volumes:
       - "${MARTINFLIX_STATE_DIR}/sonarr:/config"
     healthcheck:
@@ -23,7 +23,7 @@ services:
       PUID: "${MARTINFLIX_UID:?Run the bootstrap script}"
       PGID: "${MARTINFLIX_GID:?Run the bootstrap script}"
     ports:
-      - "127.0.0.1:${MARTINFLIX_RADARR_PORT}:7878"
+      - "${MARTINFLIX_DASHBOARD_BIND}:${MARTINFLIX_RADARR_PORT}:7878"
     volumes:
       - "${MARTINFLIX_STATE_DIR}/radarr:/config"
     healthcheck:
