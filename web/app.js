@@ -113,7 +113,14 @@ function serviceGroup(group, countLabel) {
 
 let kind = 'sonarr', library = {};
 $('#seerr-link').href = window.location.protocol + '//' + window.location.hostname + ':5055/';
-async function get(url){const response = await fetch(url, {cache:'no-store'}); if(!response.ok) throw new Error('Request failed'); return response.json()}
+async function get(url) {
+  const response = await fetch(url, {cache: 'no-store'});
+  if (response.status === 401 && response.headers.get('X-MartinFlix-Login') === 'required') {
+    window.location.assign('/login');
+  }
+  if (!response.ok) throw new Error('Request failed');
+  return response.json();
+}
 function date(value){const d = new Date(value); return isNaN(d) ? 'Unknown' : d.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}
 async function status(){
  try {const data = await get('/api/status'), docker = data.docker, services = docker.groups.flatMap(g=>g.services), running = services.filter(serviceIsUp);

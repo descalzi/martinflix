@@ -18,11 +18,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / 'web'
+SESSION_COOKIE = 'martinflix_session'
+SESSION_SECONDS = 12 * 60 * 60
+MIN_PERSONAL_PASSWORD = 8
 ARR_COMPOSE_ADDRESSES = {'sonarr': 'http://sonarr:8989', 'radarr': 'http://radarr:7878'}
 STACKS = {
     'Core': ['tailscale', 'portainer'],
@@ -221,17 +225,29 @@ def backup_status():
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        url = urllib.parse.urlsplit(self.path)
+        path = url.path
+        form_login = self.server.admin_state_file is not None
+        if form_login and path in ('/style.css', '/auth.js'):
+            self.send_web_file(path[1:], 'text/css' if path == '/style.css' else 'text/javascript')
+            return
+        if form_login and path == '/login':
+            if self.authorized():
+                self.redirect('/setup-password' if self.server.password_setup_required else '/')
+            else:
+                self.send_auth_page('login.html', password_set=(url.query == 'password-set=1'
+                                                               and not self.server.password_setup_required))
+            return
         if not self.authorized():
             self.require_login()
             return
-        path = urllib.parse.urlsplit(self.path).path
         if path == '/setup-password':
             if self.server.password_setup_required:
-                self.send_password_setup()
+                self.send_auth_page('setup-password.html')
             else:
                 self.redirect('/')
             return
-        if self.server.password_setup_required and path != '/style.css':
+        if self.server.password_setup_required:
             self.redirect('/setup-password')
             return
         if path == '/api/status':
@@ -252,16 +268,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif path in ('/', '/app.js', '/style.css'):
-            name = 'index.html' if path == '/' else path[1:]
-            body = (WEB / name).read_bytes()
-            self.send_response(200)
-            self.send_header('Content-Type', {'index.html': 'text/html; charset=utf-8', 'app.js': 'text/javascript; charset=utf-8', 'style.css': 'text/css; charset=utf-8'}[name])
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'self'; base-uri 'none'; frame-ancestors 'none'")
-            self.end_headers()
-            self.wfile.write(body)
+            static = {
+                '/': ('index.html', 'text/html'),
+                '/app.js': ('app.js', 'text/javascript'),
+                '/style.css': ('style.css', 'text/css'),
+            }
+            self.send_web_file(*static[path])
         elif re.fullmatch(r'/assets/[a-z0-9-]+\.webp', path):
             try:
                 body = (WEB / path[1:]).read_bytes()
@@ -279,14 +291,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if urllib.parse.urlsplit(self.path).path != '/setup-password':
+        path = urllib.parse.urlsplit(self.path).path
+        if self.server.admin_state_file is None or path not in ('/login', '/setup-password'):
             self.send_error(404)
             return
-        if not self.authorized():
-            self.require_login()
+        try:
+            origin = urllib.parse.urlsplit(self.headers.get('Origin', ''))
+        except ValueError:
+            origin = None
+        if not origin or origin.scheme not in ('http', 'https') or origin.netloc != self.headers.get('Host'):
+            self.send_error(403, 'Open the dashboard and submit the form again.')
             return
-        if not self.server.password_setup_required:
-            self.redirect('/')
+        if path == '/setup-password' and not self.authorized():
+            self.require_login()
             return
         try:
             length = int(self.headers.get('Content-Length', '0'))
@@ -294,58 +311,98 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError
             fields = urllib.parse.parse_qs(self.rfile.read(length).decode('utf-8'), max_num_fields=4)
         except (OSError, ValueError):
-            self.send_error(400, 'Invalid password form')
+            self.send_error(400, 'Invalid sign-in form')
             return
+        if path == '/login':
+            self.sign_in(fields)
+            return
+        if not self.server.password_setup_required:
+            self.redirect('/')
+            return
+        self.change_initial_password(fields)
+
+    def sign_in(self, fields):
+        user = fields.get('username', [''])[0]
+        password = fields.get('password', [''])[0]
+        with self.server.password_setup_lock:
+            if not self.valid_credentials(user, password):
+                self.send_auth_page('login.html', 'Check your username and password and try again.', 401)
+                return
+            destination = '/setup-password' if self.server.password_setup_required else '/'
+            expiry = int(time.time()) + SESSION_SECONDS
+            value = f'{expiry}.{secrets.token_urlsafe(24)}'
+            signature = hmac.new(self.server.session_key, value.encode(), 'sha256').hexdigest()
+        self.redirect(destination, f'{SESSION_COOKIE}={value}.{signature}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}')
+
+    def change_initial_password(self, fields):
         token = fields.get('token', [''])[0]
         if not hmac.compare_digest(token.encode(), self.server.password_setup_token.encode()):
             self.send_error(403, 'Reopen the password setup page and try again.')
             return
         password = fields.get('password', [''])[0]
         confirmation = fields.get('confirm', [''])[0]
-        if not 16 <= len(password) <= 128 or not password.isprintable() or not password.strip():
-            self.send_password_setup('Use 16 to 128 printable characters.', 400)
+        if not MIN_PERSONAL_PASSWORD <= len(password) <= 128 or not password.isprintable() or not password.strip():
+            self.send_auth_page('setup-password.html', f'Use {MIN_PERSONAL_PASSWORD} to 128 printable characters.', 400)
             return
         if password != confirmation:
-            self.send_password_setup('The passwords don’t match. Enter the same password twice.', 400)
+            self.send_auth_page('setup-password.html', 'The passwords don’t match. Enter the same password twice.', 400)
             return
         with self.server.password_setup_lock:
             if not self.server.password_setup_required:
                 self.require_login()
                 return
             if hmac.compare_digest(password.encode(), self.server.admin_password.encode()):
-                self.send_password_setup('Choose a password different from the temporary password.', 400)
+                self.send_auth_page('setup-password.html', 'Choose a password different from the temporary password.', 400)
                 return
             try:
                 verifier = PasswordVerifier.create(password)
                 save_admin_password(self.server.admin_state_file, verifier.encoded)
             except OSError:
-                self.send_password_setup('Could not save the password. Check the dashboard’s storage and try again.', 500)
+                self.send_auth_page('setup-password.html', 'Could not save the password. Check the dashboard’s storage and try again.', 500)
                 return
             self.server.password_verifier = verifier
             self.server.admin_password = ''
             self.server.password_setup_required = False
-        self.redirect('/')
+            self.server.session_key = secrets.token_bytes(32)
+        self.redirect('/login?password-set=1', f'{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')
 
     def require_login(self):
+        form_login = self.server.admin_state_file is not None
+        if form_login and not self.path.startswith('/api/'):
+            self.redirect('/login')
+            return
         self.send_response(401)
-        self.send_header('WWW-Authenticate', 'Basic realm="MartinFlix admin", charset="UTF-8"')
+        if form_login:
+            self.send_header('X-MartinFlix-Login', 'required')
+        else:
+            self.send_header('WWW-Authenticate', 'Basic realm="MartinFlix admin", charset="UTF-8"')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', '0')
         self.end_headers()
 
-    def redirect(self, location):
+    def redirect(self, location, cookie=None):
         self.send_response(303)
         self.send_header('Location', location)
+        if cookie:
+            self.send_header('Set-Cookie', cookie)
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', '0')
         self.end_headers()
 
-    def send_password_setup(self, message='', status=200):
-        template = (WEB / 'setup-password.html').read_text()
+    def send_auth_page(self, name, message='', status=200, password_set=False):
+        template = (WEB / name).read_text()
         error = f'<p class="setup-error" role="alert">{html.escape(message)}</p>' if message else ''
-        body = template.replace('{{TOKEN}}', html.escape(self.server.password_setup_token)).replace('{{ERROR}}', error).encode()
+        notice = '<p class="setup-success" role="status">Password saved. Sign in with your new password.</p>' if password_set else ''
+        body = (template.replace('{{TOKEN}}', html.escape(self.server.password_setup_token))
+                .replace('{{MIN_PASSWORD}}', str(MIN_PERSONAL_PASSWORD))
+                .replace('{{NOTICE}}', notice).replace('{{ERROR}}', error).encode())
+        self.send_web_file(name, 'text/html', status, body)
+
+    def send_web_file(self, name, content_type, status=200, body=None):
+        if body is None:
+            body = (WEB / name).read_bytes()
         self.send_response(status)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Type', content_type + '; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
@@ -353,7 +410,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def session_authorized(self):
+        try:
+            cookie = SimpleCookie(self.headers.get('Cookie', ''))[SESSION_COOKIE].value
+            match = re.fullmatch(r'([0-9]{1,12})\.([A-Za-z0-9_-]{32})\.([a-f0-9]{64})', cookie)
+            if not match:
+                return False
+            expiry, nonce, signature = match.groups()
+        except (KeyError, CookieError):
+            return False
+        if int(expiry) <= time.time():
+            return False
+        expected = hmac.new(self.server.session_key, f'{expiry}.{nonce}'.encode(), 'sha256').hexdigest()
+        return hmac.compare_digest(signature, expected)
+
     def authorized(self):
+        if getattr(self.server, 'admin_state_file', None) is not None:
+            return self.session_authorized()
         header = self.headers.get('Authorization', '')
         try:
             scheme, encoded = header.split(' ', 1)
@@ -363,6 +436,9 @@ class Handler(BaseHTTPRequestHandler):
             user, password = supplied.split(':', 1)
         except (ValueError, UnicodeDecodeError, binascii.Error):
             return False
+        return self.valid_credentials(user, password)
+
+    def valid_credentials(self, user, password):
         if not hmac.compare_digest(user.encode(), self.server.admin_user.encode()):
             return False
         verifier = getattr(self.server, 'password_verifier', None)
@@ -408,7 +484,7 @@ class PasswordVerifier:
         signature = hmac.digest(self.cache_key, password.encode(), 'sha256')
         if hmac.compare_digest(signature, self.cached_match):
             return True
-        # Limit concurrent scrypt operations and avoid rehashing successful Basic auth on every asset.
+        # Limit concurrent scrypt operations and cache the last successful password check.
         with self.lock:
             if hmac.compare_digest(signature, self.cached_match):
                 return True
@@ -455,5 +531,6 @@ if __name__ == '__main__':
     server.password_setup_required = setup_required
     server.password_setup_token = secrets.token_urlsafe(32) if setup_required else ''
     server.password_setup_lock = threading.Lock()
+    server.session_key = secrets.token_bytes(32)
     print('MartinFlix listening on %s:%d' % (host, port), flush=True)
     server.serve_forever()

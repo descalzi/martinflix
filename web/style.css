@@ -199,8 +199,28 @@
 .setup-panel p, .setup-panel form { line-height: 1.55; }
 .setup-panel form { display: grid; gap: 8px; }
 .setup-panel label { font-weight: 700; }
-.setup-panel input[type="password"] { width: 100%; padding: 10px; background: #fff; color: var(--ink); border: 1px solid #68786d; border-radius: 4px; margin-bottom: 8px; }
+.setup-panel input[type="password"], .setup-panel input[type="text"] { width: 100%; padding: 10px; background: #fff; color: var(--ink); border: 1px solid #68786d; border-radius: 4px; margin-bottom: 8px; }
 .setup-panel button { justify-self: start; padding: 10px 16px; border: 0; border-radius: 4px; background: var(--green); color: #fff; font-weight: 700; cursor: pointer; }
 .setup-panel button:hover { background: #223d32; }
 .setup-note { color: #526559; font-size: 13px; }
 .setup-error { padding: 8px 12px; border-left: 3px solid #962e27; background: #fff0ec; color: #81362c; }
+
+.password-field { position: relative; margin-bottom: 8px; }
+.password-field input[type="password"], .password-field input[type="text"] { padding-right: 46px; margin-bottom: 0; }
+.setup-panel .password-toggle {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  padding: 0;
+  border-radius: 0 4px 4px 0;
+  background: transparent;
+  color: var(--green);
+}
+.setup-panel .password-toggle[hidden] { display: none; }
+.setup-panel .password-toggle:hover { background: #e5eddf; }
+.password-eye { position: relative; display: grid; place-items: center; width: 19px; height: 13px; border: 2px solid currentColor; border-radius: 65% 65% 60% 60%; }
+.password-eye::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.password-toggle[aria-pressed="true"] .password-eye::after { content: ''; position: absolute; width: 23px; height: 2px; background: currentColor; transform: rotate(-38deg); }
+.setup-success { padding: 8px 12px; border-left: 3px solid var(--green); background: #dfe8d8; color: var(--green); }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · MartinFlix</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/auth.js" defer></script>
+</head>
+<body class="setup-page">
+  <main class="setup-panel">
+    <p class="setup-brand">MartinFlix</p>
+    <h1>Sign in to MartinFlix</h1>
+    {{NOTICE}}
+    {{ERROR}}
+    <form action="/login" method="post">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="admin" required>
+      <label for="password">Password</label>
+      <div class="password-field">
+        <input type="password" id="password" name="password" autocomplete="current-password" maxlength="128" required>
+        <button type="button" class="password-toggle" aria-controls="password" aria-label="Show password" aria-pressed="false" hidden>
+          <span class="password-eye" aria-hidden="true"></span>
+        </button>
+      </div>
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>
