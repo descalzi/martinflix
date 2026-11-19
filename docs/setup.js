@@ -59,6 +59,7 @@ const copyButtons = document.querySelectorAll('[data-copy]');
 const steps = [...root.querySelectorAll('.step')];
 const progress = [...document.querySelectorAll('.steps li')];
 let activeStep = 0;
+let preferVpnRoute = true;
 for (const [name, label, fallback] of portOptions) {
   const row = document.createElement('div');
   const caption = document.createElement('label');
@@ -83,7 +84,7 @@ function currentOptions() {
     downloader: byId('download-client').value,
     prowlarr: byId('prowlarr').checked,
     flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
-    behindVpn: byId('vpn').checked && byId('route-vpn').checked,
+    behindVpn: byId('vpn').checked && preferVpnRoute,
     address: byId('address').value.trim(),
     media: byId('media').value.trim(),
     state: byId('state').value.trim(),
@@ -91,7 +92,9 @@ function currentOptions() {
   };
 }
 
-function update() {
+function update(event) {
+  const route = byId('route-vpn');
+  if (event?.target === route) preferVpnRoute = route.checked;
   const options = currentOptions();
   const mediaBase = (options.media || '/mnt/media').replace(/\/+$/, '');
   for (const path of document.querySelectorAll('[data-media-folder]')) {
@@ -99,10 +102,13 @@ function update() {
   }
   byId('lan-options').hidden = !options.lan;
   byId('vpn-options').hidden = !options.vpn;
-  byId('download-options').hidden = !options.downloader && !options.prowlarr;
-  byId('flaresolverr-options').hidden = !options.prowlarr;
-  byId('vpn-route').hidden = !options.vpn;
-  byId('direct-route').hidden = options.behindVpn;
+  const hasDownloadApps = Boolean(options.downloader || options.prowlarr);
+  byId('flaresolverr').disabled = !options.prowlarr;
+  byId('flaresolverr-help').hidden = options.prowlarr;
+  route.disabled = !options.vpn || !hasDownloadApps;
+  route.checked = !route.disabled && preferVpnRoute;
+  byId('vpn-route-help').hidden = options.vpn;
+  byId('direct-route').hidden = !hasDownloadApps || route.checked;
   byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
   byId('transmission-port').parentElement.hidden = !options.downloader;
   const error = byId('error');

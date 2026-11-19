@@ -7,8 +7,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
-  <link rel="stylesheet" href="./setup.css?v=wizard-5">
-  <script src="./setup.js?v=wizard-5" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-6">
+  <script src="./setup.js?v=wizard-6" defer></script>
 </head>
 <body>
   <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
@@ -71,13 +71,15 @@
           <select id="download-client"><option value="">Set up later</option><option value="transmission">Transmission</option></select>
           <fieldset>
             <legend>Trackers</legend>
-            <label><input id="prowlarr" type="checkbox"> Install Prowlarr to manage indexers</label>
-            <div id="flaresolverr-options" hidden>
-              <label><input id="flaresolverr" type="checkbox"> Install FlareSolverr for indexers that need it</label>
+            <label><input id="prowlarr" type="checkbox" checked> Install Prowlarr to manage indexers</label>
+            <div>
+              <label><input id="flaresolverr" type="checkbox" checked aria-describedby="flaresolverr-help"> Install FlareSolverr for indexers that need it</label>
+              <small id="flaresolverr-help" hidden>FlareSolverr requires Prowlarr.</small>
             </div>
           </fieldset>
-          <div id="download-options" hidden>
-            <label id="vpn-route"><input id="route-vpn" type="checkbox" checked> Route these apps through the VPN</label>
+          <div>
+            <label><input id="route-vpn" type="checkbox" disabled aria-describedby="vpn-route-help direct-route"> Route these apps through the VPN</label>
+            <small id="vpn-route-help">Select a VPN in the previous step to enable this option.</small>
             <small id="direct-route">These apps will use the host’s normal internet connection.</small>
           </div>
         </section>

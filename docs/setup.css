@@ -51,3 +51,5 @@ select { width: 100%; padding: 9px; margin: 5px 0; border: 1px solid #738879; bo
 .media-paths { margin: 14px 0; }
 .media-paths dt { font-weight: 650; font-size: .875rem; }
 .media-paths dd { margin: 0 0 8px; overflow-wrap: anywhere; }
+
+label:has(input:disabled) { color: #526559; }
