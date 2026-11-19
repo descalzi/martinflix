@@ -53,6 +53,8 @@ The VPN option requires `/dev/net/tun` and [manual OpenVPN service credentials f
 - Sonarr and Radarr use separate `sonarr` and `radarr` Transmission categories and map Transmission’s `/downloads` path to the shared `/data/downloads` folder for imports.
 - Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. For indexers that need FlareSolverr, add its proxy in Prowlarr with the address printed by setup, then apply its tag to those indexers. Setup leaves indexer credentials and searches under your control.
 
+Select individual apps with `--download-client transmission`, `--enable-prowlarr`, and `--enable-flaresolverr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects all three.
+
 The media path and enabled download services are remembered when you rerun setup. The installer fills in missing connections and preserves existing named records, including any edits you make in the apps. A different media root requires a separate installation or a planned storage migration.
 
 The dashboard checks whether the configured services respond over the Compose network. Full Docker status collection, Seerr, Bazarr, and additional download clients are separate installer stages. The existing-host deployment has its own Compose files, status collector, and recovery process.

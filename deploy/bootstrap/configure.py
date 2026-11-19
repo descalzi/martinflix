@@ -155,13 +155,14 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
                 seed_sonarr_indexer_defaults(api)
         if media_path:
             ensure_root_folder(api, ROOT_FOLDERS[app])
-        if prowlarr:
+        if transmission_password:
             category = 'tvCategory' if app == 'sonarr' else 'movieCategory'
             ensure_connection(api, 'downloadclient', 'MartinFlix Transmission', 'Transmission', 'host', {
                 'host': transmission_host, 'port': 9091, 'username': TRANSMISSION_USER,
                 'password': transmission_password, category: app,
             })
             ensure_download_path(api, transmission_host)
+        if prowlarr:
             ensure_connection(prowlarr, 'applications', name, name, 'baseUrl', {
                 'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': f'http://{prowlarr_host}:9696',
                 'apiKey': arr_keys[app],

@@ -7,8 +7,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
-  <link rel="stylesheet" href="./setup.css?v=wizard-4">
-  <script src="./setup.js?v=wizard-4" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-5">
+  <script src="./setup.js?v=wizard-5" defer></script>
 </head>
 <body>
   <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
@@ -69,8 +69,14 @@
           <h2 id="downloads-title" tabindex="-1">Downloaders and trackers</h2>
           <label for="download-client">Download client</label>
           <select id="download-client"><option value="">Set up later</option><option value="transmission">Transmission</option></select>
+          <fieldset>
+            <legend>Trackers</legend>
+            <label><input id="prowlarr" type="checkbox"> Install Prowlarr to manage indexers</label>
+            <div id="flaresolverr-options" hidden>
+              <label><input id="flaresolverr" type="checkbox"> Install FlareSolverr for indexers that need it</label>
+            </div>
+          </fieldset>
           <div id="download-options" hidden>
-            <p>Installs Prowlarr with FlareSolverr for indexers alongside Transmission.</p>
             <label id="vpn-route"><input id="route-vpn" type="checkbox" checked> Route these apps through the VPN</label>
             <small id="direct-route">These apps will use the host’s normal internet connection.</small>
           </div>

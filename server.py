@@ -86,18 +86,21 @@ def service_status():
         return docker_status()
 
     probes = {name: (address + '/ping', 200) for name, address in ARR_COMPOSE_ADDRESSES.items()}
-    downloads = os.environ.get('MARTINFLIX_DOWNLOAD_STACK') == '1'
+    enabled = os.environ.get('MARTINFLIX_DOWNLOAD_APPS')
+    if enabled is None:
+        enabled = 'transmission,prowlarr,flaresolverr' if os.environ.get('MARTINFLIX_DOWNLOAD_STACK') == '1' else ''
+    downloads = set(enabled.split(',')) - {''}
     gateway = os.environ.get('MARTINFLIX_DOWNLOAD_GATEWAY')
-    vpn = os.environ.get('MARTINFLIX_VPN_ENABLED') == '1' or (downloads and gateway is None)
+    vpn = os.environ.get('MARTINFLIX_VPN_ENABLED') == '1' or (bool(downloads) and gateway is None)
     behind_vpn = gateway == 'gluetun' or (gateway is None and vpn)
     if vpn:
         probes['nordvpn'] = ('http://gluetun:9999/', 200)
-    if downloads:
-        probes.update({
-            'transmission-daemon': (f'http://{"gluetun" if behind_vpn else "transmission"}:9091/transmission/rpc', 401),
-            'prowlarr': (f'http://{"gluetun" if behind_vpn else "prowlarr"}:9696/ping', 200),
-            'flaresolverr': (f'http://{"gluetun" if behind_vpn else "flaresolverr"}:8191/', 200),
-        })
+    if 'transmission' in downloads:
+        probes['transmission-daemon'] = (f'http://{"gluetun" if behind_vpn else "transmission"}:9091/transmission/rpc', 401)
+    if 'prowlarr' in downloads:
+        probes['prowlarr'] = (f'http://{"gluetun" if behind_vpn else "prowlarr"}:9696/ping', 200)
+    if 'flaresolverr' in downloads:
+        probes['flaresolverr'] = (f'http://{"gluetun" if behind_vpn else "flaresolverr"}:8191/', 200)
     services = []
     for name, (url, expected) in probes.items():
         try:
@@ -113,7 +116,7 @@ def service_status():
             'state': 'reachable' if reachable else 'unreachable',
             'status': 'Responded to health check' if reachable else 'Health check did not respond',
         })
-    return {'available': True, 'source': 'app-probes', 'downloadsBehindVpn': downloads and behind_vpn,
+    return {'available': True, 'source': 'app-probes', 'downloadsBehindVpn': bool(downloads) and behind_vpn,
             'groups': [{'name': 'Downloads & automation' if downloads else 'Library apps', 'services': services}]}
 
 

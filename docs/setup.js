@@ -12,8 +12,8 @@ function shellQuote(value) {
   return "'" + value.replace(/'/g, "'\"'\"'") + "'";
 }
 
-function installArguments({lan, address, media, vpn, provider, exit, downloader, behindVpn, state, ports}) {
-  const downloads = Boolean(downloader);
+function installArguments({lan, address, media, vpn, provider, exit, downloader, prowlarr, flaresolverr, behindVpn, state, ports}) {
+  const downloads = Boolean(downloader || prowlarr);
   const args = [];
   if (lan) {
     const parts = address.split('.');
@@ -23,7 +23,7 @@ function installArguments({lan, address, media, vpn, provider, exit, downloader,
     }
     args.push('--dashboard-bind=' + shellQuote(address));
   }
-  if (downloads && !media) throw new Error('Enter a media directory to enable downloads.');
+  if (downloader && !media) throw new Error('Enter a media directory to enable Transmission.');
   for (const [flag, value, label] of [['media-path', media, 'Media directory'], ['state-dir', state, 'State directory']]) {
     if (!value) continue;
     if (!value.startsWith('/') || /[\u0000-\u001f\u007f]/.test(value)) {
@@ -35,10 +35,12 @@ function installArguments({lan, address, media, vpn, provider, exit, downloader,
     args.push('--enable-vpn', '--vpn-provider=' + shellQuote(provider));
     args.push((exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(exit));
   }
-  if (downloads) args.push('--enable-downloads', '--download-client=' + shellQuote(downloader),
-    '--download-network=' + (behindVpn ? 'vpn' : 'direct'));
+  if (downloader) args.push('--download-client=' + shellQuote(downloader));
+  if (prowlarr) args.push('--enable-prowlarr');
+  if (prowlarr && flaresolverr) args.push('--enable-flaresolverr');
+  if (downloads) args.push('--download-network=' + (behindVpn ? 'vpn' : 'direct'));
   const usedPorts = new Set();
-  for (const [name, label, fallback] of portOptions.slice(0, downloads ? 5 : 3)) {
+  for (const [name, label, fallback] of portOptions.filter(([name]) => name === 'prowlarr' ? prowlarr : name === 'transmission' ? downloader : true)) {
     const raw = ports[name];
     const port = raw === '' ? fallback : Number(raw);
     if ((raw !== '' && !/^[0-9]+$/.test(raw)) || port < 1024 || port > 65535) {
@@ -79,6 +81,8 @@ function currentOptions() {
     provider: byId('vpn-provider').value,
     exit: byId('vpn-exit').value,
     downloader: byId('download-client').value,
+    prowlarr: byId('prowlarr').checked,
+    flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
     behindVpn: byId('vpn').checked && byId('route-vpn').checked,
     address: byId('address').value.trim(),
     media: byId('media').value.trim(),
@@ -95,10 +99,12 @@ function update() {
   }
   byId('lan-options').hidden = !options.lan;
   byId('vpn-options').hidden = !options.vpn;
-  byId('download-options').hidden = !options.downloader;
+  byId('download-options').hidden = !options.downloader && !options.prowlarr;
+  byId('flaresolverr-options').hidden = !options.prowlarr;
   byId('vpn-route').hidden = !options.vpn;
   byId('direct-route').hidden = options.behindVpn;
-  for (const name of ['prowlarr', 'transmission']) byId(name + '-port').parentElement.hidden = !options.downloader;
+  byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
+  byId('transmission-port').parentElement.hidden = !options.downloader;
   const error = byId('error');
   byId('copy-status').textContent = '';
   byId('step-error').hidden = true;
@@ -133,11 +139,12 @@ function showStep(index) {
       ['Dashboard', options.lan ? options.address : 'On the Linux host'],
       ['Media directory', options.media || 'Configure later'],
       ['VPN', options.vpn ? 'NordVPN · ' + options.exit : 'Configure later'],
-      ['Download services', options.downloader ? 'Transmission, Prowlarr, and FlareSolverr' : 'Configure later'],
+      ['Download services', [options.downloader && 'Transmission', options.prowlarr && 'Prowlarr',
+        options.flaresolverr && 'FlareSolverr'].filter(Boolean).join(', ') || 'Configure later'],
     ];
-    if (options.downloader) summary.push(['Download network', options.behindVpn ? 'VPN' : 'Normal internet connection']);
+    if (options.downloader || options.prowlarr) summary.push(['Download network', options.behindVpn ? 'VPN' : 'Normal internet connection']);
     if (options.state) summary.push(['Installation state', options.state]);
-    for (const [name, label, fallback] of portOptions.slice(0, options.downloader ? 5 : 3)) {
+    for (const [name, label, fallback] of portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name === 'transmission' ? options.downloader : true)) {
       const port = options.ports[name];
       if (port && Number(port) !== fallback) summary.push([label + ' port', port]);
     }
@@ -163,6 +170,8 @@ function nextStep() {
       ...options,
       lan: activeStep === 0 && options.lan,
       downloader: activeStep >= 3 ? options.downloader : '',
+      prowlarr: activeStep >= 3 && options.prowlarr,
+      flaresolverr: activeStep >= 3 && options.flaresolverr,
       media: activeStep > 0 ? options.media : '',
       state: activeStep >= 4 ? options.state : '',
       ports: activeStep >= 4 ? options.ports : defaults,
