@@ -21,7 +21,7 @@ If `python3 --version` shows an older version, run `cat /etc/os-release` to iden
 ### 2. Clone, choose how to connect, and install
 
 ```sh
-git clone git@github.com:descalzi/martinflix.git
+git clone --depth 1 https://github.com/descalzi/martinflix.git
 cd martinflix
 ```
 

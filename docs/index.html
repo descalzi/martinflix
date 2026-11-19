@@ -95,7 +95,7 @@
         <h2 id="commands-title">Command preview</h2>
         <p>Clone MartinFlix once, then run both commands from the checkout. Run the check first and install after it passes.</p>
         <p>Already installed with this script? Pull the latest version and rerun it with the same state directory and settings. Setup keeps your app data and may briefly restart containers.</p>
-        <pre>git clone https://github.com/descalzi/martinflix.git
+        <pre>git clone --depth 1 https://github.com/descalzi/martinflix.git
 cd martinflix</pre>
         <p id="error" role="status" hidden></p>
         <div class="command-head"><label for="check-command">Check prerequisites</label><button type="button" data-copy="check-command">Copy check</button></div>
