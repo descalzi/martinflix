@@ -12,7 +12,8 @@ function shellQuote(value) {
   return "'" + value.replace(/'/g, "'\"'\"'") + "'";
 }
 
-function installArguments({lan, address, media, downloads, state, ports}) {
+function installArguments({lan, address, media, vpn, provider, exit, downloader, behindVpn, state, ports}) {
+  const downloads = Boolean(downloader);
   const args = [];
   if (lan) {
     const parts = address.split('.');
@@ -30,7 +31,12 @@ function installArguments({lan, address, media, downloads, state, ports}) {
     }
     args.push('--' + flag + '=' + shellQuote(value));
   }
-  if (downloads) args.push('--enable-downloads');
+  if (vpn) {
+    args.push('--enable-vpn', '--vpn-provider=' + shellQuote(provider));
+    args.push((exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(exit));
+  }
+  if (downloads) args.push('--enable-downloads', '--download-client=' + shellQuote(downloader),
+    '--download-network=' + (behindVpn ? 'vpn' : 'direct'));
   const usedPorts = new Set();
   for (const [name, label, fallback] of portOptions.slice(0, downloads ? 5 : 3)) {
     const raw = ports[name];
@@ -69,7 +75,11 @@ for (const [name, label, fallback] of portOptions) {
 function currentOptions() {
   return {
     lan: root.elements.access.value === 'lan',
-    downloads: byId('downloads').checked,
+    vpn: byId('vpn').checked,
+    provider: byId('vpn-provider').value,
+    exit: byId('vpn-exit').value,
+    downloader: byId('download-client').value,
+    behindVpn: byId('vpn').checked && byId('route-vpn').checked,
     address: byId('address').value.trim(),
     media: byId('media').value.trim(),
     state: byId('state').value.trim(),
@@ -80,7 +90,11 @@ function currentOptions() {
 function update() {
   const options = currentOptions();
   byId('lan-options').hidden = !options.lan;
-  for (const name of ['prowlarr', 'transmission']) byId(name + '-port').parentElement.hidden = !options.downloads;
+  byId('vpn-options').hidden = !options.vpn;
+  byId('download-options').hidden = !options.downloader;
+  byId('vpn-route').hidden = !options.vpn;
+  byId('direct-route').hidden = options.behindVpn;
+  for (const name of ['prowlarr', 'transmission']) byId(name + '-port').parentElement.hidden = !options.downloader;
   const error = byId('error');
   byId('copy-status').textContent = '';
   byId('step-error').hidden = true;
@@ -114,10 +128,12 @@ function showStep(index) {
     const summary = [
       ['Dashboard', options.lan ? options.address : 'On the Linux host'],
       ['Media directory', options.media || 'Configure later'],
-      ['Download services', options.downloads ? 'Transmission and Prowlarr via NordVPN' : 'Configure later'],
+      ['VPN', options.vpn ? 'NordVPN · ' + options.exit : 'Configure later'],
+      ['Download services', options.downloader ? 'Transmission, Prowlarr, and FlareSolverr' : 'Configure later'],
     ];
+    if (options.downloader) summary.push(['Download network', options.behindVpn ? 'VPN' : 'Normal internet connection']);
     if (options.state) summary.push(['Installation state', options.state]);
-    for (const [name, label, fallback] of portOptions.slice(0, options.downloads ? 5 : 3)) {
+    for (const [name, label, fallback] of portOptions.slice(0, options.downloader ? 5 : 3)) {
       const port = options.ports[name];
       if (port && Number(port) !== fallback) summary.push([label + ' port', port]);
     }
@@ -142,10 +158,10 @@ function nextStep() {
     installArguments({
       ...options,
       lan: activeStep === 0 && options.lan,
-      downloads: activeStep > 0 && options.downloads,
+      downloader: activeStep >= 3 ? options.downloader : '',
       media: activeStep > 0 ? options.media : '',
-      state: activeStep > 1 ? options.state : '',
-      ports: activeStep > 1 ? options.ports : defaults,
+      state: activeStep >= 4 ? options.state : '',
+      ports: activeStep >= 4 ? options.ports : defaults,
     });
     showStep(activeStep + 1);
   } catch (issue) {

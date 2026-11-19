@@ -10,7 +10,7 @@ A home media control room with a repeatable Docker setup. See which services are
 
 ## Quick start
 
-The browser-based command builder lives in [`docs/index.html`](docs/index.html). To preview it locally, run `python3 -m http.server 8000 --bind 127.0.0.1 --directory docs` from the checkout and open `http://127.0.0.1:8000`.
+> **[Open the MartinFlix setup guide](https://descalzi.github.io/martinflix/)** to choose your apps and generate the exact commands for your machine. Existing installs can rerun setup with the same state directory and settings to keep their app data.
 
 ### 1. Prepare the VM
 
@@ -42,11 +42,11 @@ python3 deploy/bootstrap/install.py --check --dashboard-bind "$VM_IP"
 python3 deploy/bootstrap/install.py --dashboard-bind "$VM_IP"
 ```
 
-Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default. Set up authentication in each app when you first open it.
+Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default. The installer generates separate admin passwords for Sonarr and Radarr and tells you where to find them.
 
 The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Rerun with the same options to resume setup.
 
-**To set up media and downloads on the first run**, add `--media-path` and `--enable-downloads` to both commands above. Use a dedicated, writable media directory on the VM. The download option asks for NordVPN’s manual OpenVPN service credentials before it starts Gluetun, Transmission, and Prowlarr. You can also add this option later to an existing first-run installation. [Media and download setup](docs/first-run.md#media-and-downloads)
+**To set up media, a VPN, or download apps**, follow the [public wizard](https://descalzi.github.io/martinflix/) or add `--media-path` and `--enable-downloads` to both commands above for the default VPN-backed download setup. Use a dedicated, writable media directory on the VM. The download option asks for NordVPN’s manual OpenVPN service credentials before it starts Gluetun, Transmission, Prowlarr, and FlareSolverr. You can also add this option later to an existing first-run installation. [Media and download setup](docs/first-run.md#media-and-downloads)
 
 ### 3. Open the dashboard
 
@@ -68,7 +68,7 @@ See the [first-run guide](docs/first-run.md) for using different ports or storag
 
 ## What’s included
 
-- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. The installer adds a MartinFlix HD quality profile and can also set up media folders, Gluetun, Transmission, and Prowlarr. Seerr and full Docker status collection are later stages.
+- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. The installer adds a MartinFlix HD quality profile and can also set up media folders, Gluetun, Transmission, Prowlarr, and FlareSolverr. Seerr and full Docker status collection are later stages.
 - **Existing-host dashboard** includes Docker status and dependency groups, filtered poster views, and a Seerr link. Use the [dashboard runbook](docs/dashboard.md) when connecting an existing stack.
 - **Recovery tools** capture and verify selected app-generated archives. The [recovery notes](docs/backups.md) cover scope and restore rehearsals.
 

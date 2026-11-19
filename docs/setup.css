@@ -29,7 +29,7 @@ a { color: #305745; }
 :focus-visible { outline: 2px solid #3b7052; outline-offset: 3px; }
 @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } main { margin-top: 24px; } }
 
-.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); list-style: none; padding: 0; margin: 28px 0 0; gap: 8px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); list-style: none; padding: 0; margin: 28px 0 0; gap: 8px; }
 .steps li { display: flex; align-items: center; gap: 8px; border-top: 3px solid #bfcbbd; padding: 10px 2px 0; color: #405649; font-size: .875rem; font-weight: 650; }
 .steps li span { display: grid; place-items: center; min-width: 24px; height: 24px; border-radius: 50%; background: #dfe8d8; color: #304e42; }
 .steps li[aria-current="step"] { color: #172625; border-color: #304e42; }
@@ -45,3 +45,5 @@ a { color: #305745; }
 #review dt { font-weight: 700; }
 #review dd { margin: 0 0 10px; overflow-wrap: anywhere; }
 @media (max-width: 390px) { .steps li { gap: 4px; font-size: .8rem; } .steps li span { min-width: 20px; height: 20px; } }
+
+select { width: 100%; padding: 9px; margin: 5px 0; border: 1px solid #738879; border-radius: 5px; background: white; color: inherit; font: inherit; }

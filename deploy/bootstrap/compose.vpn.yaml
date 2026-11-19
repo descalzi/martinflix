@@ -1,0 +1,25 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.0
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      VPN_SERVICE_PROVIDER: "${MARTINFLIX_VPN_PROVIDER}"
+      VPN_TYPE: openvpn
+      SERVER_CITIES: "${MARTINFLIX_VPN_CITY}"
+      SERVER_COUNTRIES: "${MARTINFLIX_VPN_COUNTRY}"
+      FIREWALL: "on"
+      FIREWALL_INPUT_PORTS: "9091,9696,8191,9999"
+      HEALTH_SERVER_ADDRESS: 0.0.0.0:9999
+    secrets: [openvpn_user, openvpn_password]
+  dashboard:
+    environment:
+      MARTINFLIX_VPN_ENABLED: "1"
+
+secrets:
+  openvpn_user:
+    file: "${MARTINFLIX_STATE_DIR}/download-secrets/openvpn_user"
+  openvpn_password:
+    file: "${MARTINFLIX_STATE_DIR}/download-secrets/openvpn_password"

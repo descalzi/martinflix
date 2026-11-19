@@ -41,6 +41,16 @@ class AppApi:
             raise ValueError(f'{self.name}: could not read {route}. Check the app is running and rerun.') from None
 
 
+def ensure_arr_login(api, initial_password):
+    config = api.request('config/host')
+    if config.get('authenticationMethod') not in ('none', None):
+        return
+    password = initial_password()
+    config.update(authenticationMethod='forms', authenticationRequired='enabled',
+                  username='admin', password=password, passwordConfirmation=password)
+    api.request(f'config/host/{config["id"]}', config, method='PUT')
+
+
 def item_name(item):
     return item.get('name') or (item.get('quality') or {}).get('name', '')
 
@@ -123,16 +133,18 @@ def ensure_connection(api, route, name, implementation, match_field, values, **s
     api.request(route, entry)
 
 
-def ensure_download_path(api):
+def ensure_download_path(api, host):
     mappings = api.request('remotepathmapping')
-    if not any(item['host'] == 'gluetun' and item['remotePath'].rstrip('/') == '/downloads'
+    if not any(item['host'] == host and item['remotePath'].rstrip('/') == '/downloads'
                for item in mappings):
         api.request('remotepathmapping', {
-            'host': 'gluetun', 'remotePath': '/downloads/', 'localPath': '/data/downloads/',
+            'host': host, 'remotePath': '/downloads/', 'localPath': '/data/downloads/',
         })
 
 
-def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *, seed_indexers=False, arr_address='127.0.0.1'):
+def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *, seed_indexers=False, arr_address='127.0.0.1', downloads_behind_vpn=True):
+    transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
+    prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1) if prowlarr_key else None
     for app, name in ARR_NAMES.items():
         api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
@@ -146,11 +158,11 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
         if prowlarr:
             category = 'tvCategory' if app == 'sonarr' else 'movieCategory'
             ensure_connection(api, 'downloadclient', 'MartinFlix Transmission', 'Transmission', 'host', {
-                'host': 'gluetun', 'port': 9091, 'username': TRANSMISSION_USER,
+                'host': transmission_host, 'port': 9091, 'username': TRANSMISSION_USER,
                 'password': transmission_password, category: app,
             })
-            ensure_download_path(api)
+            ensure_download_path(api, transmission_host)
             ensure_connection(prowlarr, 'applications', name, name, 'baseUrl', {
-                'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': 'http://gluetun:9696',
+                'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': f'http://{prowlarr_host}:9696',
                 'apiKey': arr_keys[app],
             }, syncLevel='fullSync')

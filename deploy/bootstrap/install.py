@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
-from configure import configure_apps
+from configure import AppApi, configure_apps, ensure_arr_login
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
 APPS = ('sonarr', 'radarr')
@@ -100,7 +100,21 @@ def private_secret(path):
     return path.read_text().strip() or None
 
 
-def prepare_download_secrets(path):
+def arr_needs_login(path):
+    try:
+        method = ElementTree.parse(path).getroot().findtext('AuthenticationMethod', 'none')
+        return method.casefold() == 'none'
+    except (FileNotFoundError, ElementTree.ParseError):
+        return True
+
+
+def create_arr_password(path):
+    password = private_secret(path) or secrets.token_urlsafe(24)
+    write_secret(path, password)
+    return password
+
+
+def prepare_vpn_secrets(path):
     private_directory(path)
     credentials = {name: private_secret(path / name) for name in ('openvpn_user', 'openvpn_password')}
     if not all(credentials.values()):
@@ -114,6 +128,10 @@ def prepare_download_secrets(path):
                 raise ValueError('Both NordVPN service credentials are needed.')
     for name, value in credentials.items():
         write_secret(path / name, value, trailing_newline=False)
+
+
+def prepare_download_secrets(path):
+    private_directory(path)
     password = private_secret(path / 'transmission_password') or secrets.token_urlsafe(24)
     # LinuxServer loads every byte from FILE__PASS, including any trailing newline.
     write_secret(path / 'transmission_password', password, trailing_newline=False)
@@ -205,7 +223,7 @@ def check_directory(path):
         raise ValueError(f'Cannot write to {path}. Choose a writable directory with --state-dir.')
 
 
-def check_ports(compose, environment, bindings):
+def check_ports(compose, environment, bindings, downloads_behind_vpn=False):
     result = subprocess.run(compose + ['ps', '--format', 'json'], env=environment,
                             capture_output=True, text=True, timeout=20, check=True)
     output = result.stdout.strip()
@@ -216,7 +234,7 @@ def check_ports(compose, environment, bindings):
         if entry.get('Protocol') == 'tcp'
     }
     for app, address, port in bindings:
-        owner = 'gluetun' if app in DOWNLOAD_APPS else app
+        owner = 'gluetun' if downloads_behind_vpn and app in DOWNLOAD_APPS else app
         if (owner, address, port) in published:
             continue
         try:
@@ -254,11 +272,25 @@ def install(args):
     downloads = bool(args.enable_downloads or previous.get('downloads'))
     if downloads and not media:
         raise ValueError('To install Prowlarr and Transmission, specify your dedicated media directory with --media-path.')
-    if downloads and not Path('/dev/net/tun').is_char_device():
+    if args.download_network and not downloads:
+        raise ValueError('Choose --enable-downloads to select a download network.')
+    if args.download_client and not downloads:
+        raise ValueError('Choose --enable-downloads to install Transmission.')
+    previous_network = previous.get('download_network') or ('vpn' if previous.get('downloads') else None)
+    download_network = (args.download_network or previous_network or 'vpn') if downloads else None
+    if previous_network and download_network != previous_network:
+        raise ValueError('This download stack already has a network route. Changing it requires migrating its app connections.')
+    vpn = bool(args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') or download_network == 'vpn')
+    vpn_country = args.vpn_country or ('' if args.vpn_city else previous.get('vpn_country') or '')
+    vpn_city = args.vpn_city or ('' if args.vpn_country else previous.get('vpn_city'))
+    if vpn_city is None:
+        vpn_city = '' if vpn_country else os.environ.get('MARTINFLIX_VPN_CITY', 'Prague')
+    if vpn and not Path('/dev/net/tun').is_char_device():
         raise ValueError('The VPN needs /dev/net/tun on this VM. Try sudo modprobe tun. If it is still unavailable, '
                          'enable TUN access in your VM settings and rerun setup.')
     project = compose_project(state, previous)
     options = {**previous, 'media_path': str(media) if media else None, 'downloads': downloads, 'project': project}
+    options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, download_network=download_network)
     ports = {'dashboard': args.dashboard_port, 'sonarr': args.sonarr_port, 'radarr': args.radarr_port}
     if downloads:
         ports.update(prowlarr=args.prowlarr_port, transmission=args.transmission_port)
@@ -274,31 +306,39 @@ def install(args):
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.media.yaml'))]
+    if vpn:
+        compose += ['-f', str(COMPOSE_FILE.with_name('compose.vpn.yaml'))]
     if downloads:
-        compose += ['-f', str(COMPOSE_FILE.with_name('compose.downloads.yaml'))]
+        overlay = 'compose.vpn-downloads.yaml' if download_network == 'vpn' else 'compose.direct-downloads.yaml'
+        compose += ['-f', str(COMPOSE_FILE.with_name('compose.downloads.yaml')), '-f', str(COMPOSE_FILE.with_name(overlay))]
     environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state),
                        MARTINFLIX_UID=str(os.getuid()), MARTINFLIX_GID=str(os.getgid()),
                        MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_MEDIA_PATH=str(media) if media else '')
+    environment.update(MARTINFLIX_VPN_PROVIDER=args.vpn_provider, MARTINFLIX_VPN_COUNTRY=vpn_country, MARTINFLIX_VPN_CITY=vpn_city)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
     app_dirs = (*APPS, *DOWNLOAD_APPS) if downloads else APPS
 
     for name in ('dashboard-secrets', 'dashboard-auth', *app_dirs):
         check_directory(state / name)
     check_directory(state)
-    if downloads:
+    if vpn or downloads:
         check_directory(state / 'download-secrets')
-    check_ports(compose, environment, [
+    bootstrapping_arr = any(arr_needs_login(state / app / 'config.xml') for app in APPS)
+    bindings = [
         (service, str(bind) if service not in DOWNLOAD_APPS else '127.0.0.1', port)
         for service, port in ports.items()
-    ])
+    ]
+    if bootstrapping_arr and str(bind) != '127.0.0.1':
+        bindings.extend((app, '127.0.0.1', ports[app]) for app in APPS)
+    check_ports(compose, environment, bindings, downloads_behind_vpn=download_network == 'vpn')
     try:
         if shutil.disk_usage(docker_root).free < 2 * 1024**3:
             print('Docker storage has less than 2 GiB free. Free up space if the image download or build fails.', flush=True)
     except OSError:
         pass
     if args.check:
-        if downloads:
-            print('Download stack selected. Setup will use your NordVPN OpenVPN service credentials.')
+        if vpn:
+            print('VPN selected. Setup will use your NordVPN OpenVPN service credentials.')
         print('Preflight passed. Run the same command without --check to start the installation.')
         return
     private_directory(state)
@@ -324,6 +364,8 @@ def install(args):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if saved_options(state) != previous:
             raise ValueError('Setup options changed while this command was waiting. Run the installer again.')
+        if vpn:
+            prepare_vpn_secrets(state / 'download-secrets')
         transmission_password = prepare_download_secrets(state / 'download-secrets') if downloads else None
         if media:
             for folder in MEDIA_FOLDERS:
@@ -345,20 +387,35 @@ def install(args):
         else:
             write_secret(password, secrets.token_urlsafe(32))
 
+        arr_address = str(bind)
+        if bootstrapping_arr:
+            arr_address = '127.0.0.1'
+            environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
         compose_step('2. Starting Sonarr and Radarr. The first download may take a few minutes…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
+            credentials = secret_dir / f'{app}-login-password'
+            api = AppApi(app.capitalize(), ports[app], key, address=arr_address)
+            ensure_arr_login(api, lambda: create_arr_password(credentials))
+        if bootstrapping_arr and arr_address != str(bind):
+            arr_address = str(bind)
+            environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
+            compose_step('   Opening the protected Sonarr and Radarr logins on your LAN…',
+                         ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         step = 3
         prowlarr_key = None
-        if downloads:
-            compose_step(f'{step}. Connecting the VPN, then starting Transmission and Prowlarr…',
-                         ['up', '-d', '--wait', '--wait-timeout', '210', *DOWNLOAD_APPS])
-            prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
+        if vpn or downloads:
+            services = (['gluetun'] if vpn else []) + (['transmission', 'prowlarr', 'flaresolverr'] if downloads else [])
+            label = 'Starting the VPN and selected services' if vpn else 'Starting Transmission, Prowlarr, and FlareSolverr'
+            compose_step(f'{step}. {label}…', ['up', '-d', '--wait', '--wait-timeout', '210', *services])
             step += 1
+        if downloads:
+            prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
-        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers, arr_address=str(bind))
+        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers, arr_address=arr_address,
+                       downloads_behind_vpn=download_network == 'vpn')
         if seed_indexers:
             options['sonarr_indexer_defaults_applied'] = True
             write_secret(state / 'install-options.json', json.dumps(options))
@@ -385,13 +442,22 @@ for app in ('sonarr', 'radarr'):
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
     print('\nApp setup')
+    print('Sonarr and Radarr use separate credentials. Change each password in its own app.')
+    if vpn:
+        print(f'NordVPN exit: {vpn_city or vpn_country or "Automatic"}')
+    if downloads:
+        print(f'Download network: {"VPN" if download_network == "vpn" else "normal internet connection"}')
     for app in app_dirs:
         address = '127.0.0.1' if app in DOWNLOAD_APPS else bind
         print(f'{app.capitalize():13} http://{address}:{ports[app]}')
+        if app in APPS and (login_file := secret_dir / f'{app}-login-password').is_file():
+            print(f'              Initial admin password: cat {shlex.quote(str(login_file))}')
     if downloads:
         password_path = shlex.quote(str(state / 'download-secrets/transmission_password'))
         print(f'\nTransmission username: martinflix. To show its password: cat {password_path}')
         print('Add your indexers in Prowlarr. The installer connected both library apps.')
+        flare_host = '127.0.0.1' if download_network == 'vpn' else 'flaresolverr'
+        print(f'FlareSolverr proxy address inside Prowlarr: http://{flare_host}:8191')
 
 
 def main():
@@ -403,7 +469,13 @@ def main():
     parser.add_argument('--dashboard-port', type=int, default=8765)
     parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, and downloads.')
     parser.add_argument('--enable-downloads', action='store_true',
-                        help='Install Gluetun, Transmission, and Prowlarr. Requires --media-path and NordVPN service credentials.')
+                        help='Install Gluetun, Transmission, and Prowlarr. Requires --media-path. Defaults to VPN routing.')
+    parser.add_argument('--enable-vpn', action='store_true', help='Install the NordVPN gateway.')
+    parser.add_argument('--vpn-provider', choices=['nordvpn'], default='nordvpn')
+    parser.add_argument('--vpn-country', choices=['Czech Republic', 'United Kingdom', 'Netherlands', 'Germany', 'United States'])
+    parser.add_argument('--vpn-city', choices=['Prague'])
+    parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--download-client', choices=['transmission'])
     parser.add_argument('--prowlarr-port', type=int, default=9696)
     parser.add_argument('--transmission-port', type=int, default=9091)
     parser.add_argument('--sonarr-port', type=int, default=8989)

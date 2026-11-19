@@ -82,12 +82,12 @@ function serviceCard(service, groupServices, countLabel) {
   </li>`;
 }
 
-function serviceGroup(group, countLabel) {
+function serviceGroup(group, countLabel, showVpnBranch) {
   const services = group.services;
   const running = services.filter(serviceIsUp).length;
   const nested = new Set();
   const branches = services.flatMap(parent => {
-    const branch = stackBranches[parent.name];
+    const branch = parent.name === 'nordvpn' && !showVpnBranch ? null : stackBranches[parent.name];
     if (!branch) return [];
     const children = services.filter(service => branch.members.includes(service.name));
     if (!children.length) return [];
@@ -156,12 +156,13 @@ async function status() {
     const data = await get('/api/status');
     const docker = data.docker;
     const probes = docker.source === 'app-probes';
+    $('#nav-password').hidden = !data.canChangePassword;
     if (servicesPage) {
       $('#services-description').textContent = probes ? 'Live health checks for configured services.' : 'Container status and configured service dependencies.';
       $('#services-source').textContent = probes ? 'These checks show whether each app responds to the dashboard.'
         : 'Docker reports container status. Dependency lines show the configured stack and do not test VPN connectivity.';
       $('#services-content').innerHTML = docker.available
-        ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running')).join('')
+        ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running', !probes || docker.downloadsBehindVpn)).join('')
         : `<p class="empty">${esc(docker.error)}</p>`;
     } else {
       renderOverview(docker, docker.groups.flatMap(group => group.services), data.backups.snapshots, probes);

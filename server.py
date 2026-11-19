@@ -87,11 +87,16 @@ def service_status():
 
     probes = {name: (address + '/ping', 200) for name, address in ARR_COMPOSE_ADDRESSES.items()}
     downloads = os.environ.get('MARTINFLIX_DOWNLOAD_STACK') == '1'
+    gateway = os.environ.get('MARTINFLIX_DOWNLOAD_GATEWAY')
+    vpn = os.environ.get('MARTINFLIX_VPN_ENABLED') == '1' or (downloads and gateway is None)
+    behind_vpn = gateway == 'gluetun' or (gateway is None and vpn)
+    if vpn:
+        probes['nordvpn'] = ('http://gluetun:9999/', 200)
     if downloads:
         probes.update({
-            'nordvpn': ('http://gluetun:9999/', 200),
-            'transmission-daemon': ('http://gluetun:9091/transmission/rpc', 401),
-            'prowlarr': ('http://gluetun:9696/ping', 200),
+            'transmission-daemon': (f'http://{"gluetun" if behind_vpn else "transmission"}:9091/transmission/rpc', 401),
+            'prowlarr': (f'http://{"gluetun" if behind_vpn else "prowlarr"}:9696/ping', 200),
+            'flaresolverr': (f'http://{"gluetun" if behind_vpn else "flaresolverr"}:8191/', 200),
         })
     services = []
     for name, (url, expected) in probes.items():
@@ -108,7 +113,7 @@ def service_status():
             'state': 'reachable' if reachable else 'unreachable',
             'status': 'Responded to health check' if reachable else 'Health check did not respond',
         })
-    return {'available': True, 'source': 'app-probes',
+    return {'available': True, 'source': 'app-probes', 'downloadsBehindVpn': downloads and behind_vpn,
             'groups': [{'name': 'Downloads & automation' if downloads else 'Library apps', 'services': services}]}
 
 
@@ -302,8 +307,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.server.password_setup_required:
             self.redirect('/setup-password')
             return
+        if path == '/change-password' and form_login:
+            self.send_auth_page('setup-password.html', changing=True)
+            return
         if path == '/api/status':
-            data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time())}
+            data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()), 'canChangePassword': form_login}
             self.send_json(data)
         elif path == '/api/activity':
             self.send_json(dashboard_activity())
@@ -351,7 +359,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
-        if self.server.admin_state_file is None or path not in ('/login', '/setup-password'):
+        if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password'):
             self.send_error(404)
             return
         try:
@@ -361,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
         if not origin or origin.scheme not in ('http', 'https') or origin.netloc != self.headers.get('Host'):
             self.send_error(403, 'Open the dashboard and submit the form again.')
             return
-        if path == '/setup-password' and not self.authorized():
+        if path != '/login' and not self.authorized():
             self.require_login()
             return
         try:
@@ -375,10 +383,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/login':
             self.sign_in(fields)
             return
-        if not self.server.password_setup_required:
-            self.redirect('/')
+        changing = path == '/change-password'
+        if changing == self.server.password_setup_required:
+            self.redirect('/setup-password' if self.server.password_setup_required else '/')
             return
-        self.change_initial_password(fields)
+        self.change_password(fields, changing)
 
     def sign_in(self, fields):
         user = fields.get('username', [''])[0]
@@ -393,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
             signature = hmac.new(self.server.session_key, value.encode(), 'sha256').hexdigest()
         self.redirect(destination, f'{SESSION_COOKIE}={value}.{signature}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}')
 
-    def change_initial_password(self, fields):
+    def change_password(self, fields, changing):
         token = fields.get('token', [''])[0]
         if not hmac.compare_digest(token.encode(), self.server.password_setup_token.encode()):
             self.send_error(403, 'Reopen the password setup page and try again.')
@@ -401,23 +410,26 @@ class Handler(BaseHTTPRequestHandler):
         password = fields.get('password', [''])[0]
         confirmation = fields.get('confirm', [''])[0]
         if not MIN_PERSONAL_PASSWORD <= len(password) <= 128 or not password.isprintable() or not password.strip():
-            self.send_auth_page('setup-password.html', f'Use {MIN_PERSONAL_PASSWORD} to 128 printable characters.', 400)
+            self.send_auth_page('setup-password.html', f'Use {MIN_PERSONAL_PASSWORD} to 128 printable characters.', 400, changing=changing)
             return
         if password != confirmation:
-            self.send_auth_page('setup-password.html', 'The passwords don’t match. Enter the same password twice.', 400)
+            self.send_auth_page('setup-password.html', 'The passwords don’t match. Enter the same password twice.', 400, changing=changing)
             return
         with self.server.password_setup_lock:
-            if not self.server.password_setup_required:
+            if changing == self.server.password_setup_required or not self.authorized():
                 self.require_login()
                 return
-            if hmac.compare_digest(password.encode(), self.server.admin_password.encode()):
-                self.send_auth_page('setup-password.html', 'Choose a password different from the temporary password.', 400)
+            if changing and not self.valid_credentials(self.server.admin_user, fields.get('current', [''])[0]):
+                self.send_auth_page('setup-password.html', 'The current password is incorrect.', 400, changing=True)
+                return
+            if self.valid_credentials(self.server.admin_user, password):
+                self.send_auth_page('setup-password.html', 'Choose a different password.', 400, changing=changing)
                 return
             try:
                 verifier = PasswordVerifier.create(password)
                 save_admin_password(self.server.admin_state_file, verifier.encoded)
             except OSError:
-                self.send_auth_page('setup-password.html', 'Could not save the password. Check the dashboard’s storage and try again.', 500)
+                self.send_auth_page('setup-password.html', 'Could not save the password. Check the dashboard’s storage and try again.', 500, changing=changing)
                 return
             self.server.password_verifier = verifier
             self.server.admin_password = ''
@@ -448,11 +460,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
-    def send_auth_page(self, name, message='', status=200, password_set=False):
+    def send_auth_page(self, name, message='', status=200, password_set=False, changing=False):
         template = (WEB / name).read_text()
         error = f'<p class="setup-error" role="alert">{html.escape(message)}</p>' if message else ''
         notice = '<p class="setup-success" role="status">Password saved. Sign in with your new password.</p>' if password_set else ''
-        body = (template.replace('{{TOKEN}}', html.escape(self.server.password_setup_token))
+        current = ('<label for="current">Current password</label><div class="password-field">'
+                   '<input type="password" id="current" name="current" autocomplete="current-password" required>'
+                   '<button type="button" class="password-toggle" aria-controls="current" aria-label="Show current password" '
+                   'aria-pressed="false" hidden><span class="password-eye" aria-hidden="true"></span></button></div>')
+        body = (template.replace('{{ACTION}}', '/change-password' if changing else '/setup-password')
+                .replace('{{HEADING}}', 'Change your dashboard password' if changing else 'Set your dashboard password')
+                .replace('{{CURRENT}}', current if changing else '')
+                .replace('{{PASSWORD_SCOPE}}', '<p class="setup-note">This changes only the MartinFlix dashboard password.</p>'
+                         '<a href="/">Back to dashboard</a>' if changing else '')
+                .replace('{{TOKEN}}', html.escape(self.server.password_setup_token))
                 .replace('{{MIN_PASSWORD}}', str(MIN_PERSONAL_PASSWORD))
                 .replace('{{NOTICE}}', notice).replace('{{ERROR}}', error).encode())
         self.send_web_file(name, 'text/html', status, body)
@@ -588,7 +609,7 @@ if __name__ == '__main__':
     server.password_verifier = verifier
     server.admin_state_file = state_file
     server.password_setup_required = setup_required
-    server.password_setup_token = secrets.token_urlsafe(32) if setup_required else ''
+    server.password_setup_token = secrets.token_urlsafe(32)
     server.password_setup_lock = threading.Lock()
     server.session_key = secrets.token_bytes(32)
     print('MartinFlix listening on %s:%d' % (host, port), flush=True)

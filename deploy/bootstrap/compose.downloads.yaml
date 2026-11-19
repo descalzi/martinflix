@@ -1,36 +1,13 @@
 services:
-  gluetun:
-    image: qmcgaw/gluetun:v3.41.0
-    restart: unless-stopped
-    cap_add: [NET_ADMIN]
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      VPN_SERVICE_PROVIDER: nordvpn
-      VPN_TYPE: openvpn
-      SERVER_CITIES: "${MARTINFLIX_VPN_CITY:-Prague}"
-      FIREWALL: "on"
-      FIREWALL_INPUT_PORTS: "9091,9696,9999"
-      HEALTH_SERVER_ADDRESS: 0.0.0.0:9999
-    secrets: [openvpn_user, openvpn_password]
-    ports:
-      - "127.0.0.1:${MARTINFLIX_TRANSMISSION_PORT}:9091"
-      - "127.0.0.1:${MARTINFLIX_PROWLARR_PORT}:9696"
-
   transmission:
     image: lscr.io/linuxserver/transmission:latest
     restart: unless-stopped
-    network_mode: service:gluetun
-    depends_on:
-      gluetun:
-        condition: service_healthy
-        restart: true
     environment:
       PUID: "${MARTINFLIX_UID}"
       PGID: "${MARTINFLIX_GID}"
       USER: martinflix
       FILE__PASS: /run/secrets/transmission_password
-      HOST_WHITELIST: gluetun,localhost
+      HOST_WHITELIST: gluetun,transmission,localhost
     secrets: [transmission_password]
     volumes:
       - "${MARTINFLIX_STATE_DIR}/transmission:/config"
@@ -49,11 +26,6 @@ services:
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     restart: unless-stopped
-    network_mode: service:gluetun
-    depends_on:
-      gluetun:
-        condition: service_healthy
-        restart: true
     environment:
       PUID: "${MARTINFLIX_UID}"
       PGID: "${MARTINFLIX_GID}"
@@ -66,14 +38,20 @@ services:
       retries: 15
       start_period: 20s
 
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8191/]
+      interval: 5s
+      timeout: 4s
+      retries: 15
+      start_period: 20s
+
   dashboard:
     environment:
       MARTINFLIX_DOWNLOAD_STACK: "1"
 
 secrets:
-  openvpn_user:
-    file: "${MARTINFLIX_STATE_DIR}/download-secrets/openvpn_user"
-  openvpn_password:
-    file: "${MARTINFLIX_STATE_DIR}/download-secrets/openvpn_password"
   transmission_password:
     file: "${MARTINFLIX_STATE_DIR}/download-secrets/transmission_password"

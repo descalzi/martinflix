@@ -1,0 +1,10 @@
+services:
+  transmission:
+    ports:
+      - "127.0.0.1:${MARTINFLIX_TRANSMISSION_PORT}:9091"
+  prowlarr:
+    ports:
+      - "127.0.0.1:${MARTINFLIX_PROWLARR_PORT}:9696"
+  dashboard:
+    environment:
+      MARTINFLIX_DOWNLOAD_GATEWAY: ""
