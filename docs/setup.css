@@ -47,3 +47,7 @@ a { color: #305745; }
 @media (max-width: 390px) { .steps li { gap: 4px; font-size: .8rem; } .steps li span { min-width: 20px; height: 20px; } }
 
 select { width: 100%; padding: 9px; margin: 5px 0; border: 1px solid #738879; border-radius: 5px; background: white; color: inherit; font: inherit; }
+
+.media-paths { margin: 14px 0; }
+.media-paths dt { font-weight: 650; font-size: .875rem; }
+.media-paths dd { margin: 0 0 8px; overflow-wrap: anywhere; }

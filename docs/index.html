@@ -7,8 +7,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
-  <link rel="stylesheet" href="./setup.css?v=wizard-3">
-  <script src="./setup.js?v=wizard-3" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-4">
+  <script src="./setup.js?v=wizard-4" defer></script>
 </head>
 <body>
   <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
@@ -40,9 +40,15 @@
         </section>
         <section class="step" aria-labelledby="media-title" hidden>
           <h2 id="media-title" tabindex="-1">Media storage</h2>
-          <label for="media">Media directory <small>Optional for library monitoring</small></label>
-          <input id="media" type="text" placeholder="/mnt/media">
-          <small>Use an existing writable directory on the Linux host.</small>
+          <label for="media">Parent media directory <small>Optional for library monitoring</small></label>
+          <input id="media" type="text" placeholder="/mnt/media" aria-describedby="media-help">
+          <small id="media-help">Choose an existing writable folder on the Linux host. Setup reuses these three subfolders or creates them if missing.</small>
+          <dl class="media-paths" aria-label="Subfolders under the media directory">
+            <dt>Series · Sonarr</dt><dd><code data-media-folder="TV Shows">/mnt/media/TV Shows</code></dd>
+            <dt>Films · Radarr</dt><dd><code data-media-folder="Movies">/mnt/media/Movies</code></dd>
+            <dt>Downloads</dt><dd><code data-media-folder="downloads">/mnt/media/downloads</code></dd>
+          </dl>
+          <small>The installer uses these folder names. For a library laid out differently, configure its root folders in Sonarr and Radarr.</small>
         </section>
         <section class="step" aria-labelledby="vpn-title" hidden>
           <h2 id="vpn-title" tabindex="-1">VPN</h2>

@@ -89,6 +89,10 @@ function currentOptions() {
 
 function update() {
   const options = currentOptions();
+  const mediaBase = (options.media || '/mnt/media').replace(/\/+$/, '');
+  for (const path of document.querySelectorAll('[data-media-folder]')) {
+    path.textContent = mediaBase + '/' + path.dataset.mediaFolder;
+  }
   byId('lan-options').hidden = !options.lan;
   byId('vpn-options').hidden = !options.vpn;
   byId('download-options').hidden = !options.downloader;
