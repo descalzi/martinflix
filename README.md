@@ -27,26 +27,28 @@ cd martinflix
 
 Run one of the following sets of commands as your normal user. The check creates no stack files or containers and explains how to fix missing prerequisites. Run the install command once the check passes.
 
+Every installation needs a media directory: an existing, writable folder for your series, films, and downloads, such as a mounted NAS share. Replace `/mnt/media` with yours.
+
 **If your browser is on the VM**, use the defaults:
 
 ```sh
-python3 deploy/bootstrap/install.py --check
-python3 deploy/bootstrap/install.py
+python3 deploy/bootstrap/install.py --media-path /mnt/media --check
+python3 deploy/bootstrap/install.py --media-path /mnt/media
 ```
 
 **If your browser is on another machine**, set the VM’s LAN IPv4 address before the first install. Replace the example address with your VM’s address:
 
 ```sh
 VM_IP=192.168.1.50
-python3 deploy/bootstrap/install.py --check --dashboard-bind "$VM_IP"
-python3 deploy/bootstrap/install.py --dashboard-bind "$VM_IP"
+python3 deploy/bootstrap/install.py --media-path /mnt/media --check --dashboard-bind "$VM_IP"
+python3 deploy/bootstrap/install.py --media-path /mnt/media --dashboard-bind "$VM_IP"
 ```
 
 Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default.
 
 The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Setup remembers the address, ports, media directory, and services you chose, so rerunning it resumes where it stopped.
 
-**To set up media, a VPN, or download apps**, follow the [public wizard](https://descalzi.github.io/martinflix/) or add `--media-path` and `--enable-downloads` to both commands above for the default VPN-backed download setup. Use a dedicated, writable media directory on the VM. The download option asks for NordVPN’s manual OpenVPN service credentials before it starts Gluetun, Transmission, Prowlarr, and FlareSolverr. You can also add this option later to an existing first-run installation. [Media and download setup](docs/first-run.md#media-and-downloads)
+**To set up a VPN or download apps**, follow the [public wizard](https://descalzi.github.io/martinflix/) or add `--enable-downloads` to both commands above for the default VPN-backed download setup. Use a dedicated, writable media directory on the VM. The download option asks for NordVPN’s manual OpenVPN service credentials before it starts Gluetun, Transmission, Prowlarr, and FlareSolverr. You can also add this option later to an existing first-run installation. [Media and download setup](docs/first-run.md#media-and-downloads)
 
 ### 3. Open the dashboard
 

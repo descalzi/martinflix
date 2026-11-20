@@ -67,7 +67,10 @@ function checkPorts(options) {
 /** Throws an Error describing the first problem on one step, using the current answers. */
 function validateStep(step, options) {
   if (step === 'access' && options.lan) checkAddress(options.address);
-  if (step === 'media') checkPath(options.media, 'Media directory');
+  if (step === 'media') {
+    if (!options.media) throw new Error('Enter the media directory. Sonarr and Radarr need it to file series and films.');
+    checkPath(options.media, 'Media directory');
+  }
   if (step === 'downloads' && options.downloader && !options.media) {
     throw new Error('Transmission needs a media directory. Add one in the Media step or choose “Set up later”.');
   }
@@ -358,7 +361,7 @@ if (typeof document !== 'undefined') {
     if (event?.target === route) preferVpnRoute = route.checked;
     if (event?.target?.name === 'mode') furthest = 0;
     const options = currentOptions();
-    const mediaBase = (options.media || '/mnt/media').replace(/\/+$/, '');
+    const mediaBase = (options.media || '…').replace(/\/+$/, '');
     for (const path of document.querySelectorAll('[data-media-folder]')) path.textContent = mediaBase + '/' + path.dataset.mediaFolder;
     byId('lan-options').hidden = !options.lan;
     byId('u-lan-options').hidden = options.changes.access !== 'lan';

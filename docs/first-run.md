@@ -5,9 +5,11 @@ Start with a Linux host and an account that can run Docker Engine and Docker Com
 From the checkout, run:
 
 ```sh
-python3 deploy/bootstrap/install.py --check
-python3 deploy/bootstrap/install.py
+python3 deploy/bootstrap/install.py --media-path /mnt/media --check
+python3 deploy/bootstrap/install.py --media-path /mnt/media
 ```
+
+Replace `/mnt/media` with your media directory. New installations and resets need one, because Sonarr and Radarr file series and films there; installations made before this keep working without one until you add it.
 
 The check verifies the Python and Linux environment, Docker Engine and Compose, access to the local engine, storage permissions, and service ports. It creates no directories, pulls no images, and starts no containers.
 
@@ -44,7 +46,7 @@ To run an isolated trial alongside another stack, use a separate state directory
 
 ```sh
 python3 deploy/bootstrap/install.py \
-  --state-dir ~/.local/state/martinflix-trial \
+  --state-dir ~/.local/state/martinflix-trial --media-path /mnt/media-trial \
   --dashboard-port 18765 --sonarr-port 18989 --radarr-port 17878
 ```
 

@@ -354,6 +354,8 @@ class InstallerFlowTests(unittest.TestCase):
         ]
         self.mocks = [item.start() for item in self.patches]
         self.reset, self.run = self.mocks[4], self.mocks[5]
+        self.media = self.home / 'media'
+        self.media.mkdir()
 
     def tearDown(self):
         patch.stopall()
@@ -361,12 +363,14 @@ class InstallerFlowTests(unittest.TestCase):
 
     def call(self, **overrides):
         overrides.setdefault('state_dir', self.state)
+        if overrides.get('reset') or overrides.pop('new', False):
+            overrides.setdefault('media_path', str(self.media))
         with patch('builtins.print'):
             install.install(arguments(**overrides), self.home / 'overlay.json')
 
     def test_invalid_reset_options_fail_before_anything_is_archived(self):
-        with self.assertRaisesRegex(ValueError, 'media directory'):
-            self.call(reset=True, download_client='transmission')
+        with self.assertRaisesRegex(ValueError, 'enable-prowlarr'):
+            self.call(reset=True, enable_flaresolverr=True)
         self.reset.assert_not_called()
         self.run.assert_not_called()
 
@@ -394,6 +398,14 @@ class InstallerFlowTests(unittest.TestCase):
         first_target = self.run.call_args_list[0].args[1]
         self.assertEqual(first_target, (home / '.local/state/martinflix').resolve())
         self.assertEqual(self.run.call_args_list[1].args[1], legacy.resolve(), 'an explicit --state-dir is respected')
+
+    def test_new_installs_and_resets_need_a_media_directory(self):
+        with self.assertRaisesRegex(ValueError, 'need a media directory'):
+            self.call(reset=True, media_path=None)
+        with self.assertRaisesRegex(ValueError, 'need a media directory'):
+            self.call(state_dir=self.home / 'new-install')
+        self.call(update=True)
+        self.run.assert_called_once()
 
     def test_update_requires_an_existing_installation(self):
         with self.assertRaisesRegex(ValueError, 'No installer-managed'):

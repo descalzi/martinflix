@@ -622,6 +622,10 @@ def install(args, overlay_file):
                   'If you open MartinFlix from another device, add --dashboard-bind with the VM’s LAN address.', flush=True)
     # A reset discards the saved options, so validate the new installation as if it were fresh.
     previous = {} if args.reset else current
+    if (args.reset or not existing) and not args.media_path:
+        raise ValueError('Sonarr and Radarr need a media directory to file series and films in. Add --media-path with '
+                         'an existing, writable folder, such as a mounted NAS share. Setup creates TV Shows, Movies '
+                         'and downloads inside it.')
     plan = plan_installation(args, target, previous, project, overlay_file, fresh_arr=args.reset)
     check_ports(plan['bindings'], published)
     try:
@@ -933,7 +937,8 @@ def build_parser():
                         help='IPv4 address for the dashboard, Sonarr, and Radarr. Defaults to the saved address, '
                              'or 127.0.0.1 for a new installation.')
     parser.add_argument('--dashboard-port', type=int)
-    parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, and downloads.')
+    parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, '
+                                             'and downloads. Required for a new installation or a reset.')
     parser.add_argument('--enable-downloads', action='store_true',
                         help='Install Gluetun, Transmission, and Prowlarr. Requires --media-path. Defaults to VPN routing.')
     parser.add_argument('--enable-vpn', action='store_true', help='Install the NordVPN gateway.')

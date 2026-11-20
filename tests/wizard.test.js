@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const wizard = require('../docs/setup.js');
 
 const defaults = {
-  mode: 'new', lan: false, address: '', media: '', vpn: false, provider: 'nordvpn', exit: 'Prague',
+  mode: 'new', lan: false, address: '', media: '/mnt/media', vpn: false, provider: 'nordvpn', exit: 'Prague',
   downloader: '', prowlarr: true, flaresolverr: true, bazarr: false, behindVpn: false, state: '', ports: {},
 };
 const commands = options => wizard.buildCommands({...defaults, ...options});
@@ -13,7 +13,7 @@ const flat = command => command.replace(/ \\\n  /g, ' ');
 test('a new installation uses the defaults', () => {
   const [fetch, check, install] = commands({});
   assert.match(fetch.command, /git clone --depth 1/);
-  assert.strictEqual(install.command, 'python3 deploy/bootstrap/install.py \\\n  --enable-prowlarr \\\n  --enable-flaresolverr \\\n  --download-network=direct');
+  assert.strictEqual(install.command, 'python3 deploy/bootstrap/install.py \\\n  --media-path=/mnt/media \\\n  --enable-prowlarr \\\n  --enable-flaresolverr \\\n  --download-network=direct');
   assert.ok(check.command.endsWith('--check'));
 });
 
@@ -50,17 +50,17 @@ test('a reset can be checked before anything is archived', () => {
 
 test('invalid answers explain the fix', () => {
   assert.throws(() => commands({lan: true, address: '127.0.0.1'}), /LAN IPv4/);
-  assert.throws(() => commands({downloader: 'transmission'}), /media directory/);
+  assert.throws(() => commands({media: ''}), /Enter the media directory/);
   assert.throws(() => commands({media: 'relative/path'}), /absolute/);
   assert.throws(() => commands({ports: {sonarr: '8765'}}), /different port/);
   assert.throws(() => commands({mode: 'update', state: '~/state'}), /absolute/);
 });
 
 test('Bazarr is added with the media directory and follows the download route', () => {
-  const args = wizard.installArguments({...defaults, media: '/mnt/media', bazarr: true, prowlarr: false, flaresolverr: false,
+  const args = wizard.installArguments({...defaults, bazarr: true, prowlarr: false, flaresolverr: false,
     ports: {bazarr: '16767'}});
   assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--enable-bazarr', '--download-network=direct', '--bazarr-port=16767']);
-  assert.throws(() => commands({bazarr: true}), /Bazarr needs a media directory/);
+  assert.throws(() => wizard.validateStep('downloads', {...defaults, media: '', bazarr: true}), /Bazarr needs a media directory/);
 });
 
 test('shell quoting survives single quotes', () => {

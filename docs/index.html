@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-13">
-  <script src="./setup.js?v=wizard-13" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-14">
+  <script src="./setup.js?v=wizard-14" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -84,11 +84,11 @@
 
           <section class="step" data-step="media" aria-labelledby="media-title" hidden>
             <h2 id="media-title" tabindex="-1">Media storage</h2>
-            <p class="lede">Optional. Leave it blank to monitor libraries without managing files yet. Downloads need a media directory.</p>
+            <p class="lede">Where your series and films live. Sonarr and Radarr file everything here, and downloads land here too.</p>
             <div class="field">
-              <label for="media">Media directory</label>
-              <input id="media" type="text" placeholder="/mnt/media" aria-describedby="media-help" spellcheck="false">
-              <small id="media-help">An existing, writable folder on the host, such as a mounted NAS share. Setup reuses or creates these subfolders:</small>
+              <label for="media">Media directory <small>Required</small></label>
+              <input id="media" type="text" aria-describedby="media-help" spellcheck="false" required>
+              <small id="media-help">An existing, writable folder on the host, for example <code>/mnt/media</code> or a mounted NAS share. Setup reuses or creates these subfolders:</small>
             </div>
             <dl class="paths" aria-label="Subfolders under the media directory">
               <div><dt>Series · Sonarr</dt><dd><code data-media-folder="TV Shows">/mnt/media/TV Shows</code></dd></div>
@@ -122,7 +122,7 @@
             <h2 id="downloads-title" tabindex="-1">Downloads, indexers and subtitles</h2>
             <div class="field">
               <label for="download-client">Download client</label>
-              <select id="download-client" aria-describedby="client-help"><option value="transmission" selected>Transmission (default with media)</option><option value="">Set up later</option></select>
+              <select id="download-client" aria-describedby="client-help"><option value="transmission" selected>Transmission (default)</option><option value="">Set up later</option></select>
               <small id="client-help">Transmission needs the media directory from the Media step.</small>
             </div>
             <fieldset class="toggles">
@@ -132,7 +132,7 @@
             </fieldset>
             <fieldset class="toggles">
               <legend>Subtitles</legend>
-              <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default with media</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
+              <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
             </fieldset>
             <label class="toggle" id="route-toggle"><input id="route-vpn" type="checkbox" disabled aria-describedby="route-help"><span><strong>Route these apps through the VPN</strong><span id="route-help">Turn on the VPN gateway in the previous step to use this.</span></span></label>
           </section>
