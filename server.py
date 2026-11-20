@@ -776,7 +776,7 @@ REGION_NAMES = {'GB': 'UK', 'US': 'US', 'IE': 'Irish', 'CA': 'Canadian', 'AU': '
 
 # MartinFlix's own TMDB API key, registered for this project, so Discover works without setup. Anyone can use
 # their own key instead (setup's --set-tmdb-key), or turn Discover off (--discover off).
-DEFAULT_TMDB_KEY = 'e0d66f10fd16fb72d47c55d8dabc1df1'
+DEFAULT_TMDB_KEY = 'db55323b8d3e4154498498a75642b381'
 
 
 def tmdb_key():
