@@ -28,7 +28,7 @@ The navigation rail and wizard header stay forest in both themes. This is the co
 Gabarito sets page and section headings. Figtree sets everything else at 16 px with 1.55 line height. Numbers use tabular figures. Use sentence case everywhere, with no uppercase tracked labels or eyebrows. Monospace is only for commands and paths.
 
 ## Layout
-- The dashboard has a 232 px rail with Overview, Library, Add, Services and Backups. Each is a real URL. Below 860 px the rail becomes a top bar with icon and label tabs, and the overview’s poster rows scroll sideways.
+- The dashboard has a 232 px rail with Overview, Library, Services and Backups. Add is reached from Library and from empty library lists, and keeps Library highlighted. Each is a real URL. Below 860 px the rail becomes a top bar with icon and label tabs, and the overview’s poster rows scroll sideways.
 - The Add page searches through Sonarr’s and Radarr’s lookup and shows TMDB and TheTVDB artwork, which the page’s content security policy allows by host.
 - Content sits on panels: 12 px radius, 24 px padding, one soft offset shadow. Use 8 px radius for inputs, buttons and inner cards, and pills for badges.
 - The wizard is two columns: the steps on the left and the live commands on the right, which stay in view. Below 900 px it stacks into one column.

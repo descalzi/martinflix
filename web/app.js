@@ -4,12 +4,14 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;'
 const icon = (name, extra = '') => `<svg class="icon${extra}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 const page = document.body.dataset.page;
-const pageTitles = {overview: 'Overview', library: 'Library', add: 'Add', services: 'Services', backups: 'Backups'};
+const pageTitles = {overview: 'Overview', library: 'Library', add: 'Add to library', services: 'Services', backups: 'Backups'};
 const legacyAnchors = {'#series': '/library#series', '#films': '/library#films', '#library': '/library', '#backups': '/backups', '#services': '/services'};
 if (page === 'overview' && legacyAnchors[window.location.hash]) window.location.replace(legacyAnchors[window.location.hash]);
 $('#page-title').textContent = pageTitles[page];
 document.title = page === 'overview' ? 'MartinFlix' : `${pageTitles[page]} · MartinFlix`;
-document.querySelector(`[data-nav="${page}"]`)?.setAttribute('aria-current', 'page');
+// Add lives under Library, so Library stays highlighted there.
+if (page === 'add') document.querySelector('[data-nav="library"]').setAttribute('aria-current', 'true');
+else document.querySelector(`[data-nav="${page}"]`)?.setAttribute('aria-current', 'page');
 for (const section of document.querySelectorAll('.page')) section.hidden = section.dataset.for !== page;
 
 let catalog = {apps: {}, branches: {}, startAfter: {}};
@@ -346,8 +348,8 @@ function emptyLibrary(library) {
     return '<div class="empty-state"><h3>Nothing airing soon</h3><p>No monitored series have an episode due in the next 12 months.</p><a class="text-link" href="/add">Add a series</a></div>';
   }
   return library.upcomingOnly
-    ? '<div class="empty-state"><h3>No releases ahead</h3><p>None of your monitored films have a cinema, digital or physical release coming up.</p><a class="text-link" href="/add">Add a film</a></div>'
-    : '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has a file.</p><a class="text-link" href="/add">Add a film</a></div>';
+    ? '<div class="empty-state"><h3>No releases ahead</h3><p>None of your monitored films have a cinema, digital or physical release coming up.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>'
+    : '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has a file.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>';
 }
 
 function renderLibrary(library) {
