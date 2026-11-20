@@ -121,13 +121,26 @@ def arr_needs_login(path):
         return True
 
 
+NORDVPN_CREDENTIALS_PAGE = 'https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/'
+NORDVPN_CREDENTIALS_HELP = f'''
+NordVPN login
+─────────────
+Gluetun signs in with your NordVPN service credentials. These are not your Nord Account email and password.
+To find them:
+  1. Sign in at {NORDVPN_CREDENTIALS_PAGE}
+     (or Nord Account → NordVPN → Advanced settings → Set up NordVPN manually).
+  2. Enter the verification code NordVPN emails you.
+  3. Open the Service credentials tab and copy the username and password.
+'''
+
+
 def prepare_vpn_secrets(path):
     private_directory(path)
     credentials = {name: private_secret(path / name) for name in ('openvpn_user', 'openvpn_password')}
     if not all(credentials.values()):
         if not sys.stdin.isatty():
             raise ValueError('Run setup in a terminal to enter your NordVPN OpenVPN service credentials.')
-        print('Enter the manual OpenVPN service credentials from your Nord Account.', flush=True)
+        print(NORDVPN_CREDENTIALS_HELP, flush=True)
         for name, prompt in [('openvpn_user', 'NordVPN service username: '), ('openvpn_password', 'NordVPN service password: ')]:
             if not credentials[name]:
                 credentials[name] = getpass.getpass(prompt).strip()
@@ -370,9 +383,10 @@ def download_overlay(apps, ports, behind_vpn):
 
 
 VPN_PROBLEMS = (
-    ('AUTH_FAILED', 'NordVPN rejected the login. Use the service credentials from your Nord Account (NordVPN → '
-                    'Set up NordVPN manually), not your email and password. Setup removed the saved credentials, '
-                    'so it asks for them again when you rerun it.'),
+    ('AUTH_FAILED', 'NordVPN rejected the login, which almost always means the Nord Account email and password were '
+                    'used instead of the service credentials. Setup removed the saved credentials, so it asks for them '
+                    f'again when you rerun it. Find the service credentials at {NORDVPN_CREDENTIALS_PAGE} '
+                    '(Set up NordVPN manually → Service credentials).'),
     ('no server found', 'No NordVPN server matches the chosen exit location. Rerun with a different --vpn-country '
                         'or --vpn-city.'),
 )

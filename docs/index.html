@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-11">
-  <script src="./setup.js?v=wizard-11" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-12">
+  <script src="./setup.js?v=wizard-12" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -100,7 +100,7 @@
           <section class="step" data-step="vpn" aria-labelledby="vpn-title" hidden>
             <h2 id="vpn-title" tabindex="-1">VPN gateway</h2>
             <p class="lede">Gluetun keeps download traffic inside a NordVPN tunnel and blocks it if the tunnel drops.</p>
-            <label class="toggle"><input id="vpn" type="checkbox"><span><strong>Install the VPN gateway</strong><span>Off by default. You’ll need NordVPN’s manual OpenVPN service credentials.</span></span></label>
+            <label class="toggle"><input id="vpn" type="checkbox"><span><strong>Install the VPN gateway</strong><span>Off by default. You’ll need your NordVPN service credentials.</span></span></label>
             <div id="vpn-options" class="field-group" hidden>
               <div class="field">
                 <label for="vpn-provider">Provider</label>
@@ -114,7 +114,7 @@
                   <option>Germany</option><option>United States</option>
                 </select>
               </div>
-              <small>The installer asks for the service username and password in the terminal and stores them privately on the host.</small>
+              <small>The installer asks for your NordVPN <strong>service credentials</strong>, which aren’t your Nord Account email and password. Find them in <a href="https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/">Nord Account → NordVPN → Set up NordVPN manually</a>: enter the code NordVPN emails you, then copy the username and password from the <strong>Service credentials</strong> tab. Setup stores them privately on the host.</small>
             </div>
           </section>
 
@@ -174,7 +174,7 @@
               <input id="u-address" type="text" inputmode="decimal" placeholder="192.168.1.50" aria-describedby="u-lan-help">
               <small id="u-lan-help">The dashboard and every app move to this address. Use a trusted home network.</small>
             </div>
-            <label class="toggle"><input id="u-vpn" type="checkbox"><span><strong>Add the VPN gateway</strong><span>Installs Gluetun with NordVPN. Setup asks for the service credentials in the terminal.</span></span></label>
+            <label class="toggle"><input id="u-vpn" type="checkbox"><span><strong>Add the VPN gateway</strong><span>Installs Gluetun with NordVPN. Setup asks for your NordVPN service credentials, from Nord Account → NordVPN → Set up NordVPN manually → Service credentials.</span></span></label>
             <div class="field" id="u-vpn-options" hidden>
               <label for="u-vpn-exit">Exit location</label>
               <select id="u-vpn-exit">
