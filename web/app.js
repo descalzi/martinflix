@@ -158,7 +158,7 @@ function controlButtons(service) {
   const name = esc(service.name);
   return `<div class="service-actions">
     <button class="button button-quiet button-small" type="button" data-control="restart" data-service="${name}">${icon('refresh')}${serviceIsUp(service) ? 'Restart' : 'Start'}</button>
-    <button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>
+    ${service.control.canUpdate === false ? '' : `<button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>`}
   </div>`;
 }
 
@@ -267,9 +267,13 @@ function controlText(action, service) {
   const after = followers.length ? relatedNames(followers) : '';
   if (action === 'restart') {
     const verb = serviceIsUp(service) ? 'Restart' : 'Start';
+    const own = {
+      dashboard: 'This page stops for a few seconds, then reloads. You’ll need to sign in again.',
+      controller: 'Restarts and updates are unavailable for a few seconds while it comes back.',
+    }[service.name];
     return {
       title: `${verb} ${name}?`, verb,
-      detail: after ? `${after} restart${followers.length === 1 ? 's' : ''} after it, because ${followers.length === 1 ? 'it uses' : 'they use'} its connection. Downloads pause for a minute or so.`
+      detail: own ? own : after ? `${after} restart${followers.length === 1 ? 's' : ''} after it, because ${followers.length === 1 ? 'it uses' : 'they use'} its connection. Downloads pause for a minute or so.`
         : verb === 'Start' ? `Starts the ${name} container again.` : `${name} is unavailable for a few seconds while it restarts.`,
       busy: `${verb === 'Start' ? 'Starting' : 'Restarting'}…`,
     };
@@ -279,6 +283,23 @@ function controlText(action, service) {
     detail: `Downloads the newest ${name} image and, if there is one, recreates ${name} with it${after ? `, then ${after}` : ''}. Your settings stay. This can take a few minutes.`,
     busy: 'Updating…',
   };
+}
+
+/** After a dashboard restart: wait until it answers again, then reload so the page talks to the new one. */
+async function waitForDashboard() {
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  await pause(3000);
+  for (let tries = 0; tries < 60; tries += 1) {
+    try {
+      // Any answer, even "sign in again", means it is back.
+      await fetch('/api/status', {cache: 'no-store'});
+      window.location.reload();
+      return;
+    } catch {
+      await pause(2000);
+    }
+  }
+  $('#control-notice').textContent = 'The dashboard has not come back yet. Reload this page in a moment.';
 }
 
 function setupControls() {
@@ -338,6 +359,10 @@ function setupControls() {
       dialog.close();
       notice.textContent = data.message;
       notice.hidden = false;
+      if (request.service === 'dashboard') {
+        waitForDashboard();
+        return;
+      }
       status();
       // Apps take a little while to report healthy again after a restart.
       setTimeout(status, 15000);

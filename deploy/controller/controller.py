@@ -17,8 +17,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-# Setup builds these from source, so they update with setup rather than from here.
-EXCLUDED = frozenset({'dashboard', 'controller'})
+# Restarting these ends the request that asked for it, so the controller answers first and restarts them after.
+SELF = frozenset({'dashboard', 'controller'})
+RESTART_DELAY_SECONDS = 1.0
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300
 PIN_LENGTHS = range(4, 9)
@@ -116,10 +117,11 @@ def dependents(services, name):
 class Stack:
     """Runs Docker and Compose for the project setup saved in the controller config."""
 
-    def __init__(self, config_file, runner=subprocess.run):
+    def __init__(self, config_file, runner=subprocess.run, later=None):
         self.config_file = Path(config_file)
         self.runner = runner
         self.cached = (None, None)
+        self.later = later or (lambda action: threading.Timer(RESTART_DELAY_SECONDS, action).start())
 
     def config(self):
         return json.loads(self.config_file.read_text())
@@ -144,7 +146,12 @@ class Stack:
         return self.cached[1]
 
     def controllable(self):
-        return {name: spec for name, spec in self.services().items() if name not in EXCLUDED and 'build' not in spec}
+        return self.services()
+
+    @staticmethod
+    def updatable(spec):
+        # Setup builds these from your copy of MartinFlix, so they change with a git pull and setup, not from here.
+        return 'build' not in spec
 
     def containers(self):
         project = self.config()['project']
@@ -171,11 +178,15 @@ class Stack:
     def status(self):
         services = self.controllable()
         containers = self.containers()
-        return {'services': {name: {**containers.get(name, {'state': 'missing'}), 'dependents': dependents(services, name)}
-                             for name in services}}
+        return {'services': {name: {**containers.get(name, {'state': 'missing'}), 'dependents': dependents(services, name),
+                                    'canUpdate': self.updatable(spec)}
+                             for name, spec in services.items()}}
 
     def restart(self, name):
         services = self.controllable()
+        if name in SELF:
+            self.later(lambda: self.compose('restart', name))
+            return {'followed': [], 'deferred': True}
         follow = dependents(services, name)
         for group in ([name], follow):
             if group:
@@ -186,6 +197,8 @@ class Stack:
 
     def update(self, name):
         services = self.controllable()
+        if not self.updatable(services[name]):
+            raise ValueError(f'{name} is built from your copy of MartinFlix. Update it with git pull, then setup.')
         follow = dependents(services, name)
         before = self.containers().get(name, {}).get('id')
         pulled = self.compose('pull', '--quiet', name)

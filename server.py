@@ -137,7 +137,8 @@ def apply_control_status(services, control):
         if not info or info.get('state') == 'missing':
             continue
         followers = [CATALOG_NAMES.get(name, name) for name in info.get('dependents', [])]
-        service['control'] = {'followers': [name for name in followers if name in CATALOG['apps']]}
+        service['control'] = {'followers': [name for name in followers if name in CATALOG['apps'] and name not in HELPERS],
+                              'canUpdate': info.get('canUpdate', True)}
         if info.get('state') != 'running':
             service['state'] = 'exited' if info.get('state') in ('exited', 'dead') else info.get('state', 'unknown')
             code = info.get('exitCode')
@@ -152,13 +153,26 @@ def apply_control_status(services, control):
             service['status'] = 'Up (unhealthy)'
 
 
+# Containers that keep MartinFlix itself running, listed in their own section of the Services page.
+HELPERS = ('dashboard', 'controller', 'transmission-auth')
+
+
+def helper_services(control):
+    services = [{'name': name, 'state': 'running', 'status': 'Running'} for name in HELPERS
+                if control.get(name, {}).get('state', 'missing') != 'missing']
+    apply_control_status(services, control)
+    return services
+
+
 def control_message(result):
     def label(name):
         return CATALOG['apps'].get(CATALOG_NAMES.get(name, name), {}).get('name')
     name = label(result.get('service')) or 'The app'
-    followed = [label(item) for item in result.get('followed', [])]
+    followed = [label(item) for item in result.get('followed', []) if CATALOG_NAMES.get(item, item) not in HELPERS]
     followed = [item for item in followed if item]
     listed = ', '.join(followed[:-1]) + (' and ' if len(followed) > 1 else '') + (followed[-1] if followed else '')
+    if result.get('deferred'):
+        return f'{name} is restarting. This can take a few seconds.'
     if result.get('action') == 'restart':
         return f'{name} restarted' + (f', then {listed}.' if followed else '.')
     if not result.get('updated'):
@@ -405,6 +419,8 @@ def service_status():
     if control is not None:
         status['control'] = True
         apply_control_status(all_services, control)
+        if helpers := helper_services(control):
+            status['groups'].append({'name': 'MartinFlix', 'services': helpers})
     return status
 
 

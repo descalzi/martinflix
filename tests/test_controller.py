@@ -100,11 +100,16 @@ class StackTests(unittest.TestCase):
         self.assertEqual(controller.dependents(SERVICES, 'transmission'), ['transmission-auth'])
         self.assertEqual(controller.dependents(SERVICES, 'sonarr'), [])
 
-    def test_built_services_are_not_controllable(self):
+    def test_the_dashboard_and_controller_restart_after_answering_and_never_update_here(self):
+        deferred = []
         stack = self.stack({'gluetun': 'g'})
-        self.assertNotIn('dashboard', stack.controllable())
-        self.assertNotIn('controller', stack.controllable())
-        self.assertIn('transmission-auth', stack.controllable())
+        stack.later = deferred.append
+        self.assertEqual(stack.restart('controller'), {'followed': [], 'deferred': True})
+        self.assertFalse(any('restart' in call for call in self.calls), 'nothing restarts before the answer is sent')
+        deferred[0]()
+        self.assertEqual(self.calls[-1][-2:], ['restart', 'controller'])
+        with self.assertRaisesRegex(ValueError, 'git pull'):
+            stack.update('dashboard')
 
     def test_restarting_gluetun_restarts_the_apps_on_its_network_after_it(self):
         stack = self.stack({'gluetun': 'g'})

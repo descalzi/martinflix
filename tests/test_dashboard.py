@@ -336,6 +336,18 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn('Wrong PIN. 4 tries left.', page)
 
+    def test_martinflix_containers_get_their_own_section(self):
+        helpers = server.helper_services({
+            'dashboard': {'state': 'running', 'startedAt': '2026-11-20T08:00:00Z', 'dependents': [], 'canUpdate': False},
+            'controller': {'state': 'running', 'startedAt': '2026-11-20T08:00:00Z', 'dependents': [], 'canUpdate': False},
+            'transmission-auth': {'state': 'missing'}, 'sonarr': {'state': 'running', 'dependents': []}})
+        self.assertEqual([item['name'] for item in helpers], ['dashboard', 'controller'])
+        self.assertFalse(helpers[0]['control']['canUpdate'])
+
+    def test_a_dashboard_restart_says_it_is_on_its_way(self):
+        self.assertEqual(server.control_message({'action': 'restart', 'service': 'dashboard', 'deferred': True, 'followed': []}),
+                         'Dashboard is restarting. This can take a few seconds.')
+
     def test_docker_fills_in_uptime_and_stopped_containers(self):
         services = [{'name': 'nordvpn', 'state': 'reachable', 'status': 'Responded to health check'},
                     {'name': 'radarr', 'state': 'unreachable', 'status': 'Health check did not respond'},
@@ -345,7 +357,8 @@ class ControlTests(unittest.TestCase):
             'radarr': {'state': 'exited', 'exitCode': 137, 'dependents': []},
             'sonarr': {'state': 'running', 'startedAt': '2026-11-20T08:59:00Z', 'dependents': []}})
         self.assertEqual(services[0]['startedAt'], '2026-11-20T08:00:00Z')
-        self.assertEqual(services[0]['control'], {'followers': ['transmission-daemon']}, 'helper sidecars stay hidden')
+        self.assertEqual(services[0]['control'], {'followers': ['transmission-daemon'], 'canUpdate': True},
+                         'helper sidecars stay out of the list')
         self.assertEqual((services[1]['state'], services[1]['status']), ('exited', 'Exited (exit code 137)'))
         self.assertEqual(services[2]['startedAt'], '2026-11-20T09:00:00Z', 'an app\'s own start time wins')
 
