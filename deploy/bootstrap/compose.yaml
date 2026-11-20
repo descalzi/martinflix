@@ -57,6 +57,8 @@ services:
       MARTINFLIX_RADARR_URL: http://radarr:7878
       MARTINFLIX_SONARR_WEB_PORT: "${MARTINFLIX_SONARR_PORT:-8989}"
       MARTINFLIX_RADARR_WEB_PORT: "${MARTINFLIX_RADARR_PORT:-7878}"
+      MARTINFLIX_TMDB_KEY_FILE: /run/dashboard-secrets/tmdb-key
+      MARTINFLIX_DISCOVER_REGION: "${MARTINFLIX_DISCOVER_REGION:-GB}"
       MARTINFLIX_CONTROLLER_URL: http://controller:9800
       MARTINFLIX_CONTROLLER_TOKEN_FILE: /run/dashboard-secrets/controller-token
     networks: [default, control]

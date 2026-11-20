@@ -32,6 +32,12 @@ New Radarr installations start with a maximum release size of 4,500 MB, an avail
 
 The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
 
+### Discover
+
+The **Discover** page shows trending films and series, what's coming to cinemas, and what's new on streaming in your region, whether or not it's in your library. Titles you already have say **In library**; **Add** opens the Add page on that exact title with its options ready.
+
+The lists come from [TMDB](https://www.themoviedb.org/), which needs a free API key: sign in at TMDB, open **Settings → API**, request a **Developer** key, and copy the **API Key** (the longer **API Read Access Token** works too). Run setup with `--set-tmdb-key` and paste it when asked; it's stored privately on the VM, never in the repository. Rerun with `--set-tmdb-key` to replace it, or leave the answer blank to turn Discover off. Cinema and streaming lists use the UK by default; choose another country with `--discover-region`, for example `--discover-region US`. The lists are cached for an hour.
+
 ### Restart and update apps from the dashboard
 
 Each card on the **Services** page has **Restart** and **Update** buttons, and the dashboard asks for a PIN before either runs. Setup asks you to choose the PIN (4 to 8 digits) and stores only a hash of it. To change it, use **Change PIN** in the dashboard's sidebar, which asks for the current PIN first. If you've forgotten it, rerun setup on the VM with `--change-pin`. Five wrong PINs lock restarts, updates, and PIN changes for five minutes.

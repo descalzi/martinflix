@@ -193,6 +193,27 @@ def prepare_control_pin(path, change=False):
     raise ValueError('No PIN was set. Rerun setup to choose one.')
 
 
+TMDB_KEY_HELP = """
+Discover shows trending and upcoming titles from TMDB. It needs a free TMDB API key: sign in at
+https://www.themoviedb.org, open Settings → API, request a Developer key, and copy the "API Key" (or the longer
+"API Read Access Token"). Leave it blank to turn Discover off."""
+
+
+def prepare_tmdb_key(path):
+    """Ask for the TMDB key. A blank answer removes it, which turns Discover off."""
+    if not sys.stdin.isatty():
+        raise ValueError('Run setup in a terminal to enter the TMDB API key.')
+    print(TMDB_KEY_HELP, flush=True)
+    key = getpass.getpass('TMDB API key or read access token (hidden as you type or paste): ').strip()
+    if key and not re.fullmatch(r'[A-Za-z0-9._-]{20,1024}', key):
+        raise ValueError('That doesn’t look like a TMDB API key. Copy it again from TMDB’s API settings.')
+    if key:
+        write_secret(path, key)
+    else:
+        path.unlink(missing_ok=True)
+    print('Discover is on.' if key else 'Discover is off.', flush=True)
+
+
 def docker_socket():
     """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH."""
     host = os.environ.get('DOCKER_HOST', '')
@@ -609,6 +630,11 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
                        MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
     environment['MARTINFLIX_REPO_DIR'] = str(REPO_DIR)
+    region = (args.discover_region or previous.get('discover_region') or 'GB').upper()
+    if not re.fullmatch(r'[A-Z]{2}', region):
+        raise ValueError('Use a two-letter country code for --discover-region, such as GB or US.')
+    options['discover_region'] = region
+    environment['MARTINFLIX_DISCOVER_REGION'] = region
     control_socket = docker_socket()
     if control_socket:
         compose += ['--profile', 'control']
@@ -640,6 +666,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'bind': bind, 'compose': compose, 'environment': environment, 'app_dirs': app_dirs,
         'bootstrapping_arr': bootstrapping_arr, 'bootstrapping_prowlarr': bootstrapping_prowlarr, 'bindings': bindings,
         'control': bool(control_socket), 'change_pin': bool(getattr(args, 'change_pin', False)),
+        'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
     }
 
 
@@ -733,6 +760,8 @@ def keep_flags(options):
         flags += ['--dashboard-bind', options['dashboard_bind']]
     if options.get('media_path'):
         flags += ['--media-path', options['media_path']]
+    if options.get('discover_region', 'GB') != 'GB':
+        flags += ['--discover-region', options['discover_region']]
     if options.get('vpn'):
         flags.append('--enable-vpn')
         if options.get('vpn_city'):
@@ -842,6 +871,8 @@ def run_installation(plan, state, previous, mode='install'):
         temporary_password = password.read_text().rstrip('\r\n')
         personal_password_set = (auth_dir / 'password-hash').is_file()
         vpn_credentials_changed = prepare_vpn_secrets(state / 'download-secrets') if vpn else False
+        if plan['set_tmdb_key']:
+            prepare_tmdb_key(secret_dir / 'tmdb-key')
         if plan['control']:
             prepare_control_pin(state / 'controller', change=plan['change_pin'])
             if not (secret_dir / 'controller-token').is_file():
@@ -1038,6 +1069,10 @@ def build_parser():
     parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
                         help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--set-tmdb-key', action='store_true',
+                        help='Enter, replace or remove the TMDB API key that turns on the dashboard’s Discover page.')
+    parser.add_argument('--discover-region',
+                        help='Two-letter country for Discover’s cinema and streaming lists. Defaults to GB.')
     parser.add_argument('--change-pin', action='store_true',
                         help='Choose a new PIN for restarting and updating apps from the dashboard.')
     parser.add_argument('--download-client', choices=['transmission'])

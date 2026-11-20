@@ -381,6 +381,72 @@ class ControlTests(unittest.TestCase):
         self.assertEqual((services[1]['state'], services[1]['status']), ('exited', 'Exited (exit code 137)'))
         self.assertEqual(services[2]['startedAt'], '2026-11-20T09:00:00Z', 'an app\'s own start time wins')
 
+
+class DiscoverTests(unittest.TestCase):
+    def setUp(self):
+        server.TMDB_CACHE.clear()
+
+    def test_tmdb_entries_keep_only_safe_fields(self):
+        film = server.tmdb_item({'id': 42, 'title': ' Dune ', 'release_date': '2026-12-18', 'poster_path': '/abc.jpg',
+                                 'overview': 'Sand.'}, 'radarr')
+        self.assertEqual(film, {'id': 42, 'kind': 'radarr', 'title': 'Dune', 'date': '2026-12-18', 'year': 2026,
+                                'poster': 'https://image.tmdb.org/t/p/w342/abc.jpg', 'overview': 'Sand.'})
+        odd = server.tmdb_item({'id': 7, 'name': 'Show', 'first_air_date': 'soon', 'poster_path': '//evil.example/x.jpg'}, 'sonarr')
+        self.assertEqual((odd['date'], odd['poster']), (None, None))
+        self.assertIsNone(server.tmdb_item({'id': 'x', 'title': 'No'}, 'radarr'))
+
+    def test_rows_use_the_region_and_mark_titles_already_in_the_library(self):
+        calls = []
+        def fake(path, **params):
+            calls.append((path, params))
+            if path.startswith('/trending/tv') or path == '/discover/tv':
+                return {'results': [{'id': 5, 'name': 'Owned show'}, {'id': 6, 'name': 'New show'}]}
+            return {'results': [{'id': 1, 'title': 'Owned film'}, {'id': 2, 'title': 'New film'}]}
+        owned = {'radarr': {1}, 'sonarr': {5}}
+        with patch.dict('os.environ', {'MARTINFLIX_DISCOVER_REGION': 'gb'}), \
+                patch.object(server, 'tmdb_cached', side_effect=fake), \
+                patch.object(server, 'library_tmdb_ids', side_effect=lambda kind: owned[kind]):
+            data = server.discover_rows()
+        self.assertEqual(data['region'], 'GB')
+        self.assertEqual([row['title'] for row in data['rows']],
+                         ['Trending films', 'Trending series', 'Coming to UK cinemas', 'New films on UK streaming',
+                          'New series on UK streaming'])
+        cinemas = next(params for path, params in calls if params.get('region'))
+        self.assertEqual((cinemas['region'], cinemas['with_release_type']), ('GB', '2|3'))
+        self.assertEqual([(item['title'], item['inLibrary']) for item in data['rows'][1]['items']],
+                         [('Owned show', True), ('New show', False)])
+
+    def test_keys_and_read_tokens_are_sent_the_way_tmdb_expects(self):
+        seen = []
+        def fake_open(request, timeout):
+            seen.append(request)
+            response = MagicMock()
+            response.__enter__.return_value = io.BytesIO(b'{}')
+            return response
+        for key in ('a' * 32, 'eyJ' + 'b' * 40):
+            secret = tempfile.NamedTemporaryFile('w', delete=False)
+            secret.write(key)
+            secret.close()
+            self.addCleanup(os.unlink, secret.name)
+            with patch.dict('os.environ', {'MARTINFLIX_TMDB_KEY_FILE': secret.name}), \
+                    patch.object(server.ARR_OPENER, 'open', side_effect=fake_open):
+                server.tmdb_get('/trending/movie/week', language='en-GB')
+        self.assertIn('api_key=' + 'a' * 32, seen[0].full_url)
+        self.assertNotIn('api_key', seen[1].full_url)
+        self.assertEqual(seen[1].get_header('Authorization'), 'Bearer eyJ' + 'b' * 40)
+
+    def test_series_from_discover_are_found_in_sonarr_by_their_tvdb_id(self):
+        terms = []
+        with patch.object(server, 'arr_connection', return_value=('http://sonarr:8989', 'key')), \
+                patch.object(server, 'tmdb_cached', return_value={'tvdb_id': 81189}), \
+                patch.object(server, 'arr_json', side_effect=lambda connection, route: terms.append(route) or []):
+            server.search_titles('sonarr', 'tmdb:1396')
+        self.assertIn('term=tvdb%3A81189', terms[0])
+        with patch.object(server, 'arr_connection', return_value=('http://sonarr:8989', 'key')), \
+                patch.object(server, 'tmdb_cached', return_value={'tvdb_id': None}):
+            with self.assertRaisesRegex(server.AddError, 'TheTVDB'):
+                server.search_titles('sonarr', 'tmdb:1396')
+
 @unittest.skipUnless(shutil.which('node'), 'Node.js is needed to test the setup wizard')
 class WizardTests(unittest.TestCase):
     def test_wizard_command_builder(self):

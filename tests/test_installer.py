@@ -74,6 +74,27 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertTrue(install_controller.pin_matches('2468', stored))
         install.prepare_control_pin(folder)  # Already set: no prompt.
 
+    def test_discover_region_defaults_to_gb_and_is_remembered(self):
+        self.assertEqual(self.plan()['environment']['MARTINFLIX_DISCOVER_REGION'], 'GB')
+        plan = self.plan(discover_region='us')
+        self.assertEqual((plan['options']['discover_region'], plan['environment']['MARTINFLIX_DISCOVER_REGION']), ('US', 'US'))
+        self.assertEqual(self.plan({'discover_region': 'IE'})['environment']['MARTINFLIX_DISCOVER_REGION'], 'IE')
+        with self.assertRaisesRegex(ValueError, 'two-letter'):
+            self.plan(discover_region='United Kingdom')
+
+    def test_the_tmdb_key_is_stored_privately_and_blank_removes_it(self):
+        path = self.state / 'tmdb-key'
+        self.state.mkdir(parents=True, exist_ok=True)
+        for answer, expected in (('a' * 32, 'a' * 32), ('', None)):
+            with patch.object(install.sys.stdin, 'isatty', return_value=True), \
+                    patch.object(install.getpass, 'getpass', return_value=answer), redirect_stdout(io.StringIO()):
+                install.prepare_tmdb_key(path)
+            self.assertEqual(path.read_text().strip() if path.exists() else None, expected)
+        with patch.object(install.sys.stdin, 'isatty', return_value=True), \
+                patch.object(install.getpass, 'getpass', return_value='not a key!'), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'TMDB'):
+                install.prepare_tmdb_key(path)
+
     def test_saved_address_and_ports_are_reused_unless_overridden(self):
         previous = {'dashboard_bind': '192.168.4.166', 'ports': {'dashboard': 18765, 'sonarr': 18989, 'radarr': 17878}}
         plan = self.plan(previous)

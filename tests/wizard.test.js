@@ -66,3 +66,12 @@ test('Bazarr is added with the media directory and follows the download route', 
 test('shell quoting survives single quotes', () => {
   assert.strictEqual(wizard.shellQuote("/mnt/martin's media"), "'/mnt/martin'\"'\"'s media'");
 });
+
+test('Discover asks setup for a TMDB key and names a region only when it is not the UK', () => {
+  assert.deepStrictEqual(wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, discover: true, region: 'GB'}),
+    ['--media-path=/mnt/media', '--set-tmdb-key']);
+  assert.ok(wizard.installArguments({...defaults, discover: true, region: 'IE'}).includes('--discover-region=IE'));
+  assert.ok(!wizard.installArguments({...defaults, discover: false, region: 'IE'}).some(arg => arg.startsWith('--discover')));
+  const update = wizard.installArguments({mode: 'update', changes: {route: 'keep', discover: true, region: 'US'}});
+  assert.deepStrictEqual(update, ['--update', '--set-tmdb-key', '--discover-region=US']);
+});

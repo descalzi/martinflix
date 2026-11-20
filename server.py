@@ -37,7 +37,7 @@ ARR_HEALTH_ENDPOINTS = {
 }
 CATALOG = json.loads((WEB / 'catalog.json').read_text(encoding='utf-8'))
 STACKS = {group['name']: group['services'] for group in CATALOG['groups']}
-PAGES = ('overview', 'library', 'add', 'services', 'backups')
+PAGES = ('overview', 'library', 'discover', 'add', 'services', 'backups')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -764,10 +764,130 @@ def season_numbers(item):
                    if isinstance(season, dict) and type(season.get('seasonNumber')) is int and season['seasonNumber'] >= 0})
 
 
+# Discover: trending and upcoming titles from TMDB, whether or not they are in the library.
+TMDB_API = 'https://api.themoviedb.org/3'
+TMDB_CACHE_SECONDS = 3600
+TMDB_CACHE = {}
+TMDB_LOCK = threading.Lock()
+REGION_NAMES = {'GB': 'UK', 'US': 'US', 'IE': 'Irish', 'CA': 'Canadian', 'AU': 'Australian', 'NZ': 'New Zealand',
+                'DE': 'German', 'FR': 'French', 'ES': 'Spanish', 'IT': 'Italian', 'NL': 'Dutch', 'PT': 'Portuguese',
+                'BR': 'Brazilian', 'SE': 'Swedish', 'NO': 'Norwegian', 'DK': 'Danish'}
+
+
+def discover_region():
+    region = os.environ.get('MARTINFLIX_DISCOVER_REGION', 'GB').strip().upper()
+    return region if re.fullmatch(r'[A-Z]{2}', region) else 'GB'
+
+
+def tmdb_get(path, **params):
+    """One TMDB API call. Accepts a v3 API key or a v4 read access token, whichever setup was given."""
+    key = read_secret('MARTINFLIX_TMDB_KEY')
+    if not key:
+        raise AddError('Discover needs a TMDB API key. Rerun setup with --set-tmdb-key.')
+    headers = {'Accept': 'application/json'}
+    if key.startswith('eyJ'):
+        headers['Authorization'] = f'Bearer {key}'
+    else:
+        params['api_key'] = key
+    request = urllib.request.Request(f'{TMDB_API}{path}?{urllib.parse.urlencode(params)}', headers=headers)
+    with ARR_OPENER.open(request, timeout=10) as response:
+        return json.load(response)
+
+
+def tmdb_cached(path, **params):
+    cache_key = (path, tuple(sorted(params.items())))
+    with TMDB_LOCK:
+        hit = TMDB_CACHE.get(cache_key)
+        if hit and time.time() - hit[0] < TMDB_CACHE_SECONDS:
+            return hit[1]
+    data = tmdb_get(path, **params)
+    with TMDB_LOCK:
+        TMDB_CACHE[cache_key] = (time.time(), data)
+    return data
+
+
+def tmdb_item(item, kind):
+    title = item.get('title') if kind == 'radarr' else item.get('name')
+    date = item.get('release_date') if kind == 'radarr' else item.get('first_air_date')
+    identifier = item.get('id')
+    if type(identifier) is not int or identifier < 1 or not isinstance(title, str) or not title.strip():
+        return None
+    date = date if isinstance(date, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', date) else None
+    poster = item.get('poster_path')
+    return {
+        'id': identifier, 'kind': kind, 'title': title.strip(), 'date': date, 'year': int(date[:4]) if date else None,
+        'poster': f'https://image.tmdb.org/t/p/w342{poster}' if isinstance(poster, str) and re.fullmatch(r'/[\w.-]+', poster) else None,
+        'overview': short_text(item.get('overview'), 200),
+    }
+
+
+def library_tmdb_ids(kind):
+    """TMDB IDs already in Radarr or Sonarr, so Discover can mark them. Empty when the app can't be reached."""
+    connection = arr_connection(kind)
+    if connection is None:
+        return set()
+    try:
+        items = arr_json(connection, '/api/v3/movie' if kind == 'radarr' else '/api/v3/series')
+    except (OSError, ValueError):
+        return set()
+    return {item.get('tmdbId') for item in items or [] if isinstance(item, dict) and type(item.get('tmdbId')) is int}
+
+
+def discover_rows():
+    region = discover_region()
+    place = REGION_NAMES.get(region, region)
+    today = time.strftime('%Y-%m-%d')
+    ahead = time.strftime('%Y-%m-%d', time.gmtime(time.time() + 90 * 86400))
+    recent = time.strftime('%Y-%m-%d', time.gmtime(time.time() - 90 * 86400))
+    language = 'en-GB' if region == 'GB' else 'en-US'
+    rows = [
+        ('trending-films', 'Trending films', 'This week, worldwide', 'radarr', '/trending/movie/week', {'language': language}),
+        ('trending-series', 'Trending series', 'This week, worldwide', 'sonarr', '/trending/tv/week', {'language': language}),
+        ('cinemas', f'Coming to {place} cinemas', 'Next three months, most anticipated first', 'radarr', '/discover/movie',
+         {'region': region, 'with_release_type': '2|3', 'release_date.gte': today, 'release_date.lte': ahead,
+          'sort_by': 'popularity.desc', 'language': language}),
+        ('streaming-films', f'New films on {place} streaming', 'Released in the last three months', 'radarr', '/discover/movie',
+         {'watch_region': region, 'with_watch_monetization_types': 'flatrate', 'primary_release_date.gte': recent,
+          'primary_release_date.lte': today, 'sort_by': 'popularity.desc', 'language': language}),
+        ('streaming-series', f'New series on {place} streaming', 'First aired in the last three months', 'sonarr',
+         '/discover/tv', {'watch_region': region, 'with_watch_monetization_types': 'flatrate',
+                          'first_air_date.gte': recent, 'first_air_date.lte': today, 'sort_by': 'popularity.desc',
+                          'language': language}),
+    ]
+    owned = {kind: library_tmdb_ids(kind) for kind in ('radarr', 'sonarr')}
+    result = []
+    for key, title, detail, kind, path, params in rows:
+        try:
+            data = tmdb_cached(path, **params)
+        except (OSError, ValueError):
+            result.append({'key': key, 'title': title, 'detail': detail, 'error': 'TMDB did not answer. Try again later.', 'items': []})
+            continue
+        items = [entry for entry in (tmdb_item(item, kind) for item in (data or {}).get('results', [])
+                                     if isinstance(item, dict)) if entry]
+        for entry in items:
+            entry['inLibrary'] = entry['id'] in owned[kind]
+        result.append({'key': key, 'title': title, 'detail': detail, 'items': items[:20]})
+    return {'region': region, 'rows': result}
+
+
+def tvdb_for_tmdb(tmdb_id):
+    """Sonarr adds series by TheTVDB ID, which TMDB lists for each show it knows on TheTVDB."""
+    try:
+        ids = tmdb_cached(f'/tv/{tmdb_id}/external_ids')
+    except (OSError, ValueError) as exc:
+        raise AddError('TMDB did not answer. Try again later.') from exc
+    tvdb = (ids or {}).get('tvdb_id')
+    if type(tvdb) is not int or tvdb < 1:
+        raise AddError('This series is not on TheTVDB yet, so Sonarr cannot add it.')
+    return tvdb
+
+
 def search_titles(kind, term):
     connection = arr_connection(kind)
     if connection is None:
         raise AddError(f'Connect {kind.capitalize()} to the dashboard first.')
+    if kind == 'sonarr' and (match := re.fullmatch(r'tmdb:([1-9][0-9]{0,9})', term)):
+        term = f'tvdb:{tvdb_for_tmdb(int(match.group(1)))}'
     route = '/api/v3/series/lookup?' if kind == 'sonarr' else '/api/v3/movie/lookup?'
     results = arr_json(connection, route + urllib.parse.urlencode({'term': term}))
     found = []
@@ -905,8 +1025,14 @@ class Handler(BaseHTTPRequestHandler):
             catalog = {key: CATALOG.get(key, {}) for key in ('apps', 'branches', 'uses', 'groupRest')}
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
                     'canChangePassword': form_login, 'canChangePin': form_login and controller_configured(),
+                    'discover': bool(read_secret('MARTINFLIX_TMDB_KEY')),
                     'catalog': catalog}
             self.send_json(data)
+        elif path == '/api/discover':
+            if not read_secret('MARTINFLIX_TMDB_KEY'):
+                self.send_json({'error': 'Discover needs a TMDB API key. Rerun setup with --set-tmdb-key.'}, 404)
+            else:
+                self.send_json(discover_rows())
         elif path == '/api/activity':
             self.send_json(dashboard_activity())
         elif path in ('/api/sonarr', '/api/radarr'):

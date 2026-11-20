@@ -4,7 +4,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;'
 const icon = (name, extra = '') => `<svg class="icon${extra}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 const page = document.body.dataset.page;
-const pageTitles = {overview: 'Overview', library: 'Library', add: 'Add to library', services: 'Services', backups: 'Backups'};
+const pageTitles = {overview: 'Overview', library: 'Library', discover: 'Discover', add: 'Add to library', services: 'Services', backups: 'Backups'};
 const legacyAnchors = {'#series': '/library#series', '#films': '/library#films', '#library': '/library', '#backups': '/backups', '#services': '/services'};
 if (page === 'overview' && legacyAnchors[window.location.hash]) window.location.replace(legacyAnchors[window.location.hash]);
 $('#page-title').textContent = pageTitles[page];
@@ -423,6 +423,7 @@ async function status() {
     const services = docker.groups.flatMap(group => group.services);
     $('#nav-password').hidden = !data.canChangePassword;
     $('#nav-pin').hidden = !data.canChangePin;
+    $('#nav-discover').hidden = !data.discover && page !== 'discover';
     const problems = attentionRows(docker, services).length;
     $('#nav-flag').hidden = problems === 0;
     $('#nav-flag').innerHTML = `${problems}<span class="sr-only"> ${problems === 1 ? 'issue' : 'issues'}</span>`;
@@ -791,10 +792,23 @@ if (page === 'add') {
     if (lastSearch && lastSearch.kind !== kind && term.value.trim()) form.requestSubmit();
   };
   form.addEventListener('change', event => { if (event.target.name === 'kind') syncKind(); });
+  // Discover links here with an exact TMDB ID to find, and the title to show while it searches.
+  const handoff = new URLSearchParams(window.location.search);
+  let find = /^tmdb:[1-9][0-9]{0,9}$/.test(handoff.get('find') || '') ? handoff.get('find') : null;
+  if (find && ['sonarr', 'radarr'].includes(handoff.get('kind'))) {
+    form.querySelector(`input[name="kind"][value="${handoff.get('kind')}"]`).checked = true;
+    term.value = handoff.get('title') || '';
+  } else {
+    find = null;
+  }
+  term.addEventListener('input', () => { find = null; });
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const kind = addKind();
-    const query = term.value.trim();
+    const query = find || term.value.trim();
+    const shown = term.value.trim() || query;
+    const exact = Boolean(find);
+    find = null;
     if (!query) return term.focus();
     const button = $('#add-submit');
     button.disabled = true;
@@ -806,8 +820,11 @@ if (page === 'add') {
       if (lastSearch.kind !== kind || lastSearch.query !== query) return;
       for (const item of data.results) addResults.set(`${kind}:${item.id}`, item);
       results.innerHTML = data.results.length
-        ? `<p class="result-count">${data.results.length} ${data.results.length === 1 ? 'match' : 'matches'} for “${esc(query)}”</p><ul class="results" data-kind="${kind}">${data.results.map(item => resultCard(item, kind)).join('')}</ul>`
-        : `<div class="empty-state"><h3>Nothing found for “${esc(query)}”</h3><p>Check the spelling, or try the original title.</p></div>`;
+        ? `<p class="result-count">${data.results.length} ${data.results.length === 1 ? 'match' : 'matches'} for “${esc(shown)}”</p><ul class="results" data-kind="${kind}">${data.results.map(item => resultCard(item, kind)).join('')}</ul>`
+        : `<div class="empty-state"><h3>Nothing found for “${esc(shown)}”</h3><p>Check the spelling, or try the original title.</p></div>`;
+      // A title picked on Discover opens straight onto its options.
+      const only = results.querySelector('.result [data-add]');
+      if (exact && data.results.length === 1 && only) openOptions(only.closest('.result'), kind);
     } catch (error) {
       results.innerHTML = `<p class="error">${esc(error.message)}</p>`;
     } finally {
@@ -845,6 +862,48 @@ if (page === 'add') {
 }
 
 let refreshing = false;
+/** "Fri 12 Dec" for upcoming dates, the year for older ones. */
+function discoverDate(item) {
+  if (!item.date) return '';
+  const when = new Date(item.date + 'T00:00:00');
+  return when > new Date() ? upcomingDay(item.date + 'T00:00:00') : String(item.year);
+}
+
+function discoverCard(item) {
+  const find = `tmdb:${item.id}`;
+  const add = `/add?${new URLSearchParams({kind: item.kind, find, title: item.title})}`;
+  return `<li class="discover-card">
+    <div class="poster-art">
+      <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
+      ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="342" height="513">` : ''}
+    </div>
+    <h3 class="poster-title" title="${esc(item.overview)}">${esc(item.title)}</h3>
+    <p class="poster-meta">${esc(discoverDate(item))}</p>
+    ${item.inLibrary ? '<span class="badge ok">In library</span>'
+      : `<a class="button button-quiet button-small" href="${esc(add)}">${icon('plus')}Add</a>`}
+  </li>`;
+}
+
+let discoverLoaded = 0;
+async function discover() {
+  // TMDB lists change slowly, so the minute-by-minute refresh doesn't reload them.
+  if (Date.now() - discoverLoaded < 15 * 60000) return;
+  const content = $('#discover-content');
+  try {
+    const data = await get('/api/discover');
+    discoverLoaded = Date.now();
+    content.innerHTML = data.rows.map(row => `<section class="discover-row" aria-labelledby="discover-${esc(row.key)}">
+      <div class="discover-head"><h2 id="discover-${esc(row.key)}">${esc(row.title)}</h2><p>${esc(row.detail)}</p></div>
+      ${row.error ? `<p class="error error-inline">${esc(row.error)}</p>`
+        : row.items.length ? `<ul class="discover-rail">${row.items.map(discoverCard).join('')}</ul>`
+        : '<p class="empty">Nothing here right now.</p>'}
+    </section>`).join('');
+    hidePosterOnError(content);
+  } catch (error) {
+    content.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+  }
+}
+
 async function refresh() {
   if (refreshing || page === 'add') return;
   refreshing = true;
@@ -852,6 +911,7 @@ async function refresh() {
   button.disabled = true;
   button.classList.add('is-busy');
   const jobs = [status()];
+  if (page === 'discover') jobs.push(discover());
   if (page === 'overview' || page === 'library') {
     jobs.push(activity());
     for (const library of Object.values(libraries)) jobs.push(loadLibrary(library));
@@ -868,6 +928,7 @@ $('#refresh').hidden = page === 'add';
 if (page === 'add') {
   status();
   $('#updated').hidden = true;
+  if (new URLSearchParams(window.location.search).has('find')) $('#add-form').requestSubmit();
 } else {
   refresh();
 }

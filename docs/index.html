@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-14">
-  <script src="./setup.js?v=wizard-14" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-15">
+  <script src="./setup.js?v=wizard-15" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -134,6 +134,14 @@
               <legend>Subtitles</legend>
               <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
             </fieldset>
+            <fieldset class="toggles">
+              <legend>Discover</legend>
+              <label class="toggle"><input id="discover" type="checkbox" checked><span><strong>Trending and upcoming titles <span class="tag">Default</span></strong><span>A Discover page with what’s trending and coming to cinemas and streaming, from TMDB. Setup asks for a free TMDB API key; leave it blank to skip.</span></span></label>
+            </fieldset>
+            <div class="field">
+              <label for="discover-region">Discover region</label>
+              <select id="discover-region"><option value="GB">United Kingdom (default)</option><option value="US">United States</option><option value="IE">Ireland</option><option value="CA">Canada</option><option value="AU">Australia</option><option value="NZ">New Zealand</option><option value="DE">Germany</option><option value="FR">France</option><option value="ES">Spain</option><option value="IT">Italy</option><option value="NL">Netherlands</option><option value="PT">Portugal</option><option value="BR">Brazil</option></select>
+            </div>
             <label class="toggle" id="route-toggle"><input id="route-vpn" type="checkbox" disabled aria-describedby="route-help"><span><strong>Route these apps through the VPN</strong><span id="route-help">Turn on the VPN gateway in the previous step to use this.</span></span></label>
           </section>
 
@@ -199,6 +207,14 @@
               <label class="toggle"><input id="u-flaresolverr" type="checkbox"><span><strong>FlareSolverr</strong><span>Helps Prowlarr reach indexers behind browser checks. Needs Prowlarr.</span></span></label>
               <label class="toggle"><input id="u-bazarr" type="checkbox"><span><strong>Bazarr</strong><span>Subtitles in English, French, Brazilian Portuguese and Spanish. Needs a media directory.</span></span></label>
             </fieldset>
+            <fieldset class="toggles">
+              <legend>Discover</legend>
+              <label class="toggle"><input id="u-discover" type="checkbox"><span><strong>Set the TMDB API key</strong><span>Turns on the Discover page, or replaces its key. Setup asks for the key; leave it blank to turn Discover off.</span></span></label>
+            </fieldset>
+            <div class="field">
+              <label for="u-discover-region">Discover region</label>
+              <select id="u-discover-region"><option value="keep">Keep the current region</option><option value="GB">United Kingdom</option><option value="US">United States</option><option value="IE">Ireland</option><option value="CA">Canada</option><option value="AU">Australia</option><option value="NZ">New Zealand</option><option value="DE">Germany</option><option value="FR">France</option><option value="ES">Spain</option><option value="IT">Italy</option><option value="NL">Netherlands</option><option value="PT">Portugal</option><option value="BR">Brazil</option></select>
+            </div>
             <div class="field">
               <label for="u-media">Media directory <small>Only if this installation doesn’t have one yet</small></label>
               <input id="u-media" type="text" placeholder="Keep the current one" spellcheck="false" aria-describedby="u-media-help">

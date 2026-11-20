@@ -253,6 +253,16 @@
     background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   }
   .search input:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 40%, transparent); outline-offset: 0; border-color: var(--accent); }
+  /* Discover: one sideways-scrolling row of posters per list. */
+  .discover { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-6); min-width: 0; }
+  .discover-row { min-width: 0; }
+  .discover-head { margin-bottom: var(--space-3); }
+  .discover-head h2 { font-size: var(--text-lg); }
+  .discover-head p { color: var(--fg-muted); font-size: var(--text-sm); }
+  .discover-rail { display: grid; grid-auto-flow: column; grid-auto-columns: clamp(132px, 15vw, 168px); gap: var(--space-4); overflow-x: auto; padding-bottom: var(--space-3); scroll-snap-type: x proximity; }
+  .discover-card { display: grid; align-content: start; gap: var(--space-1); scroll-snap-align: start; min-width: 0; }
+  .discover-card .poster-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .discover-card .badge, .discover-card .button { justify-self: start; margin-top: var(--space-1); }
   .poster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: var(--space-5) var(--space-4); }
   .poster-card { min-width: 0; }
   .poster-art {
