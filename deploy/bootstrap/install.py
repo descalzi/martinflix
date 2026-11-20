@@ -36,6 +36,9 @@ BANNER = r"""
               Home media setup
 """
 MEDIA_FOLDERS = ('TV Shows', 'Movies', 'downloads')
+# Transmission files finished downloads under its download-dir plus each app's category. It creates a category
+# folder only for the first torrent, and until then Sonarr and Radarr report the mapped path as missing.
+DOWNLOAD_FOLDERS = ('downloads/complete', 'downloads/complete/sonarr', 'downloads/complete/radarr', 'downloads/incomplete')
 DOWNLOAD_APPS = ('transmission', 'prowlarr', 'flaresolverr')
 DOWNLOAD_PORTS = {'transmission': 9091, 'prowlarr': 9696}
 CONTAINER_PORTS = {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, **DOWNLOAD_PORTS}
@@ -91,7 +94,7 @@ def media_root(value, state):
         raise ValueError('Choose a dedicated media directory separate from the checkout and installer state.')
     if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
         raise ValueError(f'The media directory must already exist and be writable: {path}')
-    for name in MEDIA_FOLDERS:
+    for name in (*MEDIA_FOLDERS, *DOWNLOAD_FOLDERS):
         folder = path / name
         if folder.is_symlink() or (folder.exists() and (
                 not folder.is_dir() or not os.access(folder, os.W_OK | os.X_OK))):
@@ -638,6 +641,9 @@ def run_installation(plan, state, previous, mode='install'):
         if media:
             for folder in MEDIA_FOLDERS:
                 (media / folder).mkdir(mode=0o700, exist_ok=True)
+            if 'transmission' in downloads:
+                for folder in DOWNLOAD_FOLDERS:
+                    (media / folder).mkdir(mode=0o700, exist_ok=True)
         if downloads:
             runtime_overlay = state / 'downloads-compose.json'
             overlay_index = next(index for index, item in enumerate(compose) if item.endswith('downloads.json'))

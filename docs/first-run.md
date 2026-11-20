@@ -58,7 +58,7 @@ Every run downloads the latest image for each app and rebuilds the dashboard on 
 
 ## Media and downloads
 
-Use a dedicated directory for your media. It can be a mounted NAS share or a directory on the VM. Set up the mount first if you use a share, and make sure your normal account can write there. The installer creates missing `TV Shows`, `Movies`, and `downloads` directories inside it.
+Use a dedicated directory for your media. It can be a mounted NAS share or a directory on the VM. Set up the mount first if you use a share, and make sure your normal account can write there. The installer creates missing `TV Shows`, `Movies`, and `downloads` directories inside it. With Transmission it also creates `downloads/complete/sonarr`, `downloads/complete/radarr` and `downloads/incomplete`, so Sonarr and Radarr find their download folders before the first torrent finishes. Downloads and the library share one mount, so imports can use hard links instead of copies.
 
 For library folders without the download services, pass only `--media-path`. To install the download services too, run the following in a terminal. Replace the sample path and use your usual `--dashboard-bind` option if you access the dashboard from another device.
 

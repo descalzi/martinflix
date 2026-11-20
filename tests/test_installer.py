@@ -82,6 +82,13 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(settings['rpc-password'], '')
         self.assertTrue(settings['incomplete-dir-enabled'])
 
+    def test_media_check_covers_the_download_category_folders(self):
+        media = self.root / 'media'
+        (media / 'downloads/complete').mkdir(parents=True)
+        (media / 'downloads/complete/sonarr').symlink_to(self.root)
+        with self.assertRaisesRegex(ValueError, 'cannot be a link'):
+            self.plan(media_path=str(media))
+
     def test_transmission_requires_media(self):
         with self.assertRaisesRegex(ValueError, 'media directory'):
             self.plan(download_client='transmission')
