@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import tempfile
+import urllib.parse
 import subprocess
 import unittest
 from pathlib import Path
@@ -54,9 +55,10 @@ class PasswordSyncTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile('w', delete=False) as secret:
             secret.write('old-transmission-password-that-is-long')
         environment = {
-            'MARTINFLIX_ARR_COMPOSE_NETWORK': '1', 'MARTINFLIX_DOWNLOAD_APPS': 'transmission,prowlarr,flaresolverr',
+            'MARTINFLIX_ARR_COMPOSE_NETWORK': '1', 'MARTINFLIX_DOWNLOAD_APPS': 'transmission,prowlarr,flaresolverr,bazarr',
             'MARTINFLIX_DOWNLOAD_GATEWAY': '', 'MARTINFLIX_TRANSMISSION_PASSWORD_FILE': secret.name,
             'MARTINFLIX_SONARR_KEY': 's', 'MARTINFLIX_RADARR_KEY': 'r', 'MARTINFLIX_PROWLARR_KEY': 'p',
+            'MARTINFLIX_BAZARR_KEY': 'b',
             'MARTINFLIX_SONARR_URL': 'http://sonarr:8989', 'MARTINFLIX_RADARR_URL': 'http://radarr:7878',
         }
         writes = []
@@ -66,6 +68,8 @@ class PasswordSyncTests(unittest.TestCase):
             if method == 'PUT':
                 writes.append((base, endpoint, payload))
                 body = b''
+            elif endpoint == '/api/system/settings':
+                body = json.dumps({'auth': {'type': None}}).encode()
             elif endpoint.endswith('/config/host'):
                 username = '' if 'prowlarr' in base else 'admin'
                 body = json.dumps({'id': 1, 'username': username, 'authenticationMethod': 'forms' if username else 'none'}).encode()
@@ -76,12 +80,22 @@ class PasswordSyncTests(unittest.TestCase):
                                    {'id': 8, 'name': 'Other', 'implementation': 'Transmission', 'fields': []}]).encode()
             return MagicMock(__enter__=lambda self: io.BytesIO(body), __exit__=lambda *args: False)
 
+        bazarr_posts = []
+
+        def fake_bazarr(request, timeout):
+            bazarr_posts.append((request.full_url, urllib.parse.parse_qs(request.data.decode()), request.get_header('X-api-key')))
+            return MagicMock(__enter__=lambda self: self, __exit__=lambda *args: False)
+
         try:
-            with patch.dict('os.environ', environment, clear=True), patch.object(server, 'arr_open', side_effect=fake_open):
-                self.assertEqual(server.synced_apps(), ['sonarr', 'radarr', 'prowlarr', 'transmission'])
-                self.assertEqual(server.app_list(), 'Sonarr, Radarr, Prowlarr and Transmission')
+            with patch.dict('os.environ', environment, clear=True), patch.object(server, 'arr_open', side_effect=fake_open), \
+                    patch.object(server.ARR_OPENER, 'open', side_effect=fake_bazarr):
+                self.assertEqual(server.synced_apps(), ['sonarr', 'radarr', 'prowlarr', 'bazarr', 'transmission'])
+                self.assertEqual(server.app_list(), 'Sonarr, Radarr, Prowlarr, Bazarr and Transmission')
                 server.sync_app_passwords('new shared password')
             self.assertEqual(Path(secret.name).read_text(), 'new shared password')
+            self.assertEqual(bazarr_posts, [('http://bazarr:6767/api/system/settings', {
+                'settings-auth-type': ['form'], 'settings-auth-username': ['admin'],
+                'settings-auth-password': ['new shared password']}, 'b')])
         finally:
             os.unlink(secret.name)
         hosts = {base: payload for base, endpoint, payload in writes if 'config/host' in endpoint}

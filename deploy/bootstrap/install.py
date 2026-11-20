@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
-from configure import AppApi, TransmissionRpc, configure_apps, ensure_arr_login, seed_transmission_defaults
+from configure import (AppApi, BazarrApi, TransmissionRpc, configure_apps, configure_bazarr, ensure_arr_login,
+                       ensure_bazarr_login, seed_transmission_defaults)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
 APPS = ('sonarr', 'radarr')
@@ -39,8 +40,10 @@ MEDIA_FOLDERS = ('TV Shows', 'Movies', 'downloads')
 # Transmission files finished downloads under its download-dir plus each app's category. It creates a category
 # folder only for the first torrent, and until then Sonarr and Radarr report the mapped path as missing.
 DOWNLOAD_FOLDERS = ('downloads/complete', 'downloads/complete/sonarr', 'downloads/complete/radarr', 'downloads/incomplete')
-DOWNLOAD_APPS = ('transmission', 'prowlarr', 'flaresolverr')
-DOWNLOAD_PORTS = {'transmission': 9091, 'prowlarr': 9696}
+DOWNLOAD_APPS = ('transmission', 'prowlarr', 'flaresolverr', 'bazarr')
+# --enable-downloads and installs made before Bazarr joined mean exactly these three.
+LEGACY_DOWNLOADS = ('transmission', 'prowlarr', 'flaresolverr')
+DOWNLOAD_PORTS = {'transmission': 9091, 'prowlarr': 9696, 'bazarr': 6767}
 CONTAINER_PORTS = {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, **DOWNLOAD_PORTS}
 DEFAULT_PORTS = {**CONTAINER_PORTS, 'transmission_peer': 51155}
 TRANSMISSION_SETTINGS = Path(__file__).resolve().with_name('transmission-settings.json')
@@ -177,6 +180,49 @@ def write_secret(path, value, trailing_newline=True, in_place=False):
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def bazarr_setting(state_dir, section, key):
+    """Read one top-level section value from Bazarr's config.yaml without a YAML library."""
+    try:
+        lines = (state_dir / 'config/config.yaml').read_text().splitlines()
+    except FileNotFoundError:
+        return None
+    inside = False
+    for line in lines:
+        if not line.startswith((' ', '\t')):
+            inside = line.rstrip() == f'{section}:'
+            continue
+        name, _, value = line.strip().partition(':')
+        if inside and name == key:
+            value = value.strip().strip('\'"')
+            return None if value in ('', 'null') else value
+    return None
+
+
+def bazarr_needs_login(state_dir):
+    return bazarr_setting(state_dir, 'auth', 'type') not in ('form', 'basic')
+
+
+def wait_for_bazarr_key(state_dir):
+    for _ in range(60):
+        key = bazarr_setting(state_dir, 'auth', 'apikey')
+        if key:
+            return key
+        time.sleep(1)
+    raise ValueError('Bazarr did not write its API key in time. Check its Compose logs and rerun.')
+
+
+def opensubtitles_login():
+    """OpenSubtitles.com is the one enabled subtitle provider that needs an account. Blank skips it."""
+    if not sys.stdin.isatty():
+        return None
+    print('Bazarr can search OpenSubtitles.com with your account. Leave the username blank to skip it.', flush=True)
+    username = input('OpenSubtitles.com username: ').strip()
+    if not username:
+        return None
+    password = getpass.getpass('OpenSubtitles.com password: ')
+    return (username, password) if password else None
 
 
 def wait_for_key(path):
@@ -342,7 +388,7 @@ def reset_installation(state, project):
                         'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
         managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
-                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission')
+                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr')
         moved = []
         try:
             for name in managed:
@@ -365,20 +411,24 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     if old_media and str(media) != old_media:
         raise ValueError('This installation already uses a media directory. Move or remount it at the same path, '
                          'or use a separate --state-dir for a different library.')
-    enabled = set(previous.get('download_apps', DOWNLOAD_APPS if previous.get('downloads') else ()))
+    enabled = set(previous.get('download_apps', LEGACY_DOWNLOADS if previous.get('downloads') else ()))
     if args.enable_downloads:
-        enabled.update(DOWNLOAD_APPS)
+        enabled.update(LEGACY_DOWNLOADS)
     if args.download_client:
         enabled.add(args.download_client)
     if args.enable_prowlarr:
         enabled.add('prowlarr')
     if args.enable_flaresolverr:
         enabled.add('flaresolverr')
+    if args.enable_bazarr:
+        enabled.add('bazarr')
     downloads = [app for app in DOWNLOAD_APPS if app in enabled]
     if 'flaresolverr' in enabled and 'prowlarr' not in enabled:
         raise ValueError('Choose --enable-prowlarr to install FlareSolverr alongside Prowlarr.')
     if 'transmission' in enabled and not media:
         raise ValueError('To install Transmission, specify your dedicated media directory with --media-path.')
+    if 'bazarr' in enabled and not media:
+        raise ValueError('Bazarr saves subtitles beside your videos. Specify your media directory with --media-path.')
     if args.download_network and not downloads:
         raise ValueError('Select a download app before choosing its network route.')
     previous_network = previous.get('download_network') or ('vpn' if previous.get('downloads') else None)
@@ -438,7 +488,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     if vpn or downloads:
         check_directory(state / 'download-secrets')
     bootstrapping_arr = fresh_arr or any(arr_needs_login(state / app / 'config.xml') for app in APPS)
-    bootstrapping_prowlarr = 'prowlarr' in downloads and (fresh_arr or arr_needs_login(state / 'prowlarr/config.xml'))
+    # Prowlarr and Bazarr start without a login, so they stay on loopback until setup has given them one.
+    bootstrapping_prowlarr = (('prowlarr' in downloads and (fresh_arr or arr_needs_login(state / 'prowlarr/config.xml')))
+                              or ('bazarr' in downloads and (fresh_arr or bazarr_needs_login(state / 'bazarr'))))
     environment['MARTINFLIX_DOWNLOAD_BIND'] = str(bind)
     bindings = [(service, str(bind), port) for service, port in ports.items() if service != 'transmission_peer']
     if 'transmission_peer' in ports and download_network != 'vpn':
@@ -514,7 +566,7 @@ def install(args, overlay_file):
 def current_settings(options):
     """Describe a saved installation the same way as a plan, for comparison."""
     vpn = bool(options.get('vpn'))
-    apps = list(options.get('download_apps', DOWNLOAD_APPS if options.get('downloads') else ()))
+    apps = list(options.get('download_apps', LEGACY_DOWNLOADS if options.get('downloads') else ()))
     return {
         'Address': options.get('dashboard_bind') or '127.0.0.1',
         'Media directory': options.get('media_path') or 'Not set',
@@ -538,7 +590,7 @@ def keep_flags(options):
             flags += ['--vpn-city', options['vpn_city']]
         elif options.get('vpn_country'):
             flags += ['--vpn-country', options['vpn_country']]
-    apps = options.get('download_apps', DOWNLOAD_APPS if options.get('downloads') else ())
+    apps = options.get('download_apps', LEGACY_DOWNLOADS if options.get('downloads') else ())
     if 'transmission' in apps:
         flags += ['--download-client', 'transmission']
     if 'prowlarr' in apps:
@@ -635,6 +687,8 @@ def run_installation(plan, state, previous, mode='install'):
         personal_password_set = (auth_dir / 'password-hash').is_file()
         if vpn:
             prepare_vpn_secrets(state / 'download-secrets')
+        seed_bazarr = 'bazarr' in downloads and not options.get('bazarr_defaults_applied')
+        opensubtitles = opensubtitles_login() if seed_bazarr else None
         transmission_password = (prepare_transmission_password(state / 'download-secrets', temporary_password,
                                                                personal_password_set)
                                  if 'transmission' in enabled else None)
@@ -692,12 +746,25 @@ def run_installation(plan, state, previous, mode='install'):
             write_secret(secret_dir / 'prowlarr-key', prowlarr_key)
             ensure_arr_login(AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=download_address),
                              lambda: temporary_password)
+        bazarr = None
+        if 'bazarr' in enabled:
+            bazarr_key = wait_for_bazarr_key(state / 'bazarr')
+            write_secret(secret_dir / 'bazarr-key', bazarr_key)
+            bazarr = BazarrApi(download_address, ports['bazarr'], bazarr_key)
+            ensure_bazarr_login(bazarr, lambda: temporary_password)
         if download_address != str(bind):
             download_address = str(bind)
             environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
             compose_step('   Opening the protected download app logins on your LAN…',
                          ['up', '-d', '--wait', '--wait-timeout', '210', *services])
+            if bazarr:
+                bazarr = BazarrApi(download_address, ports['bazarr'], bazarr.key)
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
+        if bazarr:
+            configure_bazarr(bazarr, arr_keys, seed=seed_bazarr, opensubtitles=opensubtitles)
+            if seed_bazarr:
+                options['bazarr_defaults_applied'] = True
+                write_secret(state / 'install-options.json', json.dumps(options))
         if 'transmission' in downloads and not options.get('transmission_defaults_applied'):
             seed_transmission_defaults(TransmissionRpc(download_address, ports['transmission'], 'admin', transmission_password))
             options['transmission_defaults_applied'] = True
@@ -736,8 +803,8 @@ for app in ('sonarr', 'radarr'):
         print('Password  Run this on the VM to show your temporary password:')
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
-    names = ['Sonarr', 'Radarr', *(name for app, name in (('prowlarr', 'Prowlarr'), ('transmission', 'Transmission'))
-                                   if app in enabled)]
+    names = ['Sonarr', 'Radarr', *(name for app, name in (('prowlarr', 'Prowlarr'), ('transmission', 'Transmission'),
+                                                          ('bazarr', 'Bazarr')) if app in enabled)]
     listed = ', '.join(names[:-1]) + ' and ' + names[-1]
     print('\nApp sign-in')
     if personal_password_set:
@@ -760,7 +827,7 @@ for app in ('sonarr', 'radarr'):
         print(f'FlareSolverr proxy address inside Prowlarr: http://{flare_host}:8191')
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state-dir', type=Path,
                         help='Where app data is stored. Defaults to ~/.local/state/martinflix for new installs.')
@@ -779,6 +846,9 @@ def main():
     parser.add_argument('--download-client', choices=['transmission'])
     parser.add_argument('--enable-prowlarr', action='store_true')
     parser.add_argument('--enable-flaresolverr', action='store_true')
+    parser.add_argument('--enable-bazarr', action='store_true',
+                        help='Install Bazarr for subtitles. Requires --media-path. Follows the download network route.')
+    parser.add_argument('--bazarr-port', type=int)
     parser.add_argument('--prowlarr-port', type=int)
     parser.add_argument('--transmission-port', type=int)
     parser.add_argument('--transmission-peer-port', type=int,
@@ -792,6 +862,11 @@ def main():
                       help='Update an existing installation using its saved settings. Fails if no installation is found.')
     mode.add_argument('--reset', action='store_true',
                       help='Archive this installation’s app data and credentials, then start fresh. Requires confirmation.')
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     if sys.platform != 'linux':
         parser.exit(1, 'Run this installer on a Linux VM.\n')

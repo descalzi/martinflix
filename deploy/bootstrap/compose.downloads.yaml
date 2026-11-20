@@ -73,6 +73,28 @@ services:
       retries: 15
       start_period: 20s
 
+  bazarr:
+    profiles: [bazarr]
+    image: lscr.io/linuxserver/bazarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${MARTINFLIX_UID}"
+      PGID: "${MARTINFLIX_GID}"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/bazarr:/config"
+      # Same /data paths as Sonarr and Radarr, so Bazarr needs no path mappings.
+      - type: bind
+        source: ${MARTINFLIX_MEDIA_PATH}
+        target: /data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:6767/api/system/ping]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 30s
+
 secrets:
   transmission_password:
     file: "${MARTINFLIX_STATE_DIR}/download-secrets/transmission_password"

@@ -2,6 +2,7 @@
 import base64
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 PROFILE_NAME = 'MartinFlix HD (720p/1080p)'
@@ -31,6 +32,49 @@ TRANSMISSION_SESSION = {
     'lpd-enabled': True,
     'peer-limit-per-torrent': 75,
 }
+# The reference host's Bazarr choices. Settings use Bazarr's own form names; subzero-* switch subtitle clean-up mods.
+BAZARR_PROVIDERS = ['supersubtitles', 'yifysubtitles', 'tvsubtitles', 'subtitulamostv', 'opensubtitlescom',
+                    'embeddedsubtitles']
+BAZARR_SETTINGS = {
+    'settings-analytics-enabled': 'false',
+    'settings-general-adaptive_searching': 'false',
+    'settings-general-days_to_upgrade_subs': '20',
+    'settings-general-dont_notify_manual_actions': 'true',
+    'settings-general-embedded_subs_show_desired': 'false',
+    'settings-general-language_equals': ['spa:spl', 'spl:spa'],
+    'settings-general-serie_default_enabled': 'true',
+    'settings-general-serie_default_profile': '1',
+    'settings-general-movie_default_enabled': 'true',
+    'settings-general-movie_default_profile': '1',
+    'settings-general-upgrade_frequency': '24',
+    'settings-general-upgrade_manual': 'false',
+    'settings-opensubtitlescom-include_ai_translated': 'true',
+    'settings-sonarr-series_sync': '180',
+    'settings-sonarr-full_update_hour': '2',
+    'settings-radarr-movies_sync': '180',
+    'settings-radarr-full_update_hour': '3',
+    'settings-subsync-use_subsync': 'true',
+    'settings-subsync-no_fix_framerate': 'false',
+    'subzero-remove_HI': 'true',
+    'subzero-common': 'true',
+    'subzero-remove_tags': 'true',
+}
+BAZARR_LANGUAGES = ['en', 'fr', 'pb', 'es', 'ea']
+
+
+def bazarr_profile_item(item_id, language):
+    return {'id': item_id, 'language': language, 'audio_exclude': 'False', 'hi': 'False', 'forced': 'False',
+            'audio_only_include': 'False'}
+
+
+BAZARR_PROFILES = [
+    {'profileId': 1, 'name': 'All Languages', 'cutoff': None, 'mustContain': [], 'mustNotContain': [],
+     'originalFormat': 0, 'tag': None,
+     'items': [bazarr_profile_item(number, code) for number, code in ((2, 'ea'), (3, 'pb'), (4, 'en'), (5, 'fr'))]},
+    {'profileId': 2, 'name': 'Not-English', 'cutoff': None, 'mustContain': [], 'mustNotContain': [],
+     'originalFormat': 0, 'tag': None,
+     'items': [bazarr_profile_item(number, code) for number, code in ((1, 'pb'), (2, 'ea'))]},
+]
 RELEASE_PROFILES = {
     'sonarr': [('Bad Stuff', True, ['MeGusta', 'scr', 'exe', 'ETHEL'])],
     'radarr': [('No OPUS', False, ['Opus']), ('No HEVC', False, ['HEVC'])],
@@ -120,6 +164,78 @@ def refresh_health(api):
         api.request('command', {'name': 'CheckHealth'})
     except ValueError:
         print(f'   {api.name}: its health checks will refresh on their own schedule.', flush=True)
+
+
+class BazarrApi:
+    """Bazarr's settings API takes form fields rather than JSON, and an X-API-KEY header."""
+
+    def __init__(self, address, port, key):
+        self.name = 'Bazarr'
+        self.base = f'http://{address}:{port}/api/'
+        self.key = key
+
+    def get_settings(self):
+        request = urllib.request.Request(self.base + 'system/settings', headers={'X-API-KEY': self.key, 'Accept': 'application/json'})
+        try:
+            with OPENER.open(request, timeout=30) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            raise AppApiHttpError(self.name, 'system/settings', exc.code) from None
+        except (OSError, ValueError):
+            raise ValueError('Bazarr: could not read its settings. Check the app is running and rerun.') from None
+
+    def save(self, fields):
+        """Fields are (name, value) pairs; repeated names carry Bazarr's list settings."""
+        body = urllib.parse.urlencode(fields).encode()
+        request = urllib.request.Request(self.base + 'system/settings', data=body, method='POST', headers={
+            'X-API-KEY': self.key, 'Content-Type': 'application/x-www-form-urlencoded'})
+        try:
+            with OPENER.open(request, timeout=60) as response:
+                response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors='replace').strip()[:200]
+            exc.close()
+            raise ValueError(f'Bazarr rejected its settings (HTTP {exc.code}){": " + detail if detail else ""}.') from None
+        except OSError:
+            raise ValueError('Bazarr: could not save its settings. Check the app is running and rerun.') from None
+
+
+def form_fields(settings):
+    fields = []
+    for name, value in settings.items():
+        fields.extend((name, item) for item in value) if isinstance(value, list) else fields.append((name, value))
+    return fields
+
+
+def ensure_bazarr_login(api, initial_password):
+    if (api.get_settings().get('auth') or {}).get('type') in ('form', 'basic'):
+        return
+    api.save([('settings-auth-type', 'form'), ('settings-auth-username', 'admin'),
+              ('settings-auth-password', initial_password())])
+
+
+def configure_bazarr(api, arr_keys, *, seed=False, opensubtitles=None):
+    """Connect Bazarr to Sonarr and Radarr on every run; apply the reference choices once."""
+    fields = []
+    for app in ('sonarr', 'radarr'):
+        # Bazarr reaches both apps by their Compose service names on the stack's network.
+        fields += [(f'settings-general-use_{app}', 'true'), (f'settings-{app}-ip', app),
+                   (f'settings-{app}-port', str(ARR_PORTS[app])), (f'settings-{app}-base_url', ''),
+                   (f'settings-{app}-ssl', 'false'), (f'settings-{app}-apikey', arr_keys[app])]
+    if seed:
+        providers = [name for name in BAZARR_PROVIDERS if name != 'opensubtitlescom' or opensubtitles]
+        fields += form_fields({**BAZARR_SETTINGS, 'settings-general-enabled_providers': providers})
+        if opensubtitles:
+            fields += [('settings-opensubtitlescom-username', opensubtitles[0]),
+                       ('settings-opensubtitlescom-password', opensubtitles[1])]
+        fields += [('languages-enabled', code) for code in BAZARR_LANGUAGES]
+        fields.append(('languages-profiles', json.dumps(BAZARR_PROFILES)))
+    api.save(fields)
+    if seed:
+        print('   Bazarr: subtitle providers, languages and the "All Languages" and "Not-English" profiles are set.', flush=True)
+        if not opensubtitles:
+            print('   Bazarr: OpenSubtitles.com is off. Add your login under Settings → Providers to turn it on.', flush=True)
 
 
 def ensure_arr_login(api, initial_password):

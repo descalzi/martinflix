@@ -28,13 +28,13 @@ Radarr gets **No OPUS** and **No HEVC**, both disabled to match the reference se
 
 New Radarr installations start with a maximum release size of 4,500 MB, an availability delay of 1 day, and an RSS sync interval of 120 minutes. Rerunning setup preserves your Radarr indexer settings.
 
-The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, and Transmission use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
+The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
 
 Existing logins are preserved when you rerun the installer. Installations made before every app shared the dashboard password switch Transmission to the `admin` username and keep its old password; use **Change password** once to bring every app onto your password.
 
 Transmission has no API for changing its own password, so a small `transmission-auth` container applies password changes. It shares Transmission’s process namespace, has no network or capabilities, and makes Transmission reload its settings without stopping downloads.
 
-The dashboard, Sonarr, Radarr, Prowlarr, and Transmission publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
+The dashboard, Sonarr, Radarr, Prowlarr, Transmission, and Bazarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
 
 ### Start from scratch
 
@@ -82,10 +82,23 @@ The VPN option requires `/dev/net/tun` and [manual OpenVPN service credentials f
 - Sonarr and Radarr use separate `sonarr` and `radarr` Transmission categories and map Transmission’s `/downloads` path to the shared `/data/downloads` folder for imports.
 - Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. For indexers that need FlareSolverr, add its proxy in Prowlarr with the address printed by setup, then apply its tag to those indexers. Setup leaves indexer credentials and searches under your control.
 
-Select individual apps with `--download-client transmission`, `--enable-prowlarr`, and `--enable-flaresolverr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects all three.
+### Subtitles with Bazarr
+
+Add `--enable-bazarr` (with `--media-path`) to install Bazarr on port 6767. It uses the same network route as the download apps and sees the media directory at `/data`, the same as Sonarr and Radarr, so no path mappings are needed. Setup connects it to Sonarr and Radarr and gives it the shared `admin` login. On first install it applies the reference host's choices:
+
+- **Providers:** Supersubtitles, YIFY Subtitles, TVsubtitles, Subtitulamos.tv, OpenSubtitles.com, and subtitles already embedded in the video.
+- **Languages:** English, French, Portuguese (Brazil), Spanish and Spanish (Latino), with the two Spanish variants treated as equal.
+- **Profiles:** "All Languages" (Latino Spanish, Brazilian Portuguese, English, French), used by default for new series and films, and "Not-English" (Brazilian Portuguese, Latino Spanish).
+- **Subtitle handling:** subtitles are cleaned of hearing-impaired tags, common errors and formatting tags, and timed to the video with subsync.
+- **Upgrades:** better subtitles are looked for over 20 days, once every 24 hours.
+- **Sync:** Sonarr and Radarr are synced every 180 minutes.
+
+OpenSubtitles.com needs an account, so setup asks for its username and password in the terminal. Leave the username blank to skip it; the other providers still work, and you can add the login later under Bazarr's **Settings → Providers**. Later changes you make in Bazarr are kept.
+
+Select individual apps with `--download-client transmission`, `--enable-prowlarr`, `--enable-flaresolverr`, and `--enable-bazarr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects Transmission, Prowlarr, and FlareSolverr.
 
 The first run with Prowlarr adds eight public indexers from the reference setup using Prowlarr’s built-in definitions. Setup reports any unavailable definitions and leaves indexers disabled if Prowlarr rejects them during validation. Existing indexers are preserved, and later reruns respect indexers you remove.
 
 The media path and enabled download services are remembered when you rerun setup. The installer fills in missing connections and preserves existing named records, including any edits you make in the apps. A different media root requires a separate installation or a planned storage migration.
 
-The dashboard checks whether the configured services respond over the Compose network. Full Docker status collection, Bazarr, and additional download clients are separate installer stages. To request titles, use the dashboard’s **Add** page instead of a separate request app. The existing-host deployment has its own Compose files, status collector, and recovery process.
+The dashboard checks whether the configured services respond over the Compose network. Full Docker status collection and additional download clients are separate installer stages. To request titles, use the dashboard’s **Add** page instead of a separate request app. The existing-host deployment has its own Compose files, status collector, and recovery process.

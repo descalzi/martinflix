@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-9">
-  <script src="./setup.js?v=wizard-9" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-10">
+  <script src="./setup.js?v=wizard-10" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -119,7 +119,7 @@
           </section>
 
           <section class="step" data-step="downloads" aria-labelledby="downloads-title" hidden>
-            <h2 id="downloads-title" tabindex="-1">Downloads and indexers</h2>
+            <h2 id="downloads-title" tabindex="-1">Downloads, indexers and subtitles</h2>
             <div class="field">
               <label for="download-client">Download client</label>
               <select id="download-client" aria-describedby="client-help"><option value="">Set up later</option><option value="transmission">Transmission</option></select>
@@ -129,6 +129,10 @@
               <legend>Indexers</legend>
               <label class="toggle"><input id="prowlarr" type="checkbox" checked><span><strong>Prowlarr <span class="tag">Default</span></strong><span>Manages indexers and syncs them to Sonarr and Radarr.</span></span></label>
               <label class="toggle"><input id="flaresolverr" type="checkbox" checked aria-describedby="flaresolverr-help"><span><strong>FlareSolverr <span class="tag">Default</span></strong><span id="flaresolverr-help">Helps Prowlarr reach indexers behind browser checks. Needs Prowlarr.</span></span></label>
+            </fieldset>
+            <fieldset class="toggles">
+              <legend>Subtitles</legend>
+              <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default with media</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
             </fieldset>
             <label class="toggle" id="route-toggle"><input id="route-vpn" type="checkbox" disabled aria-describedby="route-help"><span><strong>Route these apps through the VPN</strong><span id="route-help">Turn on the VPN gateway in the previous step to use this.</span></span></label>
           </section>

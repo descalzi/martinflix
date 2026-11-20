@@ -9,6 +9,7 @@ const portOptions = [
   ['prowlarr', 'Prowlarr', 9696],
   ['transmission', 'Transmission', 9091],
   ['transmission-peer', 'Transmission peer', 51155],
+  ['bazarr', 'Bazarr', 6767],
 ];
 const STEPS = {
   new: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
@@ -46,7 +47,8 @@ function checkPath(value, label) {
 }
 
 function enabledPorts(options) {
-  return portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name.startsWith('transmission') ? options.downloader : true);
+  return portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name.startsWith('transmission')
+    ? options.downloader : name === 'bazarr' ? options.bazarr : true);
 }
 
 function checkPorts(options) {
@@ -68,6 +70,9 @@ function validateStep(step, options) {
   if (step === 'media') checkPath(options.media, 'Media directory');
   if (step === 'downloads' && options.downloader && !options.media) {
     throw new Error('Transmission needs a media directory. Add one in the Media step or choose “Set up later”.');
+  }
+  if (step === 'downloads' && options.bazarr && !options.media) {
+    throw new Error('Bazarr needs a media directory. Add one in the Media step or turn Bazarr off.');
   }
   if (step === 'options') {
     checkPath(options.state, 'State directory');
@@ -96,7 +101,8 @@ function installArguments(options) {
   if (options.downloader) args.push('--download-client=' + shellQuote(options.downloader));
   if (options.prowlarr) args.push('--enable-prowlarr');
   if (options.prowlarr && options.flaresolverr) args.push('--enable-flaresolverr');
-  if (options.downloader || options.prowlarr) args.push('--download-network=' + (options.behindVpn ? 'vpn' : 'direct'));
+  if (options.bazarr) args.push('--enable-bazarr');
+  if (options.downloader || options.prowlarr || options.bazarr) args.push('--download-network=' + (options.behindVpn ? 'vpn' : 'direct'));
   for (const [name, , fallback] of enabledPorts(options)) {
     const raw = options.ports[name] ?? '';
     if (raw !== '' && Number(raw) !== fallback) args.push('--' + name + '-port=' + Number(raw));
@@ -167,6 +173,8 @@ if (typeof document !== 'undefined') {
       downloader: byId('download-client').value,
       prowlarr: byId('prowlarr').checked,
       flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
+      // Bazarr needs the media directory, so it only counts once one is set.
+      bazarr: byId('bazarr').checked && Boolean(byId('media').value.trim()),
       behindVpn: byId('vpn').checked && preferVpnRoute,
       state: (update ? byId('state-update') : byId('state')).value.trim(),
       ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
@@ -271,7 +279,8 @@ if (typeof document !== 'undefined') {
       summary.push(['Open apps from', options.lan ? options.address : 'The Linux host only']);
       summary.push(['Media directory', options.media || 'Not yet']);
       summary.push(['VPN', options.vpn ? `NordVPN · ${byId('vpn-exit').selectedOptions[0].textContent.replace(' (default)', '')}` : 'Not installed']);
-      const apps = [options.downloader && 'Transmission', options.prowlarr && 'Prowlarr', options.flaresolverr && 'FlareSolverr'].filter(Boolean);
+      const apps = [options.downloader && 'Transmission', options.prowlarr && 'Prowlarr', options.flaresolverr && 'FlareSolverr',
+        options.bazarr && 'Bazarr'].filter(Boolean);
       summary.push(['Download apps', apps.join(', ') || 'None yet']);
       if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
       summary.push(['State directory', options.state || 'Default location']);
@@ -303,7 +312,11 @@ if (typeof document !== 'undefined') {
     for (const path of document.querySelectorAll('[data-media-folder]')) path.textContent = mediaBase + '/' + path.dataset.mediaFolder;
     byId('lan-options').hidden = !options.lan;
     byId('vpn-options').hidden = !options.vpn;
-    const hasDownloadApps = Boolean(options.downloader || options.prowlarr);
+    const hasDownloadApps = Boolean(options.downloader || options.prowlarr || options.bazarr);
+    byId('bazarr').disabled = !options.media;
+    byId('bazarr-help').textContent = options.media
+      ? 'Finds subtitles in English, French, Brazilian Portuguese and Spanish, and saves them beside your videos.'
+      : 'Needs the media directory from the Media step.';
     byId('flaresolverr').disabled = !options.prowlarr;
     route.disabled = !options.vpn || !hasDownloadApps;
     route.checked = !route.disabled && preferVpnRoute;
@@ -314,6 +327,7 @@ if (typeof document !== 'undefined') {
     byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
     byId('transmission-port').parentElement.hidden = !options.downloader;
     byId('transmission-peer-port').parentElement.hidden = !options.downloader;
+    byId('bazarr-port').parentElement.hidden = !options.bazarr;
     byId('commands-lede').textContent = options.mode === 'new'
       ? 'Run these on the Linux host as your normal user, not with sudo.'
       : 'Run these in your existing MartinFlix checkout, as the account that installed it.';

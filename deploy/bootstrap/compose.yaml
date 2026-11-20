@@ -51,6 +51,7 @@ services:
       MARTINFLIX_SONARR_KEY_FILE: /run/dashboard-secrets/sonarr-key
       MARTINFLIX_RADARR_KEY_FILE: /run/dashboard-secrets/radarr-key
       MARTINFLIX_PROWLARR_KEY_FILE: /run/dashboard-secrets/prowlarr-key
+      MARTINFLIX_BAZARR_KEY_FILE: /run/dashboard-secrets/bazarr-key
       MARTINFLIX_ARR_COMPOSE_NETWORK: "1"
       MARTINFLIX_SONARR_URL: http://sonarr:8989
       MARTINFLIX_RADARR_URL: http://radarr:7878

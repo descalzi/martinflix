@@ -108,6 +108,8 @@ def container_status():
         probes['prowlarr'] = (f'http://{"gluetun" if behind_vpn else "prowlarr"}:9696/ping', 200)
     if 'flaresolverr' in downloads:
         probes['flaresolverr'] = (f'http://{"gluetun" if behind_vpn else "flaresolverr"}:8191/', 200)
+    if 'bazarr' in downloads:
+        probes['bazarr'] = (f'http://{"gluetun" if behind_vpn else "bazarr"}:6767/api/system/ping', 200)
     services = []
     for name, (url, expected) in probes.items():
         try:
@@ -133,9 +135,10 @@ def arr_connection(kind, *, prowlarr_via_vpn=False):
         return None
     default = f'http://127.0.0.1:{ARR_HEALTH_ENDPOINTS[kind][0]}'
     compose_base = ARR_COMPOSE_ADDRESSES.get(kind)
-    if kind == 'prowlarr' and os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1':
-        host = 'gluetun' if prowlarr_via_vpn else 'prowlarr'
-        compose_base = default = f'http://{host}:9696'
+    if kind in ('prowlarr', 'bazarr') and os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1':
+        # Download apps share Gluetun's network when they route through the VPN.
+        host = 'gluetun' if prowlarr_via_vpn else kind
+        compose_base = default = f'http://{host}:{ARR_HEALTH_ENDPOINTS[kind][0]}'
     base = os.environ.get('MARTINFLIX_' + kind.upper() + '_URL', default)
     # The first-run Compose project has fixed Arr service names on its private bridge.
     if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1' and base == compose_base:
@@ -170,6 +173,8 @@ def synced_apps():
     apps = ['sonarr', 'radarr']
     if 'prowlarr' in downloads:
         apps.append('prowlarr')
+    if 'bazarr' in downloads:
+        apps.append('bazarr')
     if 'transmission' in downloads and os.environ.get('MARTINFLIX_TRANSMISSION_PASSWORD_FILE'):
         apps.append('transmission')
     return apps
@@ -184,7 +189,7 @@ def sync_app_passwords(password):
     apps = synced_apps()
     _, behind_vpn, _ = installer_downloads()
     hosts = []
-    for kind in (app for app in apps if app != 'transmission'):
+    for kind in (app for app in apps if app not in ('transmission', 'bazarr')):
         connection = arr_connection(kind, prowlarr_via_vpn=behind_vpn)
         if connection is None:
             raise ValueError('Missing application API key')
@@ -197,6 +202,14 @@ def sync_app_passwords(password):
             config.update(username=ADMIN_APP_USER, authenticationMethod='forms', authenticationRequired='enabled')
         config.update(password=password, passwordConfirmation=password)
         hosts.append((connection, f'/api/{version}/config/host/{config["id"]}', config))
+    bazarr = None
+    if 'bazarr' in apps:
+        bazarr = arr_connection('bazarr', prowlarr_via_vpn=behind_vpn)
+        if bazarr is None:
+            raise ValueError('Missing application API key')
+        with arr_open(bazarr, '/api/system/settings') as response:
+            if not isinstance(json.load(response), dict):
+                raise ValueError('Invalid Bazarr settings')
     clients = []
     if 'transmission' in apps:
         for kind in ARR_COMPOSE_ADDRESSES:
@@ -213,6 +226,15 @@ def sync_app_passwords(password):
                     clients.append((connection, f'/api/v3/downloadclient/{entry["id"]}?forceSave=true', entry))
     for connection, endpoint, payload in hosts:
         with arr_open(connection, endpoint, payload=payload, method='PUT'):
+            pass
+    if bazarr:
+        # Bazarr's settings API takes form fields; it stores the password as its own MD5 hash.
+        fields = urllib.parse.urlencode({'settings-auth-type': 'form', 'settings-auth-username': ADMIN_APP_USER,
+                                         'settings-auth-password': password}).encode()
+        base, key = bazarr
+        request = urllib.request.Request(base + '/api/system/settings', data=fields, method='POST', headers={
+            'X-Api-Key': key, 'Content-Type': 'application/x-www-form-urlencoded'})
+        with ARR_OPENER.open(request, timeout=10):
             pass
     if 'transmission' in apps:
         # Transmission's sidecar watches this bind-mounted file, so it must be rewritten in place.

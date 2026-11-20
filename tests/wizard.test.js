@@ -5,7 +5,7 @@ const wizard = require('../docs/setup.js');
 
 const defaults = {
   mode: 'new', lan: false, address: '', media: '', vpn: false, provider: 'nordvpn', exit: 'Prague',
-  downloader: '', prowlarr: true, flaresolverr: true, behindVpn: false, state: '', ports: {},
+  downloader: '', prowlarr: true, flaresolverr: true, bazarr: false, behindVpn: false, state: '', ports: {},
 };
 const commands = options => wizard.buildCommands({...defaults, ...options});
 const flat = command => command.replace(/ \\\n  /g, ' ');
@@ -44,6 +44,13 @@ test('invalid answers explain the fix', () => {
   assert.throws(() => commands({media: 'relative/path'}), /absolute/);
   assert.throws(() => commands({ports: {sonarr: '8765'}}), /different port/);
   assert.throws(() => commands({mode: 'update', state: '~/state'}), /absolute/);
+});
+
+test('Bazarr is added with the media directory and follows the download route', () => {
+  const args = wizard.installArguments({...defaults, media: '/mnt/media', bazarr: true, prowlarr: false, flaresolverr: false,
+    ports: {bazarr: '16767'}});
+  assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--enable-bazarr', '--download-network=direct', '--bazarr-port=16767']);
+  assert.throws(() => commands({bazarr: true}), /Bazarr needs a media directory/);
 });
 
 test('shell quoting survives single quotes', () => {

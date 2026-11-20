@@ -9,14 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy/bootstrap'))
+import configure  # noqa: E402
 import install  # noqa: E402
 
 
 def arguments(**overrides):
-    values = dict(state_dir=None, dashboard_bind=None, dashboard_port=None, media_path=None, enable_downloads=False,
-                  enable_vpn=False, vpn_provider='nordvpn', vpn_country=None, vpn_city=None, download_network=None,
-                  download_client=None, enable_prowlarr=False, enable_flaresolverr=False, prowlarr_port=None,
-                  transmission_port=None, transmission_peer_port=None, sonarr_port=None, radarr_port=None, check=False, update=False, reset=False)
+    """The installer's real defaults, so new flags never drift from the tests."""
+    values = vars(install.build_parser().parse_args([]))
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -89,6 +88,23 @@ class InstallerPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cannot be a link'):
             self.plan(media_path=str(media))
 
+    def test_bazarr_needs_media_and_gets_a_port(self):
+        with self.assertRaisesRegex(ValueError, 'Bazarr saves subtitles'):
+            self.plan(enable_bazarr=True)
+        media = self.root / 'media'
+        media.mkdir()
+        plan = self.plan(media_path=str(media), enable_bazarr=True, dashboard_bind='127.0.0.1')
+        self.assertEqual(plan['downloads'], ['bazarr'])
+        self.assertEqual(plan['ports']['bazarr'], 6767)
+        self.assertTrue(plan['bootstrapping_prowlarr'])
+
+    def test_legacy_download_flag_keeps_its_three_apps(self):
+        media = self.root / 'media'
+        media.mkdir()
+        with patch.object(install.Path, 'is_char_device', return_value=True):
+            plan = self.plan(media_path=str(media), enable_downloads=True)
+        self.assertEqual(plan['downloads'], ['transmission', 'prowlarr', 'flaresolverr'])
+
     def test_transmission_requires_media(self):
         with self.assertRaisesRegex(ValueError, 'media directory'):
             self.plan(download_client='transmission')
@@ -122,6 +138,54 @@ class InstallerPlanTests(unittest.TestCase):
             self.assertEqual(install.published_ports({'martinflix-a'}), [
                 ('dashboard', '127.0.0.1', 8765, 8765), ('gluetun', '127.0.0.1', 9091, 9091),
                 ('gluetun', '127.0.0.1', 9696, 9696)])
+
+
+class BazarrTests(unittest.TestCase):
+    def test_reads_settings_from_bazarr_yaml(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            self.assertTrue(install.bazarr_needs_login(state))
+            (state / 'config').mkdir()
+            (state / 'config/config.yaml').write_text(
+                "analytics:\n  enabled: false\nauth:\n  apikey: 0123abcd\n  password: ''\n  type: null\n"
+                "  username: ''\nbackup:\n  day: 6\n")
+            self.assertEqual(install.bazarr_setting(state, 'auth', 'apikey'), '0123abcd')
+            self.assertTrue(install.bazarr_needs_login(state))
+            (state / 'config/config.yaml').write_text("auth:\n  apikey: 0123abcd\n  type: form\n")
+            self.assertFalse(install.bazarr_needs_login(state))
+
+    def fields(self, **options):
+        api = SimpleNamespace(saved=[])
+        api.save = api.saved.extend
+        configure.configure_bazarr(api, {'sonarr': 'skey', 'radarr': 'rkey'}, **options)
+        return api.saved
+
+    def test_connects_to_sonarr_and_radarr_every_run(self):
+        with patch('builtins.print'):
+            fields = dict(self.fields())
+        self.assertEqual((fields['settings-sonarr-ip'], fields['settings-sonarr-port'], fields['settings-sonarr-apikey']),
+                         ('sonarr', '8989', 'skey'))
+        self.assertEqual(fields['settings-radarr-apikey'], 'rkey')
+        self.assertNotIn('languages-profiles', fields)
+
+    def test_seeds_reference_choices_once(self):
+        with patch('builtins.print'):
+            fields = self.fields(seed=True, opensubtitles=('someone', 'secret'))
+        providers = [value for name, value in fields if name == 'settings-general-enabled_providers']
+        self.assertIn('opensubtitlescom', providers)
+        self.assertEqual([value for name, value in fields if name == 'languages-enabled'], ['en', 'fr', 'pb', 'es', 'ea'])
+        profiles = json.loads(dict(fields)['languages-profiles'])
+        self.assertEqual([(p['profileId'], p['name'], [i['language'] for i in p['items']]) for p in profiles],
+                         [(1, 'All Languages', ['ea', 'pb', 'en', 'fr']), (2, 'Not-English', ['pb', 'ea'])])
+        self.assertEqual(dict(fields)['settings-opensubtitlescom-username'], 'someone')
+        self.assertEqual([value for name, value in fields if name == 'settings-general-language_equals'], ['spa:spl', 'spl:spa'])
+        self.assertEqual(dict(fields)['subzero-remove_HI'], 'true')
+
+    def test_skipping_the_opensubtitles_login_leaves_it_off(self):
+        with patch('builtins.print'):
+            fields = self.fields(seed=True)
+        self.assertNotIn('opensubtitlescom', [value for name, value in fields if name == 'settings-general-enabled_providers'])
+        self.assertNotIn('settings-opensubtitlescom-username', dict(fields))
 
 
 class SharedPasswordTests(unittest.TestCase):
