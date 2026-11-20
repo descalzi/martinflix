@@ -135,9 +135,15 @@ To find them:
 
 
 def prepare_vpn_secrets(path):
+    """Ask for any missing NordVPN credentials. Returns True when they changed.
+
+    Gluetun reads its credentials once, from files bound into its container when the container is created. New
+    files are not seen by a container that already exists, so callers recreate Gluetun when this returns True.
+    """
     private_directory(path)
     credentials = {name: private_secret(path / name) for name in ('openvpn_user', 'openvpn_password')}
-    if not all(credentials.values()):
+    changed = not all(credentials.values())
+    if changed:
         if not sys.stdin.isatty():
             raise ValueError('Run setup in a terminal to enter your NordVPN OpenVPN service credentials.')
         print(NORDVPN_CREDENTIALS_HELP, flush=True)
@@ -151,6 +157,7 @@ def prepare_vpn_secrets(path):
             raise ValueError('Both NordVPN service credentials are needed.')
     for name, value in credentials.items():
         write_secret(path / name, value, trailing_newline=False)
+    return changed
 
 
 def prepare_transmission_password(path, temporary_password, personal_password_set):
@@ -753,8 +760,7 @@ def run_installation(plan, state, previous, mode='install'):
             write_secret(password, secrets.token_urlsafe(32))
         temporary_password = password.read_text().rstrip('\r\n')
         personal_password_set = (auth_dir / 'password-hash').is_file()
-        if vpn:
-            prepare_vpn_secrets(state / 'download-secrets')
+        vpn_credentials_changed = prepare_vpn_secrets(state / 'download-secrets') if vpn else False
         seed_bazarr = 'bazarr' in downloads and not options.get('bazarr_defaults_applied')
         opensubtitles = opensubtitles_login() if seed_bazarr else None
         transmission_password = (prepare_transmission_password(state / 'download-secrets', temporary_password,
@@ -805,15 +811,17 @@ def run_installation(plan, state, previous, mode='install'):
         services = (['gluetun'] if vpn else []) + downloads + sidecars
         download_address = '127.0.0.1' if bootstrapping_prowlarr else str(bind)
         environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
+        # New credentials only reach a new Gluetun container, and apps sharing its network must follow it.
+        recreate = ['--force-recreate'] if vpn_credentials_changed else []
         if vpn:
             refresh_vpn_servers(compose, environment, state / 'gluetun')
             compose_step(f'{step}. Connecting the VPN. This can take a minute or two…',
-                         ['up', '-d', '--wait', '--wait-timeout', '180', 'gluetun'],
+                         ['up', '-d', '--wait', '--wait-timeout', '180', *recreate, 'gluetun'],
                          diagnose=lambda: diagnose_vpn(compose, environment, state / 'download-secrets'))
         if services:
             label = 'Starting the download apps' if vpn else 'Starting selected download and tracker apps'
             compose_step(f'{step}. {label}…' if not vpn else f'   {label}…',
-                         ['up', '-d', '--wait', '--wait-timeout', '210', *services])
+                         ['up', '-d', '--wait', '--wait-timeout', '210', *recreate, *services])
             step += 1
         elif vpn:
             step += 1

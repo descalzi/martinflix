@@ -252,6 +252,16 @@ class VpnDiagnosisTests(unittest.TestCase):
             install.diagnose_vpn(['docker', 'compose'], {}, secrets)
         return secrets, '\n'.join(printed)
 
+    def test_new_credentials_are_reported_so_gluetun_is_recreated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            secrets = Path(folder) / 'download-secrets'
+            with patch.object(install.sys.stdin, 'isatty', return_value=True), patch('builtins.print'), \
+                    patch('builtins.input', return_value=' service-user '), \
+                    patch.object(install.getpass, 'getpass', return_value='service-pass'):
+                self.assertTrue(install.prepare_vpn_secrets(secrets))
+                self.assertEqual((secrets / 'openvpn_user').read_text(), 'service-user')
+                self.assertFalse(install.prepare_vpn_secrets(secrets), 'saved credentials are reused as they are')
+
     def test_server_list_refresh_is_best_effort(self):
         with tempfile.TemporaryDirectory() as folder:
             calls, printed = [], []
