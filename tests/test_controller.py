@@ -134,6 +134,37 @@ class StackTests(unittest.TestCase):
 
 
 
+
+class TransmissionPasswordTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        self.password = self.folder / 'transmission_password'
+        self.password.write_text('first')
+        self.restarts = []
+        stack = SimpleNamespace(config=lambda: {'transmissionPasswordFile': str(self.password)},
+                                controllable=lambda: {'transmission': {}},
+                                restart=lambda name: self.restarts.append(name))
+        self.watch = controller.TransmissionPasswordWatch(stack, controller.threading.Lock(), self.folder / 'applied')
+
+    def test_a_new_password_restarts_transmission_once(self):
+        self.assertFalse(self.watch.check(), 'the first look only records the password already in use')
+        self.assertFalse(self.watch.check())
+        self.password.write_text('second')
+        self.assertTrue(self.watch.check())
+        self.assertFalse(self.watch.check())
+        self.assertEqual(self.restarts, ['transmission'])
+
+    def test_a_failed_restart_is_tried_again(self):
+        self.watch.check()
+        self.password.write_text('second')
+        self.watch.stack.restart = lambda name: (_ for _ in ()).throw(RuntimeError('not running'))
+        with self.assertRaises(RuntimeError):
+            self.watch.check()
+        self.watch.stack.restart = lambda name: self.restarts.append(name)
+        self.assertTrue(self.watch.check())
+
 class BuildContextTests(unittest.TestCase):
     def test_every_copied_file_is_let_into_the_build_context(self):
         root = Path(__file__).resolve().parents[1]

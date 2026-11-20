@@ -53,6 +53,15 @@ class InstallerPlanTests(unittest.TestCase):
         with patch.object(install, 'docker_socket', return_value=None):
             self.assertFalse(self.plan()['control'])
 
+    def test_the_transmission_password_helper_runs_only_without_the_controller(self):
+        media = self.root / 'media'
+        media.mkdir()
+        options = dict(download_client='transmission', media_path=str(media), download_network='direct')
+        with patch.object(install, 'docker_socket', return_value=(Path('/var/run/docker.sock'), 998)):
+            self.assertNotIn('transmission-auth', self.plan(**options)['compose'])
+        with patch.object(install, 'docker_socket', return_value=None):
+            self.assertIn('transmission-auth', self.plan(**options)['compose'])
+
     def test_the_pin_is_asked_twice_and_stored_as_a_hash(self):
         folder = self.state / 'controller'
         answers = iter(['12', '2468', '2468'])

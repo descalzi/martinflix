@@ -613,6 +613,8 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     if control_socket:
         compose += ['--profile', 'control']
         environment.update(MARTINFLIX_DOCKER_SOCKET=str(control_socket[0]), MARTINFLIX_DOCKER_GID=str(control_socket[1]))
+    elif 'transmission' in downloads:
+        compose += ['--profile', 'transmission-auth']
     app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS))
 
     for name in ('dashboard-secrets', 'dashboard-auth', *app_dirs):
@@ -874,7 +876,7 @@ def run_installation(plan, state, previous, mode='install'):
         if bootstrapping_arr:
             arr_address = '127.0.0.1'
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
-        sidecars = ['transmission-auth'] if 'transmission' in downloads else []
+        sidecars = ['transmission-auth'] if 'transmission' in downloads and not plan['control'] else []
         images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *sidecars]
         compose_step('2. Downloading the latest app images. The first download may take a few minutes…',
                      ['pull', '--quiet', *images])
@@ -958,8 +960,14 @@ def run_installation(plan, state, previous, mode='install'):
             # The controller runs Compose exactly as setup does, with the final addresses and ports.
             write_secret(state / 'controller' / 'compose.json', json.dumps({
                 'project': project, 'compose': compose[1:],
-                'env': {key: value for key, value in environment.items() if key.startswith('MARTINFLIX_')}}))
+                'env': {key: value for key, value in environment.items() if key.startswith('MARTINFLIX_')},
+                **({'transmissionPasswordFile': str(state / 'download-secrets' / 'transmission_password')}
+                   if 'transmission' in downloads else {})}))
             web.append('controller')
+            if 'transmission' in downloads:
+                # The controller applies password changes now, so the helper from earlier installs goes.
+                subprocess.run(compose + ['--profile', 'transmission-auth', 'rm', '--stop', '--force', 'transmission-auth'],
+                               env=environment, capture_output=True, timeout=120)
         compose_step(f'{step + 1}. Building and starting your dashboard…', ['build', '--pull', '--quiet', *web])
         compose_step('   Starting the dashboard…', ['up', '-d', '--wait', '--wait-timeout', '90', *web])
         verify = '''

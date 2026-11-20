@@ -217,6 +217,51 @@ class Stack:
         return {'updated': True, 'followed': follow, 'image': services[name].get('image')}
 
 
+class TransmissionPasswordWatch:
+    """Restart Transmission when the dashboard writes a new shared password.
+
+    The LinuxServer image sets Transmission's login from USER and PASS each time the container starts, and PASS is
+    read from this file, so a restart is all it takes. The last applied version is remembered across restarts.
+    """
+
+    def __init__(self, stack, busy, marker, interval=5):
+        self.stack = stack
+        self.busy = busy
+        self.marker = Path(marker)
+        self.interval = interval
+
+    def check(self):
+        """Returns True when it restarted Transmission."""
+        source = self.stack.config().get('transmissionPasswordFile')
+        if not source:
+            return False
+        try:
+            digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        except OSError:
+            return False
+        try:
+            applied = self.marker.read_text().strip()
+        except FileNotFoundError:
+            # First run: the running Transmission already has this password, from setup or the old helper.
+            self.marker.write_text(digest)
+            return False
+        if digest == applied or 'transmission' not in self.stack.controllable():
+            return False
+        with self.busy:
+            self.stack.restart('transmission')
+        self.marker.write_text(digest)
+        print('Transmission restarted with the new dashboard password.', flush=True)
+        return True
+
+    def run(self):
+        while True:
+            try:
+                self.check()
+            except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+                print(f'Could not apply the new Transmission password yet: {exc}', flush=True)
+            time.sleep(self.interval)
+
+
 def tail(result, limit=600):
     text = ((result.stderr or '') + (result.stdout or '')).strip()
     return text[-limit:] or f'exit code {result.returncode}'
@@ -305,6 +350,9 @@ def serve():
     server.stack = Stack(os.environ['MARTINFLIX_CONTROL_CONFIG'])
     server.pins = PinGuard(os.environ['MARTINFLIX_CONTROL_PIN_FILE'])
     server.busy = threading.Lock()
+    marker = Path(os.environ['MARTINFLIX_CONTROL_PIN_FILE']).with_name('transmission-password-applied')
+    watch = TransmissionPasswordWatch(server.stack, server.busy, marker)
+    threading.Thread(target=watch.run, daemon=True).start()
     print('MartinFlix controller listening on port %d' % server.server_address[1], flush=True)
     server.serve_forever()
 
