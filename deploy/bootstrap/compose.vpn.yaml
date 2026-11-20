@@ -14,6 +14,14 @@ services:
       FIREWALL_INPUT_PORTS: "9091,9696,8191,6767,9999"
       HEALTH_SERVER_ADDRESS: 0.0.0.0:9999
     secrets: [openvpn_user, openvpn_password]
+    healthcheck:
+      # Gluetun's built-in check calls it unhealthy after about 25 seconds, and Compose then gives up on
+      # everything that waits for it. A NordVPN connection can take longer, so allow two minutes first.
+      test: [CMD, /gluetun-entrypoint, healthcheck]
+      interval: 10s
+      timeout: 5s
+      start_period: 2m
+      retries: 3
   dashboard:
     environment:
       MARTINFLIX_VPN_ENABLED: "1"

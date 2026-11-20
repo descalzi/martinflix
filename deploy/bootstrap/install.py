@@ -369,6 +369,36 @@ def download_overlay(apps, ports, behind_vpn):
     return {'services': services}
 
 
+VPN_PROBLEMS = (
+    ('AUTH_FAILED', 'NordVPN rejected the login. Use the service credentials from your Nord Account (NordVPN → '
+                    'Set up NordVPN manually), not your email and password. Setup removed the saved credentials, '
+                    'so it asks for them again when you rerun it.'),
+    ('no server found', 'No NordVPN server matches the chosen exit location. Rerun with a different --vpn-country '
+                        'or --vpn-city.'),
+)
+
+
+def diagnose_vpn(compose, environment, secrets_dir):
+    """Show Gluetun's own log after a failed start, and act on the problems it can name."""
+    try:
+        result = subprocess.run(compose + ['logs', '--no-color', '--tail', '40', 'gluetun'], env=environment,
+                                capture_output=True, text=True, timeout=30)
+        log = result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return
+    if log:
+        print(f'Gluetun log\n{log}\n', file=sys.stderr)
+    for marker, advice in VPN_PROBLEMS:
+        if marker.casefold() in log.casefold():
+            if marker == 'AUTH_FAILED':
+                for name in ('openvpn_user', 'openvpn_password'):
+                    (secrets_dir / name).unlink(missing_ok=True)
+            print(advice + '\n', file=sys.stderr)
+            return
+    print('Gluetun did not report a connection within two minutes. Check the log above, and that this VM can '
+          'reach the internet, then rerun setup.\n', file=sys.stderr)
+
+
 def reset_installation(state, project):
     import fcntl
 
@@ -646,7 +676,7 @@ def run_installation(plan, state, previous, mode='install'):
     project = options['project']
     private_directory(state)
 
-    def compose_step(label, command):
+    def compose_step(label, command, diagnose=None):
         print(label, flush=True)
         with tempfile.TemporaryFile() as log:
             result = subprocess.run(compose + command, env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -656,6 +686,8 @@ def run_installation(plan, state, previous, mode='install'):
             details = log.read().decode(errors='replace').strip()
         if details:
             print(f'\nDocker details\n{details}\n', file=sys.stderr)
+        if diagnose:
+            diagnose()
         list_command = shlex.join(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={project}'])
         raise ValueError('This step could not finish. Check the Docker details above. '
                          'If an image could not be downloaded, check this VM’s internet connection and Docker storage.\n'
@@ -734,9 +766,16 @@ def run_installation(plan, state, previous, mode='install'):
         services = (['gluetun'] if vpn else []) + downloads + sidecars
         download_address = '127.0.0.1' if bootstrapping_prowlarr else str(bind)
         environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
+        if vpn:
+            compose_step(f'{step}. Connecting the VPN. This can take a minute or two…',
+                         ['up', '-d', '--wait', '--wait-timeout', '180', 'gluetun'],
+                         diagnose=lambda: diagnose_vpn(compose, environment, state / 'download-secrets'))
         if services:
-            label = 'Starting the VPN and selected services' if vpn else 'Starting selected download and tracker apps'
-            compose_step(f'{step}. {label}…', ['up', '-d', '--wait', '--wait-timeout', '210', *services])
+            label = 'Starting the download apps' if vpn else 'Starting selected download and tracker apps'
+            compose_step(f'{step}. {label}…' if not vpn else f'   {label}…',
+                         ['up', '-d', '--wait', '--wait-timeout', '210', *services])
+            step += 1
+        elif vpn:
             step += 1
         if 'prowlarr' in enabled:
             prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')

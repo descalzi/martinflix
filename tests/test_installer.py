@@ -239,6 +239,31 @@ class RouteChangeTests(unittest.TestCase):
         self.assertEqual(self.puts[1][1]['fields'][0]['value'], 'http://127.0.0.1:8191/')
 
 
+class VpnDiagnosisTests(unittest.TestCase):
+    def diagnose(self, log):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        secrets = Path(folder.name)
+        for name in ('openvpn_user', 'openvpn_password'):
+            (secrets / name).write_text('saved')
+        printed = []
+        with patch.object(install.subprocess, 'run', return_value=SimpleNamespace(stdout=log)), \
+                patch('builtins.print', side_effect=lambda *args, **kwargs: printed.append(' '.join(map(str, args)))):
+            install.diagnose_vpn(['docker', 'compose'], {}, secrets)
+        return secrets, '\n'.join(printed)
+
+    def test_rejected_login_clears_the_saved_credentials(self):
+        secrets, output = self.diagnose('gluetun-1  | 2026-11-20T13:30:01Z ERROR [openvpn] AUTH: Received control message: AUTH_FAILED')
+        self.assertIn('service credentials', output)
+        self.assertFalse((secrets / 'openvpn_user').exists())
+        self.assertFalse((secrets / 'openvpn_password').exists())
+
+    def test_other_failures_keep_the_credentials(self):
+        secrets, output = self.diagnose('gluetun-1  | INFO [healthcheck] program has been unhealthy for 6s: restarting VPN')
+        self.assertIn('Gluetun log', output)
+        self.assertTrue((secrets / 'openvpn_user').exists())
+
+
 class SharedPasswordTests(unittest.TestCase):
     def test_transmission_uses_the_dashboard_password(self):
         with tempfile.TemporaryDirectory() as folder:
