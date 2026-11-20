@@ -872,15 +872,21 @@ function discoverDate(item) {
 function discoverCard(item) {
   const find = `tmdb:${item.id}`;
   const add = `/add?${new URLSearchParams({kind: item.kind, find, title: item.title})}`;
+  const action = style => item.inLibrary ? '<span class="badge ok">In library</span>'
+    : `<a class="button ${style} button-small" href="${esc(add)}" aria-label="Add ${esc(item.title)}">${icon('plus')}Add</a>`;
+  // Hovering or focusing the poster shows the synopsis and the action over it; touch screens tap the poster instead.
   return `<li class="discover-card">
-    <div class="poster-art">
+    <div class="poster-art" tabindex="0" aria-label="${esc(item.title)}: show synopsis">
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="342" height="513">` : ''}
+      <div class="discover-hover">
+        <p>${esc(item.overview || 'No synopsis yet.')}</p>
+        <div class="discover-hover-action">${action('button-primary')}</div>
+      </div>
     </div>
-    <h3 class="poster-title" title="${esc(item.overview)}">${esc(item.title)}</h3>
+    <h3 class="poster-title">${esc(item.title)}</h3>
     <p class="poster-meta">${esc(discoverDate(item))}</p>
-    ${item.inLibrary ? '<span class="badge ok">In library</span>'
-      : `<a class="button button-quiet button-small" href="${esc(add)}">${icon('plus')}Add</a>`}
+    <div class="discover-touch-action">${action('button-quiet')}</div>
   </li>`;
 }
 
