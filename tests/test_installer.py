@@ -259,7 +259,7 @@ class VpnDiagnosisTests(unittest.TestCase):
                               SimpleNamespace(returncode=1)), \
                     patch('builtins.print', side_effect=lambda *args, **kwargs: printed.append(' '.join(map(str, args)))):
                 install.refresh_vpn_servers(['docker', 'compose'], {}, Path(folder) / 'gluetun')
-            self.assertEqual(calls[0][-6:], ['gluetun', 'update', '-enduser', '-providers', 'nordvpn'][-6:])
+            self.assertEqual(calls[0][-5:], ['gluetun', 'update', '-enduser', '-providers', 'nordvpn'])
             self.assertIn('list built into its image', printed[-1])
             self.assertTrue((Path(folder) / 'gluetun').is_dir())
 
