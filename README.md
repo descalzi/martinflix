@@ -10,7 +10,7 @@ A home media control room with a repeatable Docker setup. See which services are
 
 ## Quick start
 
-> **[Open the MartinFlix setup guide](https://descalzi.github.io/martinflix/)** to choose your apps and generate the exact commands for your machine. Existing installs can rerun setup with the same state directory and settings to keep their app data.
+> **[Open the MartinFlix setup guide](https://descalzi.github.io/martinflix/)** to install, update, or start from scratch. Each step has a default you can keep or change, and the guide generates the exact commands for your machine.
 
 ### 1. Prepare the VM
 
@@ -44,7 +44,7 @@ python3 deploy/bootstrap/install.py --dashboard-bind "$VM_IP"
 
 Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default.
 
-The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Rerun with the same options to resume setup.
+The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Setup remembers the address, ports, media directory, and services you chose, so rerunning it resumes where it stopped.
 
 **To set up media, a VPN, or download apps**, follow the [public wizard](https://descalzi.github.io/martinflix/) or add `--media-path` and `--enable-downloads` to both commands above for the default VPN-backed download setup. Use a dedicated, writable media directory on the VM. The download option asks for NordVPN’s manual OpenVPN service credentials before it starts Gluetun, Transmission, Prowlarr, and FlareSolverr. You can also add this option later to an existing first-run installation. [Media and download setup](docs/first-run.md#media-and-downloads)
 
@@ -64,7 +64,19 @@ Sign in with it, choose a password of at least eight characters, then sign in ag
 | Sonarr | `http://127.0.0.1:8989` |
 | Radarr | `http://127.0.0.1:7878` |
 
-See the [first-run guide](docs/first-run.md) for using different ports or storage. To start fresh with the same state directory, see [Start from scratch](docs/first-run.md#start-from-scratch).
+See the [first-run guide](docs/first-run.md) for using different ports or storage.
+
+### 4. Update later
+
+From your checkout, pull the latest version and reapply it. The update keeps your saved settings, app data, and passwords:
+
+```sh
+git pull --ff-only
+python3 deploy/bootstrap/install.py --update --check
+python3 deploy/bootstrap/install.py --update
+```
+
+Add `--state-dir` if you installed to a custom location. To start fresh with the same state directory, see [Start from scratch](docs/first-run.md#start-from-scratch).
 
 ## What’s included
 
@@ -89,4 +101,10 @@ The legacy Compose definitions and `deploy/stackctl` are migration references. R
 ```sh
 python3 -m unittest discover -s tests -v
 python3 -m py_compile server.py backup.py deploy/bootstrap/install.py
+```
+
+The wizard tests run inside the suite when Node.js 18 or newer is installed. To run them on their own:
+
+```sh
+node --test tests/wizard.test.js
 ```

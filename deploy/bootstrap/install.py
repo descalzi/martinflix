@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -37,6 +38,8 @@ BANNER = r"""
 MEDIA_FOLDERS = ('TV Shows', 'Movies', 'downloads')
 DOWNLOAD_APPS = ('transmission', 'prowlarr', 'flaresolverr')
 DOWNLOAD_PORTS = {'transmission': 9091, 'prowlarr': 9696}
+CONTAINER_PORTS = {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, **DOWNLOAD_PORTS}
+DEFAULT_PORTS = dict(CONTAINER_PORTS)
 
 
 def saved_options(state):
@@ -66,10 +69,12 @@ def resolve_state_directory(requested):
     return current.resolve()
 
 
-def compose_project(state, previous):
+def compose_project(state, previous, fresh=False):
     suffix = hashlib.sha256(os.fsencode(state)).hexdigest()[:16]
     current = f'martinflix-{suffix}'
     legacy = f'martinflix-first-run-{suffix}'
+    if fresh:
+        return current
     project = previous.get('project')
     if project is None:
         return legacy if has_installation(state) else current
@@ -218,19 +223,30 @@ def check_directory(path):
         raise ValueError(f'Cannot write to {path}. Choose a writable directory with --state-dir.')
 
 
-def check_ports(compose, environment, bindings, downloads_behind_vpn=False):
-    result = subprocess.run(compose + ['ps', '--format', 'json'], env=environment,
-                            capture_output=True, text=True, timeout=20, check=True)
-    output = result.stdout.strip()
-    containers = json.loads(output) if output.startswith('[') else [json.loads(line) for line in output.splitlines()]
-    published = {
-        (container['Service'], entry['URL'], entry['PublishedPort'])
-        for container in containers for entry in (container.get('Publishers') or [])
-        if entry.get('Protocol') == 'tcp'
-    }
+PORT_PATTERN = re.compile(r'(\d{1,3}(?:\.\d{1,3}){3}):(\d+)->(\d+)/tcp')
+
+
+def published_ports(projects):
+    """Return (service, address, host port, container port) for the given Compose projects."""
+    result = docker_check(['ps', '-a', '--format',
+                           '{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Ports}}'])
+    if result.returncode:
+        raise ValueError('Could not list Docker containers. Run docker ps, then try again.')
+    published = []
+    for line in result.stdout.splitlines():
+        project, _, rest = line.partition('\t')
+        service, _, ports = rest.partition('\t')
+        if project not in projects:
+            continue
+        for address, port, target in PORT_PATTERN.findall(ports):
+            published.append((service, address, int(port), int(target)))
+    return published
+
+
+def check_ports(bindings, published):
+    owned = {(address, port) for _, address, port, _ in published}
     for app, address, port in bindings:
-        owner = 'gluetun' if downloads_behind_vpn and app in DOWNLOAD_APPS else app
-        if (owner, address, port) in published:
+        if (address, port) in owned:
             continue
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -244,6 +260,19 @@ def check_ports(compose, environment, bindings, downloads_behind_vpn=False):
                 raise ValueError(f'{address} is not assigned to this VM. Use --dashboard-bind 127.0.0.1 '
                                  'or use the VM’s LAN IPv4 address.') from exc
             raise
+
+
+def running_settings(published):
+    """Recover the address and ports of installs created before setup saved them."""
+    bind = None
+    ports = {}
+    for service, address, port, target in published:
+        if service == 'dashboard' and target == 8765:
+            bind = address
+        for name, container_port in CONTAINER_PORTS.items():
+            if target == container_port and (service == name or (service == 'gluetun' and name in DOWNLOAD_PORTS)):
+                ports[name] = port
+    return bind, ports
 
 
 def download_overlay(apps, ports, behind_vpn):
@@ -264,21 +293,18 @@ def download_overlay(apps, ports, behind_vpn):
     return {'services': services}
 
 
-def reset_installation(state):
+def reset_installation(state, project):
     import fcntl
 
-    check_directory(state)
-    if not has_installation(state):
-        raise ValueError(f'No installer-managed MartinFlix installation was found at {state}. Run setup without --reset.')
-    print(f'Reset MartinFlix at {state}?')
-    print('Setup will stop this stack and archive its app databases, configuration, and credentials. Media files stay in place.')
+    print(f'\nReset MartinFlix at {state}?')
+    print('Setup will stop this stack and archive its app databases, configuration, and credentials. '
+          'Media files stay in place.')
     if not sys.stdin.isatty() or input('Type RESET to continue: ') != 'RESET':
-        raise ValueError('Reset cancelled.')
+        raise ValueError('Reset cancelled. Nothing was changed.')
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not has_installation(state):
             raise ValueError('The installation has already been reset.')
-        project = compose_project(state, saved_options(state))
         environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state), MARTINFLIX_UID=str(os.getuid()),
                            MARTINFLIX_GID=str(os.getgid()), MARTINFLIX_DASHBOARD_BIND='127.0.0.1',
                            MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878')
@@ -302,21 +328,8 @@ def reset_installation(state):
     print(f'Previous app data and credentials archived at {archive}', flush=True)
 
 
-def install(args, overlay_file):
-    import fcntl
-
-    if os.getuid() == 0:
-        raise ValueError('Run the installer without sudo as the Linux account that will own the stack data.')
-    print(BANNER, flush=True)
-    print('1. Checking Docker, storage, and network ports…', flush=True)
-    docker_root = preflight_docker()
-
-    state = resolve_state_directory(args.state_dir)
-    if state.is_relative_to(COMPOSE_FILE.parents[2]):
-        raise ValueError('Choose a state directory outside the repository for application data and secrets.')
-    if args.reset:
-        reset_installation(state)
-    previous = saved_options(state)
+def plan_installation(args, state, previous, project, overlay_file, fresh_arr=False):
+    """Validate every option and work out the Compose command. Changes nothing on disk except the overlay."""
     old_media = previous.get('media_path')
     media = media_root(args.media_path or old_media, state) if args.media_path or old_media else None
     if old_media and str(media) != old_media:
@@ -342,7 +355,8 @@ def install(args, overlay_file):
     default_network = 'vpn' if args.enable_downloads or args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') else 'direct'
     download_network = (args.download_network or previous_network or default_network) if downloads else None
     if previous_network and download_network != previous_network:
-        raise ValueError('This download stack already has a network route. Changing it requires migrating its app connections.')
+        raise ValueError('This download stack already has a network route. Changing it requires migrating its app connections. '
+                         'To choose a different route, start from scratch with --reset.')
     vpn = bool(args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') or download_network == 'vpn')
     vpn_country = args.vpn_country or ('' if args.vpn_city else previous.get('vpn_country') or '')
     vpn_city = args.vpn_city or ('' if args.vpn_country else previous.get('vpn_city'))
@@ -351,19 +365,24 @@ def install(args, overlay_file):
     if vpn and not Path('/dev/net/tun').is_char_device():
         raise ValueError('The VPN needs /dev/net/tun on this VM. Try sudo modprobe tun. If it is still unavailable, '
                          'enable TUN access in your VM settings and rerun setup.')
-    project = compose_project(state, previous)
-    options = {**previous, 'media_path': str(media) if media else None, 'downloads': bool(downloads), 'download_apps': downloads, 'project': project}
-    options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, download_network=download_network)
-    ports = {'dashboard': args.dashboard_port, 'sonarr': args.sonarr_port, 'radarr': args.radarr_port}
-    ports.update({app: getattr(args, app + '_port') for app in downloads if app in DOWNLOAD_PORTS})
+
+    saved_ports = previous.get('ports') or {}
+    ports = {}
+    for name in ('dashboard', 'sonarr', 'radarr', *(app for app in downloads if app in DOWNLOAD_PORTS)):
+        requested = getattr(args, name + '_port')
+        ports[name] = requested if requested is not None else saved_ports.get(name, DEFAULT_PORTS[name])
     if len(set(ports.values())) != len(ports) or any(not 1024 <= port <= 65535 for port in ports.values()):
         raise ValueError('Choose distinct ports between 1024 and 65535 for the selected services.')
     try:
-        bind = ipaddress.IPv4Address(args.dashboard_bind)
+        bind = ipaddress.IPv4Address(args.dashboard_bind or previous.get('dashboard_bind') or '127.0.0.1')
     except ipaddress.AddressValueError as exc:
         raise ValueError('Use --dashboard-bind 127.0.0.1 or a specific IPv4 address assigned to this VM.') from exc
     if bind.is_unspecified or bind.is_multicast:
         raise ValueError('Choose loopback or a specific host IPv4 address for the dashboard.')
+
+    options = {**previous, 'media_path': str(media) if media else None, 'downloads': bool(downloads),
+               'download_apps': downloads, 'project': project, 'dashboard_bind': str(bind), 'ports': ports}
+    options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, download_network=download_network)
 
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
@@ -387,24 +406,101 @@ def install(args, overlay_file):
     check_directory(state)
     if vpn or downloads:
         check_directory(state / 'download-secrets')
-    bootstrapping_arr = any(arr_needs_login(state / app / 'config.xml') for app in APPS)
+    bootstrapping_arr = fresh_arr or any(arr_needs_login(state / app / 'config.xml') for app in APPS)
     bindings = [
         (service, str(bind) if service not in DOWNLOAD_APPS else '127.0.0.1', port)
         for service, port in ports.items()
     ]
     if bootstrapping_arr and str(bind) != '127.0.0.1':
         bindings.extend((app, '127.0.0.1', ports[app]) for app in APPS)
-    check_ports(compose, environment, bindings, downloads_behind_vpn=download_network == 'vpn')
+    return {
+        'media': media, 'enabled': enabled, 'downloads': downloads, 'download_network': download_network,
+        'vpn': vpn, 'vpn_country': vpn_country, 'vpn_city': vpn_city, 'options': options, 'ports': ports,
+        'bind': bind, 'compose': compose, 'environment': environment, 'app_dirs': app_dirs,
+        'bootstrapping_arr': bootstrapping_arr, 'bindings': bindings,
+    }
+
+
+def refuse_root():
+    if os.getuid() == 0:
+        raise ValueError('Run the installer without sudo as the Linux account that will own the stack data.')
+
+
+def install(args, overlay_file):
+    refuse_root()
+    print(BANNER, flush=True)
+    print('1. Checking Docker, storage, and network ports…', flush=True)
+    docker_root = preflight_docker()
+
+    state = resolve_state_directory(args.state_dir)
+    if state.is_relative_to(COMPOSE_FILE.parents[2]):
+        raise ValueError('Choose a state directory outside the repository for application data and secrets.')
+    check_directory(state)
+    existing = has_installation(state)
+    if (args.reset or args.update) and not existing:
+        flag = '--reset' if args.reset else '--update'
+        raise ValueError(f'No installer-managed MartinFlix installation was found at {state}. '
+                         f'Check --state-dir, or run setup without {flag} for a new installation.')
+    saved = saved_options(state)
+    old_project = compose_project(state, saved) if existing else None
+    # A reset discards the saved options, so validate the new installation as if it were fresh.
+    previous = {} if args.reset else saved
+    project = compose_project(state, previous, fresh=args.reset)
+    published = published_ports({project, old_project} - {None})
+    if not args.reset and existing and 'ports' not in previous:
+        running_bind, running_ports = running_settings(published)
+        previous = dict(previous, ports=running_ports)
+        if running_bind:
+            previous['dashboard_bind'] = running_bind
+        elif args.dashboard_bind is None:
+            print('This installation was created before setup remembered its address, and its dashboard is not running. '
+                  'If you open MartinFlix from another device, add --dashboard-bind with the VM’s LAN address.', flush=True)
+    plan = plan_installation(args, state, previous, project, overlay_file, fresh_arr=args.reset)
+    check_ports(plan['bindings'], published)
     try:
         if shutil.disk_usage(docker_root).free < 2 * 1024**3:
             print('Docker storage has less than 2 GiB free. Free up space if the image download or build fails.', flush=True)
     except OSError:
         pass
     if args.check:
-        if vpn:
-            print('VPN selected. Setup will use your NordVPN OpenVPN service credentials.')
-        print('Preflight passed. Run the same command without --check to start the installation.')
+        describe_plan(plan, state, args)
+        if args.reset:
+            print('Preflight passed. Run the same command without --check. Setup will ask you to type RESET '
+                  'before it stops and archives the current installation.')
+        else:
+            print('Preflight passed. Run the same command without --check to start the installation.')
         return
+    if args.reset:
+        reset_installation(state, old_project)
+        previous = {}
+    run_installation(plan, state, previous)
+
+
+def describe_plan(plan, state, args):
+    mode = 'Start from scratch' if args.reset else 'Update' if args.update else 'Install'
+    print(f'\n{mode} plan')
+    print(f'State directory   {state}')
+    print(f'Address           {plan["bind"]}')
+    print(f'Media directory   {plan["media"] or "Not set"}')
+    if plan['vpn']:
+        print(f'VPN               NordVPN · {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
+    if plan['downloads']:
+        route = 'VPN' if plan['download_network'] == 'vpn' else 'normal internet connection'
+        print(f'Download apps     {", ".join(plan["downloads"])} via {route}')
+    print('Ports             ' + ', '.join(f'{name} {port}' for name, port in plan['ports'].items()))
+    if plan['vpn']:
+        print('VPN selected. Setup will use your NordVPN OpenVPN service credentials.')
+    print()
+
+
+def run_installation(plan, state, previous):
+    import fcntl
+
+    media, enabled, downloads = plan['media'], plan['enabled'], plan['downloads']
+    vpn, download_network, options = plan['vpn'], plan['download_network'], plan['options']
+    ports, bind, compose, environment = plan['ports'], plan['bind'], plan['compose'], plan['environment']
+    app_dirs, bootstrapping_arr = plan['app_dirs'], plan['bootstrapping_arr']
+    project = options['project']
     private_directory(state)
 
     def compose_step(label, command):
@@ -426,7 +522,8 @@ def install(args, overlay_file):
 
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if saved_options(state) != previous:
+        if {key: value for key, value in saved_options(state).items() if key not in ('ports', 'dashboard_bind')} != \
+                {key: value for key, value in previous.items() if key not in ('ports', 'dashboard_bind')}:
             raise ValueError('Setup options changed while this command was waiting. Run the installer again.')
         if vpn:
             prepare_vpn_secrets(state / 'download-secrets')
@@ -436,10 +533,11 @@ def install(args, overlay_file):
                 (media / folder).mkdir(mode=0o700, exist_ok=True)
         if downloads:
             runtime_overlay = state / 'downloads-compose.json'
-            write_secret(runtime_overlay, overlay_file.read_text())
-            compose[compose.index(str(overlay_file))] = str(runtime_overlay)
+            overlay_index = next(index for index, item in enumerate(compose) if item.endswith('downloads.json'))
+            write_secret(runtime_overlay, Path(compose[overlay_index]).read_text())
+            compose[overlay_index] = str(runtime_overlay)
         options.setdefault('radarr_indexer_defaults_pending', not (state / 'radarr/config.xml').exists())
-        if options != previous:
+        if options != saved_options(state):
             write_secret(state / 'install-options.json', json.dumps(options))
         secret_dir = state / 'dashboard-secrets'
         private_directory(secret_dir)
@@ -519,7 +617,7 @@ for app in ('sonarr', 'radarr'):
     print('New Sonarr and Radarr installations use admin and the same temporary password.')
     print('Set or change your dashboard password to update both app passwords.')
     if vpn:
-        print(f'NordVPN exit: {vpn_city or vpn_country or "Automatic"}')
+        print(f'NordVPN exit: {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
     if downloads:
         print(f'Download network: {"VPN" if download_network == "vpn" else "normal internet connection"}')
     for app in app_dirs:
@@ -539,9 +637,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state-dir', type=Path,
                         help='Where app data is stored. Defaults to ~/.local/state/martinflix for new installs.')
-    parser.add_argument('--dashboard-bind', default='127.0.0.1',
-                        help='IPv4 address for the dashboard, Sonarr, and Radarr.')
-    parser.add_argument('--dashboard-port', type=int, default=8765)
+    parser.add_argument('--dashboard-bind',
+                        help='IPv4 address for the dashboard, Sonarr, and Radarr. Defaults to the saved address, '
+                             'or 127.0.0.1 for a new installation.')
+    parser.add_argument('--dashboard-port', type=int)
     parser.add_argument('--media-path', help='Existing writable media directory containing or receiving TV Shows, Movies, and downloads.')
     parser.add_argument('--enable-downloads', action='store_true',
                         help='Install Gluetun, Transmission, and Prowlarr. Requires --media-path. Defaults to VPN routing.')
@@ -553,12 +652,15 @@ def main():
     parser.add_argument('--download-client', choices=['transmission'])
     parser.add_argument('--enable-prowlarr', action='store_true')
     parser.add_argument('--enable-flaresolverr', action='store_true')
-    parser.add_argument('--prowlarr-port', type=int, default=9696)
-    parser.add_argument('--transmission-port', type=int, default=9091)
-    parser.add_argument('--sonarr-port', type=int, default=8989)
-    parser.add_argument('--radarr-port', type=int, default=7878)
+    parser.add_argument('--prowlarr-port', type=int)
+    parser.add_argument('--transmission-port', type=int)
+    parser.add_argument('--sonarr-port', type=int)
+    parser.add_argument('--radarr-port', type=int)
+    parser.add_argument('--check', action='store_true',
+                        help='Check prerequisites and options without creating files, stopping, or starting containers.')
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--check', action='store_true', help='Check prerequisites without creating files or starting containers.')
+    mode.add_argument('--update', action='store_true',
+                      help='Update an existing installation using its saved settings. Fails if no installation is found.')
     mode.add_argument('--reset', action='store_true',
                       help='Archive this installation’s app data and credentials, then start fresh. Requires confirmation.')
     args = parser.parse_args()

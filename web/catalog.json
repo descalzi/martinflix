@@ -1,0 +1,43 @@
+{
+  "groups": [
+    {"name": "Core", "services": ["tailscale", "portainer"]},
+    {"name": "Media server", "services": ["plex"]},
+    {"name": "Downloads & automation", "services": ["nordvpn", "transmission-daemon", "flaresolverr", "prowlarr", "bazarr", "sonarr", "radarr"]},
+    {"name": "Books", "services": ["bookorbit-db", "bookorbit-app"]},
+    {"name": "Web services", "services": ["homepage", "seerr", "tautulli"]},
+    {"name": "Bookshelf", "services": ["bookshelf"]}
+  ],
+  "apps": {
+    "tailscale": {"name": "Tailscale", "role": "Private network", "icon": "tailscale"},
+    "portainer": {"name": "Portainer", "role": "Container management", "icon": "portainer", "web": {"port": 9443, "scheme": "https"}},
+    "plex": {"name": "Plex", "role": "Media streaming", "icon": "plex", "web": {"port": 32400, "path": "/web/"}},
+    "nordvpn": {"name": "Gluetun", "role": "NordVPN gateway", "icon": "gluetun"},
+    "transmission-daemon": {"name": "Transmission", "role": "Downloads", "icon": "transmission", "web": {"port": 9091}, "installer": {"env": "TRANSMISSION", "localOnly": true}},
+    "flaresolverr": {"name": "FlareSolverr", "role": "Indexer support", "icon": "flaresolverr"},
+    "prowlarr": {"name": "Prowlarr", "role": "Indexer management", "icon": "prowlarr", "web": {"port": 9696}, "installer": {"env": "PROWLARR", "localOnly": true}},
+    "bazarr": {"name": "Bazarr", "role": "Subtitles", "icon": "bazarr", "web": {"port": 6767}},
+    "sonarr": {"name": "Sonarr", "role": "TV library", "icon": "sonarr", "web": {"port": 8989}, "installer": {"env": "SONARR"}},
+    "radarr": {"name": "Radarr", "role": "Film library", "icon": "radarr", "web": {"port": 7878}, "installer": {"env": "RADARR"}},
+    "bookorbit-db": {"name": "PostgreSQL", "role": "BookOrbit database", "icon": "postgresql"},
+    "bookorbit-app": {"name": "BookOrbit", "role": "Book library", "icon": "bookorbit", "web": {"port": 3001}},
+    "homepage": {"name": "Homepage", "role": "App launcher", "icon": "homepage", "web": {"port": 3000}},
+    "seerr": {"name": "Seerr", "role": "Media requests", "icon": "seerr", "web": {"port": 5055}},
+    "tautulli": {"name": "Tautulli", "role": "Plex activity", "icon": "tautulli", "web": {"port": 8181}},
+    "bookshelf": {"name": "Bookshelf", "role": "Optional book automation", "icon": "bookshelf", "web": {"port": 8787}, "optional": true}
+  },
+  "branches": {
+    "nordvpn": {"title": "VPN network", "description": "These services share Gluetun’s network.", "members": ["transmission-daemon", "flaresolverr", "prowlarr", "bazarr"]},
+    "bookorbit-db": {"title": "BookOrbit database", "description": "BookOrbit starts after PostgreSQL is healthy.", "members": ["bookorbit-app"]}
+  },
+  "startAfter": {
+    "sonarr": ["prowlarr", "transmission-daemon"],
+    "radarr": ["prowlarr", "transmission-daemon"]
+  },
+  "pipeline": [
+    {"name": "Request", "detail": "Household asks", "services": ["seerr"]},
+    {"name": "Find", "detail": "Search indexers", "services": ["prowlarr", "flaresolverr"], "tunnel": true},
+    {"name": "Download", "detail": "Fetch releases", "services": ["transmission-daemon"], "tunnel": true},
+    {"name": "Organise", "detail": "Rename and file", "services": ["sonarr", "radarr", "bazarr"]},
+    {"name": "Watch", "detail": "Stream at home", "services": ["plex", "tautulli"]}
+  ]
+}

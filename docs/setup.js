@@ -1,5 +1,7 @@
 'use strict';
 
+const REPOSITORY = 'https://github.com/descalzi/martinflix.git';
+const INSTALLER = 'python3 deploy/bootstrap/install.py';
 const portOptions = [
   ['dashboard', 'Dashboard', 8765],
   ['sonarr', 'Sonarr', 8989],
@@ -7,222 +9,373 @@ const portOptions = [
   ['prowlarr', 'Prowlarr', 9696],
   ['transmission', 'Transmission', 9091],
 ];
+const STEPS = {
+  new: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
+  update: ['task', 'location', 'review'],
+  reset: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
+};
+const STEP_LABELS = {
+  task: 'Task', access: 'Access', media: 'Media', vpn: 'VPN', downloads: 'Downloads',
+  options: 'Ports & storage', location: 'Installation', review: 'Review',
+};
 
 function shellQuote(value) {
+  if (/^[A-Za-z0-9_./:@%+,-]+$/.test(value)) return value;
   return "'" + value.replace(/'/g, "'\"'\"'") + "'";
 }
 
-function installArguments({lan, address, media, vpn, provider, exit, downloader, prowlarr, flaresolverr, behindVpn, state, ports}) {
-  const downloads = Boolean(downloader || prowlarr);
-  const args = [];
-  if (lan) {
-    const parts = address.split('.');
-    if (parts.length !== 4 || parts.some(part => !/^(0|[1-9][0-9]{0,2})$/.test(part) || Number(part) > 255) ||
-        Number(parts[0]) === 0 || Number(parts[0]) === 127 || Number(parts[0]) >= 224) {
-      throw new Error('Enter the Linux host’s LAN IPv4 address.');
-    }
-    args.push('--dashboard-bind=' + shellQuote(address));
+/** One flag per line keeps long commands readable; the backslashes keep them valid to paste. */
+function formatCommand(parts) {
+  const line = parts.join(' ');
+  return line.length <= 64 ? line : parts.join(' \\\n  ');
+}
+
+function checkAddress(address) {
+  const parts = address.split('.');
+  if (parts.length !== 4 || parts.some(part => !/^(0|[1-9][0-9]{0,2})$/.test(part) || Number(part) > 255) ||
+      Number(parts[0]) === 0 || Number(parts[0]) === 127 || Number(parts[0]) >= 224) {
+    throw new Error('Enter the host’s LAN IPv4 address, such as 192.168.1.50.');
   }
-  if (downloader && !media) throw new Error('Enter a media directory to enable Transmission.');
-  for (const [flag, value, label] of [['media-path', media, 'Media directory'], ['state-dir', state, 'State directory']]) {
-    if (!value) continue;
-    if (!value.startsWith('/') || /[\u0000-\u001f\u007f]/.test(value)) {
-      throw new Error(label + ' must be an absolute Linux path starting with /.');
-    }
-    args.push('--' + flag + '=' + shellQuote(value));
+}
+
+function checkPath(value, label) {
+  if (value && (!value.startsWith('/') || /[\u0000-\u001f\u007f]/.test(value))) {
+    throw new Error(label + ' must be an absolute Linux path starting with /.');
   }
-  if (vpn) {
-    args.push('--enable-vpn', '--vpn-provider=' + shellQuote(provider));
-    args.push((exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(exit));
-  }
-  if (downloader) args.push('--download-client=' + shellQuote(downloader));
-  if (prowlarr) args.push('--enable-prowlarr');
-  if (prowlarr && flaresolverr) args.push('--enable-flaresolverr');
-  if (downloads) args.push('--download-network=' + (behindVpn ? 'vpn' : 'direct'));
-  const usedPorts = new Set();
-  for (const [name, label, fallback] of portOptions.filter(([name]) => name === 'prowlarr' ? prowlarr : name === 'transmission' ? downloader : true)) {
-    const raw = ports[name];
+}
+
+function enabledPorts(options) {
+  return portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name === 'transmission' ? options.downloader : true);
+}
+
+function checkPorts(options) {
+  const used = new Set();
+  for (const [name, label, fallback] of enabledPorts(options)) {
+    const raw = options.ports[name] ?? '';
     const port = raw === '' ? fallback : Number(raw);
     if ((raw !== '' && !/^[0-9]+$/.test(raw)) || port < 1024 || port > 65535) {
       throw new Error(label + ' needs a port from 1024 to 65535.');
     }
-    if (usedPorts.has(port)) throw new Error('Each enabled service needs a different port.');
-    usedPorts.add(port);
-    if (port !== fallback) args.push('--' + name + '-port=' + port);
+    if (used.has(port)) throw new Error('Each enabled service needs a different port.');
+    used.add(port);
   }
+}
+
+/** Throws an Error describing the first problem on one step, using the current answers. */
+function validateStep(step, options) {
+  if (step === 'access' && options.lan) checkAddress(options.address);
+  if (step === 'media') checkPath(options.media, 'Media directory');
+  if (step === 'downloads' && options.downloader && !options.media) {
+    throw new Error('Transmission needs a media directory. Add one in the Media step or choose “Set up later”.');
+  }
+  if (step === 'options') {
+    checkPath(options.state, 'State directory');
+    checkPorts(options);
+  }
+  if (step === 'location') checkPath(options.state, 'State directory');
+}
+
+function installArguments(options) {
+  const mode = options.mode || 'new';
+  const args = [];
+  if (mode === 'update') {
+    args.push('--update');
+    validateStep('location', options);
+    if (options.state) args.push('--state-dir=' + shellQuote(options.state));
+    return args;
+  }
+  for (const step of ['access', 'media', 'downloads', 'options']) validateStep(step, options);
+  if (options.lan) args.push('--dashboard-bind=' + shellQuote(options.address));
+  if (options.media) args.push('--media-path=' + shellQuote(options.media));
+  if (options.state) args.push('--state-dir=' + shellQuote(options.state));
+  if (options.vpn) {
+    args.push('--enable-vpn', '--vpn-provider=' + shellQuote(options.provider));
+    args.push((options.exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(options.exit));
+  }
+  if (options.downloader) args.push('--download-client=' + shellQuote(options.downloader));
+  if (options.prowlarr) args.push('--enable-prowlarr');
+  if (options.prowlarr && options.flaresolverr) args.push('--enable-flaresolverr');
+  if (options.downloader || options.prowlarr) args.push('--download-network=' + (options.behindVpn ? 'vpn' : 'direct'));
+  for (const [name, , fallback] of enabledPorts(options)) {
+    const raw = options.ports[name] ?? '';
+    if (raw !== '' && Number(raw) !== fallback) args.push('--' + name + '-port=' + Number(raw));
+  }
+  if (mode === 'reset') args.push('--reset');
   return args;
 }
 
-const byId = id => document.getElementById(id);
-const root = byId('options');
-const copyButtons = document.querySelectorAll('[data-copy]');
-const steps = [...root.querySelectorAll('.step')];
-const progress = [...document.querySelectorAll('.steps li')];
-let activeStep = 0;
-let preferVpnRoute = true;
-for (const [name, label, fallback] of portOptions) {
-  const row = document.createElement('div');
-  const caption = document.createElement('label');
-  const input = document.createElement('input');
-  input.id = name + '-port';
-  input.type = 'number';
-  input.min = 1024;
-  input.max = 65535;
-  input.placeholder = String(fallback);
-  caption.htmlFor = input.id;
-  caption.textContent = label + ' port';
-  row.append(caption, input);
-  byId('ports').append(row);
+/** The ordered commands for a task. Each has a title, an optional note, and the text to copy. */
+function buildCommands(options) {
+  const mode = options.mode || 'new';
+  const args = installArguments(options);
+  const install = formatCommand([INSTALLER, ...args]);
+  const checkCommand = formatCommand([INSTALLER, ...args, '--check']);
+  const fetch = mode === 'new'
+    ? {title: 'Get MartinFlix', note: 'Already have a checkout? Run git pull --ff-only inside it instead.',
+      command: `git clone --depth 1 ${REPOSITORY}\ncd martinflix`}
+    : {title: 'Get the latest version', note: 'Run inside the checkout you installed from.', command: 'cd martinflix\ngit pull --ff-only'};
+  const check = {title: 'Check', command: checkCommand,
+    note: mode === 'reset' ? 'Validates the new setup. Nothing is stopped or archived yet.'
+      : 'Changes nothing. Fix anything it reports and run it again.'};
+  const run = {
+    new: {title: 'Install', command: install, note: 'Safe to rerun with the same options to resume.'},
+    update: {title: 'Update', command: install, note: 'Containers may restart briefly. App data and passwords are kept.'},
+    reset: {title: 'Reset and install', command: install, note: 'Type RESET when the installer asks.'},
+  }[mode];
+  return [fetch, check, run];
 }
 
-function currentOptions() {
-  return {
-    lan: root.elements.access.value === 'lan',
-    vpn: byId('vpn').checked,
-    provider: byId('vpn-provider').value,
-    exit: byId('vpn-exit').value,
-    downloader: byId('download-client').value,
-    prowlarr: byId('prowlarr').checked,
-    flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
-    behindVpn: byId('vpn').checked && preferVpnRoute,
-    address: byId('address').value.trim(),
-    media: byId('media').value.trim(),
-    state: byId('state').value.trim(),
-    reset: byId('reset').checked,
-    ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value])),
-  };
-}
+if (typeof module !== 'undefined') module.exports = {installArguments, buildCommands, validateStep, shellQuote, STEPS};
 
-function update(event) {
-  const route = byId('route-vpn');
-  if (event?.target === route) preferVpnRoute = route.checked;
-  const options = currentOptions();
-  const mediaBase = (options.media || '/mnt/media').replace(/\/+$/, '');
-  for (const path of document.querySelectorAll('[data-media-folder]')) {
-    path.textContent = mediaBase + '/' + path.dataset.mediaFolder;
+if (typeof document !== 'undefined') {
+  const byId = id => document.getElementById(id);
+  const root = byId('options');
+  const sections = Object.fromEntries([...root.querySelectorAll('.step')].map(section => [section.dataset.step, section]));
+  let activeIndex = 0;
+  let furthest = 0;
+  let preferVpnRoute = true;
+
+  for (const [name, label, fallback] of portOptions) {
+    const row = document.createElement('div');
+    row.className = 'field';
+    const caption = document.createElement('label');
+    const input = document.createElement('input');
+    input.id = name + '-port';
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.placeholder = String(fallback);
+    caption.htmlFor = input.id;
+    caption.textContent = label + ' port';
+    row.append(caption, input);
+    byId('ports').append(row);
   }
-  byId('lan-options').hidden = !options.lan;
-  byId('vpn-options').hidden = !options.vpn;
-  const hasDownloadApps = Boolean(options.downloader || options.prowlarr);
-  byId('flaresolverr').disabled = !options.prowlarr;
-  byId('flaresolverr-help').hidden = options.prowlarr;
-  route.disabled = !options.vpn || !hasDownloadApps;
-  route.checked = !route.disabled && preferVpnRoute;
-  byId('vpn-route-help').hidden = options.vpn;
-  byId('direct-route').hidden = !hasDownloadApps || route.checked;
-  byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
-  byId('transmission-port').parentElement.hidden = !options.downloader;
-  byId('regular-setup').hidden = options.reset;
-  byId('prerequisite-command').hidden = options.reset;
-  byId('reset-instructions').hidden = !options.reset;
-  byId('install-label').textContent = options.reset ? 'Reset and install' : 'Install';
-  byId('copy-install').textContent = options.reset ? 'Copy reset' : 'Copy install';
-  byId('review-title').textContent = options.reset ? 'Ready to reset' : 'Ready to install';
-  byId('review-instructions').textContent = options.reset
-    ? 'Verify the state directory, then run the reset command on your Linux host.'
-    : 'Copy the prerequisite check, then run the install command once the check passes.';
-  const error = byId('error');
-  byId('copy-status').textContent = '';
-  byId('step-error').hidden = true;
-  try {
-    const command = ['python3 deploy/bootstrap/install.py', ...installArguments(options)].join(' ');
-    byId('check-command').value = command + ' --check';
-    byId('install-command').value = options.reset ? command + ' --reset' : command;
-    error.hidden = true;
-    for (const button of copyButtons) button.disabled = false;
-  } catch (issue) {
-    error.textContent = 'Preview paused. ' + issue.message;
-    error.hidden = false;
-    for (const button of copyButtons) button.disabled = true;
-  }
-}
 
-function showStep(index) {
-  activeStep = index;
-  steps.forEach((step, number) => {
-    step.hidden = number !== index;
-    progress[number].classList.toggle('complete', number < index);
-    if (number === index) progress[number].setAttribute('aria-current', 'step');
-    else progress[number].removeAttribute('aria-current');
-  });
-  byId('step-error').hidden = true;
-  byId('back').hidden = index === 0;
-  byId('next').hidden = index === steps.length - 1;
-  byId('next').textContent = index === steps.length - 2 ? 'Review setup' : 'Next';
-  if (index === steps.length - 1) {
-    const options = currentOptions();
-    const summary = [
-      ['Dashboard', options.lan ? options.address : 'On the Linux host'],
-      ['Media directory', options.media || 'Configure later'],
-      ['VPN', options.vpn ? 'NordVPN · ' + options.exit : 'Configure later'],
-      ['Download services', [options.downloader && 'Transmission', options.prowlarr && 'Prowlarr',
-        options.flaresolverr && 'FlareSolverr'].filter(Boolean).join(', ') || 'Configure later'],
-    ];
-    if (options.downloader || options.prowlarr) summary.push(['Download network', options.behindVpn ? 'VPN' : 'Normal internet connection']);
-    if (options.reset) summary.push(['Setup mode', 'Start from scratch']);
-    if (options.state || options.reset) summary.push(['Installation state', options.state || 'Default installer location']);
-    for (const [name, label, fallback] of portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name === 'transmission' ? options.downloader : true)) {
-      const port = options.ports[name];
-      if (port && Number(port) !== fallback) summary.push([label + ' port', port]);
+  const mode = () => root.elements.mode.value;
+  const steps = () => STEPS[mode()];
+
+  function currentOptions() {
+    const update = mode() === 'update';
+    return {
+      mode: mode(),
+      lan: root.elements.access.value === 'lan',
+      address: byId('address').value.trim(),
+      media: byId('media').value.trim(),
+      vpn: byId('vpn').checked,
+      provider: byId('vpn-provider').value,
+      exit: byId('vpn-exit').value,
+      downloader: byId('download-client').value,
+      prowlarr: byId('prowlarr').checked,
+      flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
+      behindVpn: byId('vpn').checked && preferVpnRoute,
+      state: (update ? byId('state-update') : byId('state')).value.trim(),
+      ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
+    };
+  }
+
+  function renderProgress() {
+    const list = byId('progress');
+    list.replaceChildren();
+    steps().forEach((step, index) => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'progress-step';
+      button.dataset.index = String(index);
+      button.disabled = index > furthest;
+      if (index < activeIndex) item.classList.add('is-done');
+      if (index === activeIndex) button.setAttribute('aria-current', 'step');
+      const number = document.createElement('span');
+      number.className = 'progress-number';
+      number.setAttribute('aria-hidden', 'true');
+      number.textContent = String(index + 1);
+      const label = document.createElement('span');
+      label.textContent = STEP_LABELS[step];
+      button.append(number, label);
+      item.append(button);
+      list.append(item);
+    });
+  }
+
+  function renderCommands(options) {
+    const list = byId('command-list');
+    const error = byId('error');
+    try {
+      const commands = buildCommands(options);
+      error.hidden = true;
+      list.replaceChildren(...commands.map((item, index) => {
+        const entry = document.createElement('li');
+        entry.className = 'command';
+        const head = document.createElement('div');
+        head.className = 'command-head';
+        const title = document.createElement('h3');
+        title.id = 'command-title-' + index;
+        title.textContent = item.title;
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'button button-tinted button-small';
+        copy.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span>';
+        copy.setAttribute('aria-describedby', title.id);
+        const pre = document.createElement('pre');
+        pre.tabIndex = 0;
+        pre.setAttribute('aria-labelledby', title.id);
+        const code = document.createElement('code');
+        code.textContent = item.command;
+        pre.append(code);
+        copy.addEventListener('click', () => copyCommand(copy, pre, item.command));
+        head.append(title, copy);
+        entry.append(head, pre);
+        if (item.note) {
+          const note = document.createElement('p');
+          note.textContent = item.note;
+          entry.append(note);
+        }
+        return entry;
+      }));
+    } catch (issue) {
+      list.replaceChildren();
+      error.textContent = 'Commands paused: ' + issue.message;
+      error.hidden = false;
+    }
+  }
+
+  async function copyCommand(button, pre, text) {
+    const label = button.querySelector('span');
+    try {
+      await navigator.clipboard.writeText(text);
+      label.textContent = 'Copied';
+      button.querySelector('use').setAttribute('href', '#i-check');
+      byId('copy-status').textContent = 'Copied to clipboard.';
+      setTimeout(() => {
+        label.textContent = 'Copy';
+        button.querySelector('use').setAttribute('href', '#i-copy');
+      }, 2000);
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(pre);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      pre.focus();
+      byId('copy-status').textContent = 'Command selected. Copy it with your keyboard or device menu.';
+    }
+  }
+
+  function renderReview(options) {
+    const summary = [];
+    if (options.mode === 'update') {
+      summary.push(['Task', 'Update the existing installation'], ['Installation', options.state || 'Default location'],
+        ['Settings', 'Kept from the last run']);
+    } else {
+      summary.push(['Task', options.mode === 'reset' ? 'Start from scratch' : 'New installation']);
+      summary.push(['Open apps from', options.lan ? options.address : 'The Linux host only']);
+      summary.push(['Media directory', options.media || 'Not yet']);
+      summary.push(['VPN', options.vpn ? `NordVPN · ${byId('vpn-exit').selectedOptions[0].textContent.replace(' (default)', '')}` : 'Not installed']);
+      const apps = [options.downloader && 'Transmission', options.prowlarr && 'Prowlarr', options.flaresolverr && 'FlareSolverr'].filter(Boolean);
+      summary.push(['Download apps', apps.join(', ') || 'None yet']);
+      if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
+      summary.push(['State directory', options.state || 'Default location']);
+      for (const [name, label, fallback] of enabledPorts(options)) {
+        const port = options.ports[name];
+        if (port && Number(port) !== fallback) summary.push([label + ' port', port]);
+      }
     }
     const review = byId('review');
-    review.replaceChildren();
-    for (const [label, value] of summary) {
+    review.replaceChildren(...summary.map(([label, value]) => {
+      const row = document.createElement('div');
       const term = document.createElement('dt');
       const definition = document.createElement('dd');
       term.textContent = label;
       definition.textContent = value;
-      review.append(term, definition);
-    }
+      row.append(term, definition);
+      return row;
+    }));
+    byId('review-title').textContent = {new: 'Ready to install', update: 'Ready to update', reset: 'Ready to start from scratch'}[options.mode];
+    byId('reset-warning').hidden = options.mode !== 'reset';
   }
-  steps[index].querySelector('h2').focus();
-}
 
-function nextStep() {
-  if (activeStep === steps.length - 1) return;
-  const options = currentOptions();
-  const defaults = Object.fromEntries(portOptions.map(([name]) => [name, '']));
-  try {
-    installArguments({
-      ...options,
-      lan: activeStep === 0 && options.lan,
-      downloader: activeStep >= 3 ? options.downloader : '',
-      prowlarr: activeStep >= 3 && options.prowlarr,
-      flaresolverr: activeStep >= 3 && options.flaresolverr,
-      media: activeStep > 0 ? options.media : '',
-      state: activeStep >= 4 ? options.state : '',
-      ports: activeStep >= 4 ? options.ports : defaults,
-    });
-    showStep(activeStep + 1);
-  } catch (issue) {
+  function update(event) {
+    const route = byId('route-vpn');
+    if (event?.target === route) preferVpnRoute = route.checked;
+    if (event?.target?.name === 'mode') furthest = 0;
+    const options = currentOptions();
+    const mediaBase = (options.media || '/mnt/media').replace(/\/+$/, '');
+    for (const path of document.querySelectorAll('[data-media-folder]')) path.textContent = mediaBase + '/' + path.dataset.mediaFolder;
+    byId('lan-options').hidden = !options.lan;
+    byId('vpn-options').hidden = !options.vpn;
+    const hasDownloadApps = Boolean(options.downloader || options.prowlarr);
+    byId('flaresolverr').disabled = !options.prowlarr;
+    route.disabled = !options.vpn || !hasDownloadApps;
+    route.checked = !route.disabled && preferVpnRoute;
+    byId('route-help').textContent = !options.vpn ? 'Turn on the VPN gateway in the previous step to use this.'
+      : !hasDownloadApps ? 'Choose a download client or Prowlarr first.'
+        : route.checked ? 'On by default. If the tunnel drops, these apps lose internet access instead of leaking.'
+          : 'These apps will use the host’s normal internet connection.';
+    byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
+    byId('transmission-port').parentElement.hidden = !options.downloader;
+    byId('commands-lede').textContent = options.mode === 'new'
+      ? 'Run these on the Linux host as your normal user, not with sudo.'
+      : 'Run these in your existing MartinFlix checkout, as the account that installed it.';
+    byId('step-error').hidden = true;
+    if (steps()[activeIndex] === 'review') renderReview(options);
+    renderCommands(options);
+    renderProgress();
+  }
+
+  function showStep(index, focus = true) {
+    const order = steps();
+    activeIndex = index;
+    furthest = Math.max(furthest, index);
+    for (const [name, section] of Object.entries(sections)) section.hidden = name !== order[index];
+    byId('step-error').hidden = true;
+    byId('back').hidden = index === 0;
+    byId('next').hidden = index === order.length - 1;
+    byId('skip').hidden = index === 0 || index >= order.length - 2;
+    byId('next').firstChild.textContent = index === order.length - 2 ? 'Review' : 'Next';
+    if (order[index] === 'review') renderReview(currentOptions());
+    renderProgress();
+    if (focus) sections[order[index]].querySelector('h2').focus();
+  }
+
+  function fail(message) {
     const error = byId('step-error');
-    error.textContent = issue.message;
+    error.textContent = message;
     error.hidden = false;
   }
-}
 
-root.addEventListener('submit', event => {
-  event.preventDefault();
-  nextStep();
-});
-byId('next').addEventListener('click', event => {
-  event.preventDefault();
-  nextStep();
-});
-byId('back').addEventListener('click', () => showStep(activeStep - 1));
-root.addEventListener('input', update);
-for (const button of copyButtons) {
-  button.addEventListener('click', async () => {
-    const output = byId(button.dataset.copy);
-    try {
-      await navigator.clipboard.writeText(output.value);
-      byId('copy-status').textContent = 'Copied to clipboard.';
-    } catch {
-      output.focus();
-      output.select();
-      byId('copy-status').textContent = 'Command selected. Copy it with your keyboard or device menu.';
+  function goTo(target) {
+    const order = steps();
+    const options = currentOptions();
+    for (let index = activeIndex; index < target; index++) {
+      try {
+        validateStep(order[index], options);
+      } catch (issue) {
+        if (index !== activeIndex) showStep(index);
+        fail(issue.message);
+        return;
+      }
     }
+    showStep(target);
+  }
+
+  root.addEventListener('submit', event => {
+    event.preventDefault();
+    if (activeIndex < steps().length - 1) goTo(activeIndex + 1);
   });
+  byId('back').addEventListener('click', () => showStep(activeIndex - 1));
+  byId('skip').addEventListener('click', () => {
+    furthest = steps().length - 1;
+    goTo(steps().length - 1);
+  });
+  byId('progress').addEventListener('click', event => {
+    const button = event.target.closest('.progress-step');
+    if (!button || button.disabled) return;
+    const target = Number(button.dataset.index);
+    if (target <= activeIndex) showStep(target);
+    else goTo(target);
+  });
+  root.addEventListener('input', update);
+  root.addEventListener('change', update);
+  showStep(0, false);
+  update();
+  byId('next').disabled = false;
 }
-update();
-byId('next').disabled = false;

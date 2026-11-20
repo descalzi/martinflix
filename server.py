@@ -35,22 +35,9 @@ ARR_HEALTH_ENDPOINTS = {
     'prowlarr': (9696, '/api/v1/health'),
     'bazarr': (6767, '/api/system/health'),
 }
-SERVICE_WEB_PORTS = {
-    'portainer': 9443, 'plex': 32400, 'transmission-daemon': 9091, 'prowlarr': 9696,
-    'bazarr': 6767, 'sonarr': 8989, 'radarr': 7878, 'bookorbit-app': 3001,
-    'homepage': 3000, 'seerr': 5055, 'tautulli': 8181, 'bookshelf': 8787,
-}
-INSTALLER_WEB_APPS = {
-    'sonarr': 'SONARR', 'radarr': 'RADARR', 'prowlarr': 'PROWLARR', 'transmission-daemon': 'TRANSMISSION',
-}
-STACKS = {
-    'Core': ['tailscale', 'portainer'],
-    'Media server': ['plex'],
-    'Downloads & automation': ['nordvpn', 'transmission-daemon', 'flaresolverr', 'prowlarr', 'bazarr', 'sonarr', 'radarr'],
-    'Books': ['bookorbit-db', 'bookorbit-app'],
-    'Web services': ['homepage', 'seerr', 'tautulli'],
-    'Bookshelf (optional)': ['bookshelf'],
-}
+CATALOG = json.loads((WEB / 'catalog.json').read_text(encoding='utf-8'))
+STACKS = {group['name']: group['services'] for group in CATALOG['groups']}
+PAGES = ('overview', 'library', 'services', 'backups')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -218,17 +205,18 @@ def service_status():
     status = container_status()
     all_services = [service for group in status['groups'] for service in group['services']]
     for service in all_services:
-        name = service['name']
-        port = SERVICE_WEB_PORTS.get(name)
-        if port is None or service['state'] == 'missing':
+        app = CATALOG['apps'].get(service['name'], {})
+        web = app.get('web')
+        if web is None or service['state'] == 'missing':
             continue
+        port = web['port']
         local_only = False
-        if status.get('source') == 'app-probes':
-            app = INSTALLER_WEB_APPS[name]
-            port = int(os.environ.get(f'MARTINFLIX_{app}_WEB_PORT', port))
-            local_only = name in ('prowlarr', 'transmission-daemon')
-        service['web'] = {'port': port, 'scheme': 'https' if name == 'portainer' else 'http',
-                          'path': '/web/' if name == 'plex' else '/', 'localOnly': local_only}
+        installer = app.get('installer')
+        if status.get('source') == 'app-probes' and installer:
+            port = int(os.environ.get(f'MARTINFLIX_{installer["env"]}_WEB_PORT', port))
+            local_only = installer.get('localOnly', False)
+        service['web'] = {'port': port, 'scheme': web.get('scheme', 'http'),
+                          'path': web.get('path', '/'), 'localOnly': local_only}
     services = [service for service in all_services
                 if service['name'] in ARR_HEALTH_ENDPOINTS and service['state'] in ('reachable', 'running')]
     if services:
@@ -390,6 +378,12 @@ class Handler(BaseHTTPRequestHandler):
         if form_login and path in ('/style.css', '/auth.js'):
             self.send_web_file(path[1:], 'text/css' if path == '/style.css' else 'text/javascript')
             return
+        if re.fullmatch(r'/fonts/[a-z0-9-]+\.woff2', path):
+            self.send_asset(path[1:], 'font/woff2', cache='public, max-age=604800, immutable')
+            return
+        if path == '/assets/martinflix-mark.webp':
+            self.send_asset(path[1:], 'image/webp')
+            return
         if form_login and path == '/login':
             if self.authorized():
                 self.redirect('/setup-password' if self.server.password_setup_required else '/')
@@ -413,7 +407,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_auth_page('setup-password.html', changing=True)
             return
         if path == '/api/status':
-            data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()), 'canChangePassword': form_login}
+            catalog = {key: CATALOG[key] for key in ('apps', 'branches', 'startAfter', 'pipeline')}
+            data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
+                    'canChangePassword': form_login, 'catalog': catalog}
             self.send_json(data)
         elif path == '/api/activity':
             self.send_json(dashboard_activity())
@@ -431,31 +427,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
             self.wfile.write(body)
-        elif path in ('/', '/services', '/app.js', '/style.css'):
-            static = {
-                '/': ('index.html', 'text/html'),
-                '/services': ('index.html', 'text/html'),
-                '/app.js': ('app.js', 'text/javascript'),
-                '/style.css': ('style.css', 'text/css'),
-            }
-            if path == '/services':
-                page = (WEB / 'index.html').read_bytes().replace(b'data-page="overview"', b'data-page="services"', 1)
-                self.send_web_file(*static[path], body=page)
-            else:
-                self.send_web_file(*static[path])
+        elif path == '/' or path.strip('/') in PAGES:
+            page = path.strip('/') or 'overview'
+            body = (WEB / 'index.html').read_bytes().replace(b'data-page="overview"', f'data-page="{page}"'.encode(), 1)
+            self.send_web_file('index.html', 'text/html', body=body)
+        elif path in ('/app.js', '/style.css'):
+            self.send_web_file(path[1:], 'text/javascript' if path == '/app.js' else 'text/css')
         elif re.fullmatch(r'/assets/[a-z0-9-]+\.webp', path):
-            try:
-                body = (WEB / path[1:]).read_bytes()
-            except FileNotFoundError:
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header('Content-Type', 'image/webp')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Cache-Control', 'private, max-age=3600')
-            self.send_header('X-Content-Type-Options', 'nosniff')
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_asset(path[1:], 'image/webp')
         else:
             self.send_error(404)
 
@@ -594,6 +573,20 @@ class Handler(BaseHTTPRequestHandler):
                 .replace('{{MIN_PASSWORD}}', str(MIN_PERSONAL_PASSWORD))
                 .replace('{{NOTICE}}', notice).replace('{{ERROR}}', error).encode())
         self.send_web_file(name, 'text/html', status, body)
+
+    def send_asset(self, name, content_type, cache='private, max-age=3600'):
+        try:
+            body = (WEB / name).read_bytes()
+        except FileNotFoundError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', cache)
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_web_file(self, name, content_type, status=200, body=None):
         if body is None:

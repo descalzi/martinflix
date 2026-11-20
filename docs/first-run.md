@@ -36,7 +36,7 @@ The dashboard, Sonarr, and Radarr publish on loopback by default. Pass `--dashbo
 
 ### Start from scratch
 
-Run your installer command again and add `--reset`. Include the state directory, LAN address, media path, and optional services you want for the new installation. Type `RESET` at the prompt. Setup stops the old stack, archives its app databases, configuration, and credentials in a private `reset-backup-*` directory inside the state directory, then creates a fresh installation. Your media files stay in place. Keep the archive private because it contains old credentials.
+Run your installer command again and add `--reset`. Include the state directory, LAN address, media path, and optional services you want for the new installation. Run it with `--check` as well first: the check validates the new options, Docker, directories, and ports without stopping or archiving anything. Then run it without `--check` and type `RESET` at the prompt. Setup validates every option before it asks, so a mistake never leaves you with a stopped stack. Setup stops the old stack, archives its app databases, configuration, and credentials in a private `reset-backup-*` directory inside the state directory, then creates a fresh installation. Your media files stay in place. Keep the archive private because it contains old credentials.
 
 To run an isolated trial alongside another stack, use a separate state directory and different host ports:
 
@@ -46,7 +46,13 @@ python3 deploy/bootstrap/install.py \
   --dashboard-port 18765 --sonarr-port 18989 --radarr-port 17878
 ```
 
-Rerun with the same state directory and options to resume setup or install an update. It may rebuild and recreate containers. Bind-mounted settings, databases, credentials, and media persist. App data for these installs is under the state directory and each app normally mounts its subdirectory at `/config`. References to `/var/lib` in the inventory and existing-host guides describe the older reference deployment. The project name follows the state directory. The installer preserves app configurations and the password set on first sign-in, refreshes the private copies of the Arr keys, and verifies both connections again. Keep the application data and password files outside the checkout. The dashboard has no Docker socket.
+### Update an existing installation
+
+From your checkout, run `git pull --ff-only`, then `python3 deploy/bootstrap/install.py --update --check` and `python3 deploy/bootstrap/install.py --update`. Add `--state-dir` for a custom location. `--update` fails instead of creating a new installation if it cannot find one.
+
+Setup remembers the dashboard address, ports, media directory, VPN exit, and download services. An update reuses them, and any flag you pass changes that one setting, for example `--enable-prowlarr` to add Prowlarr or `--dashboard-port 18765` to move the dashboard. Installs created before setup saved the address and ports recover them from their running containers. If those containers are stopped, pass `--dashboard-bind` again if you use LAN access. The download route can’t change in place; start from scratch to change it.
+
+An update may rebuild and recreate containers. Bind-mounted settings, databases, credentials, and media persist. App data for these installs is under the state directory and each app normally mounts its subdirectory at `/config`. References to `/var/lib` in the inventory and existing-host guides describe the older reference deployment. The project name follows the state directory. The installer preserves app configurations and the password set on first sign-in, refreshes the private copies of the Arr keys, and verifies both connections again. Keep the application data and password files outside the checkout. The dashboard has no Docker socket.
 
 ## Media and downloads
 

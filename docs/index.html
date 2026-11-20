@@ -3,130 +3,184 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Build a MartinFlix installer command for your Linux host.">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#142723">
+  <meta name="description" content="Build the MartinFlix installer commands for your Linux host: new installs, updates, and fresh starts.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
-  <link rel="stylesheet" href="./setup.css?v=wizard-6">
-  <script src="./setup.js?v=wizard-7" defer></script>
+  <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./setup.css?v=wizard-8">
+  <script src="./setup.js?v=wizard-8" defer></script>
 </head>
 <body>
-  <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
-  <main>
-    <h1>Set up MartinFlix</h1>
-    <p>Choose how to run MartinFlix, then copy the commands to your Linux terminal. Your answers stay in this browser tab.</p>
-    <ol class="steps" aria-label="Setup progress">
-      <li aria-current="step"><span>1</span> Access</li>
-      <li><span>2</span> Media</li>
-      <li><span>3</span> VPN</li>
-      <li><span>4</span> Downloads</li>
-      <li><span>5</span> Options</li>
-      <li><span>6</span> Review</li>
-    </ol>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5 11 13M17.5 14v4.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1H10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  </svg>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="./"><img src="./favicon.webp" width="32" height="32" alt=""><span>MartinFlix</span></a>
+    <nav aria-label="Project">
+      <a href="https://github.com/descalzi/martinflix/blob/main/docs/first-run.md">Setup guide</a>
+      <a href="https://github.com/descalzi/martinflix">GitHub<svg class="icon icon-small" aria-hidden="true"><use href="#i-external"/></svg></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <div class="intro">
+      <h1>Set up MartinFlix</h1>
+      <p>Pick a task, adjust anything you like, then run the commands on your Linux host. Every step starts with a sensible default, and your answers never leave this browser tab.</p>
+    </div>
+
     <div class="layout">
-      <form id="options" autocomplete="off" novalidate>
-        <section class="step" aria-labelledby="access-title">
-          <h2 id="access-title" tabindex="-1">Dashboard access</h2>
-          <fieldset>
-            <legend>Where will you open MartinFlix, Sonarr, and Radarr?</legend>
-            <label><input type="radio" name="access" value="local" checked> On the Linux host</label>
-            <label><input type="radio" name="access" value="lan"> On another device on my home network</label>
-            <div id="lan-options" hidden>
-              <label for="address">Linux host’s LAN IPv4 address</label>
+      <div class="wizard">
+        <nav class="progress" aria-label="Setup steps"><ol id="progress"></ol></nav>
+
+        <form id="options" class="card" autocomplete="off" novalidate>
+          <section class="step" data-step="task" aria-labelledby="task-title">
+            <h2 id="task-title" tabindex="-1">What do you want to do?</h2>
+            <fieldset class="choices">
+              <legend class="sr-only">Task</legend>
+              <label class="choice">
+                <input type="radio" name="mode" value="new" checked>
+                <span class="choice-body"><strong>New installation</strong><span>Install the dashboard, Sonarr and Radarr, plus any media, VPN and download apps you choose.</span></span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="mode" value="update">
+                <span class="choice-body"><strong>Update an existing installation</strong><span>Get the latest MartinFlix and reapply it. Settings, app data and passwords stay as they are.</span></span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="mode" value="reset">
+                <span class="choice-body"><strong>Start from scratch</strong><span>Archive the current apps, settings and passwords, then install again. Media files stay in place.</span></span>
+              </label>
+            </fieldset>
+          </section>
+
+          <section class="step" data-step="access" aria-labelledby="access-title" hidden>
+            <h2 id="access-title" tabindex="-1">Where will you open MartinFlix?</h2>
+            <p class="lede">The dashboard, Sonarr and Radarr share this address.</p>
+            <fieldset class="choices">
+              <legend class="sr-only">Dashboard access</legend>
+              <label class="choice">
+                <input type="radio" name="access" value="local" checked>
+                <span class="choice-body"><strong>On the Linux host itself <span class="tag">Default</span></strong><span>Apps listen on 127.0.0.1 only. Safest if the host has a desktop or you use an SSH tunnel.</span></span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="access" value="lan">
+                <span class="choice-body"><strong>From other devices at home</strong><span>Apps listen on the host’s LAN address. Use this on a trusted home network only.</span></span>
+              </label>
+            </fieldset>
+            <div class="field" id="lan-options" hidden>
+              <label for="address">Host’s LAN IPv4 address</label>
               <input id="address" type="text" inputmode="decimal" placeholder="192.168.1.50" aria-describedby="lan-help">
-              <small id="lan-help">All three apps use this address. Use a trusted network for HTTP access.</small>
+              <small id="lan-help">Find it on the host with <code>hostname -I</code>. HTTP isn’t encrypted, so keep these ports off the internet.</small>
             </div>
-          </fieldset>
-        </section>
-        <section class="step" aria-labelledby="media-title" hidden>
-          <h2 id="media-title" tabindex="-1">Media storage</h2>
-          <label for="media">Parent media directory <small>Optional for library monitoring</small></label>
-          <input id="media" type="text" placeholder="/mnt/media" aria-describedby="media-help">
-          <small id="media-help">Choose an existing writable folder on the Linux host. Setup reuses these three subfolders or creates them if missing.</small>
-          <dl class="media-paths" aria-label="Subfolders under the media directory">
-            <dt>Series · Sonarr</dt><dd><code data-media-folder="TV Shows">/mnt/media/TV Shows</code></dd>
-            <dt>Films · Radarr</dt><dd><code data-media-folder="Movies">/mnt/media/Movies</code></dd>
-            <dt>Downloads</dt><dd><code data-media-folder="downloads">/mnt/media/downloads</code></dd>
-          </dl>
-          <small>The installer uses these folder names. For a library laid out differently, configure its root folders in Sonarr and Radarr.</small>
-        </section>
-        <section class="step" aria-labelledby="vpn-title" hidden>
-          <h2 id="vpn-title" tabindex="-1">VPN</h2>
-          <label><input id="vpn" type="checkbox"> Install a VPN gateway</label>
-          <div id="vpn-options" hidden>
-            <label for="vpn-provider">VPN provider</label>
-            <select id="vpn-provider"><option value="nordvpn">NordVPN</option></select>
-            <label for="vpn-exit">Exit location</label>
-            <select id="vpn-exit">
-              <option value="Prague">Prague, Czech Republic</option>
-              <option>United Kingdom</option><option>Netherlands</option>
-              <option>Germany</option><option>United States</option>
-            </select>
-            <small>Enter your NordVPN service credentials in the terminal when setup asks for them.</small>
-          </div>
-        </section>
-        <section class="step" aria-labelledby="downloads-title" hidden>
-          <h2 id="downloads-title" tabindex="-1">Downloaders and trackers</h2>
-          <label for="download-client">Download client</label>
-          <select id="download-client"><option value="">Set up later</option><option value="transmission">Transmission</option></select>
-          <fieldset>
-            <legend>Trackers</legend>
-            <label><input id="prowlarr" type="checkbox" checked> Install Prowlarr to manage indexers</label>
-            <div>
-              <label><input id="flaresolverr" type="checkbox" checked aria-describedby="flaresolverr-help"> Install FlareSolverr for indexers that need it</label>
-              <small id="flaresolverr-help" hidden>FlareSolverr requires Prowlarr.</small>
+          </section>
+
+          <section class="step" data-step="media" aria-labelledby="media-title" hidden>
+            <h2 id="media-title" tabindex="-1">Media storage</h2>
+            <p class="lede">Optional. Leave it blank to monitor libraries without managing files yet. Downloads need a media directory.</p>
+            <div class="field">
+              <label for="media">Media directory</label>
+              <input id="media" type="text" placeholder="/mnt/media" aria-describedby="media-help" spellcheck="false">
+              <small id="media-help">An existing, writable folder on the host, such as a mounted NAS share. Setup reuses or creates these subfolders:</small>
             </div>
-          </fieldset>
-          <div>
-            <label><input id="route-vpn" type="checkbox" disabled aria-describedby="vpn-route-help direct-route"> Route these apps through the VPN</label>
-            <small id="vpn-route-help">Select a VPN in the previous step to enable this option.</small>
-            <small id="direct-route">These apps will use the host’s normal internet connection.</small>
+            <dl class="paths" aria-label="Subfolders under the media directory">
+              <div><dt>Series · Sonarr</dt><dd><code data-media-folder="TV Shows">/mnt/media/TV Shows</code></dd></div>
+              <div><dt>Films · Radarr</dt><dd><code data-media-folder="Movies">/mnt/media/Movies</code></dd></div>
+              <div><dt>Downloads</dt><dd><code data-media-folder="downloads">/mnt/media/downloads</code></dd></div>
+            </dl>
+          </section>
+
+          <section class="step" data-step="vpn" aria-labelledby="vpn-title" hidden>
+            <h2 id="vpn-title" tabindex="-1">VPN gateway</h2>
+            <p class="lede">Gluetun keeps download traffic inside a NordVPN tunnel and blocks it if the tunnel drops.</p>
+            <label class="toggle"><input id="vpn" type="checkbox"><span><strong>Install the VPN gateway</strong><span>Off by default. You’ll need NordVPN’s manual OpenVPN service credentials.</span></span></label>
+            <div id="vpn-options" class="field-group" hidden>
+              <div class="field">
+                <label for="vpn-provider">Provider</label>
+                <select id="vpn-provider"><option value="nordvpn">NordVPN</option></select>
+              </div>
+              <div class="field">
+                <label for="vpn-exit">Exit location</label>
+                <select id="vpn-exit">
+                  <option value="Prague">Prague, Czech Republic (default)</option>
+                  <option>United Kingdom</option><option>Netherlands</option>
+                  <option>Germany</option><option>United States</option>
+                </select>
+              </div>
+              <small>The installer asks for the service username and password in the terminal and stores them privately on the host.</small>
+            </div>
+          </section>
+
+          <section class="step" data-step="downloads" aria-labelledby="downloads-title" hidden>
+            <h2 id="downloads-title" tabindex="-1">Downloads and indexers</h2>
+            <div class="field">
+              <label for="download-client">Download client</label>
+              <select id="download-client" aria-describedby="client-help"><option value="">Set up later</option><option value="transmission">Transmission</option></select>
+              <small id="client-help">Transmission needs the media directory from the Media step.</small>
+            </div>
+            <fieldset class="toggles">
+              <legend>Indexers</legend>
+              <label class="toggle"><input id="prowlarr" type="checkbox" checked><span><strong>Prowlarr <span class="tag">Default</span></strong><span>Manages indexers and syncs them to Sonarr and Radarr.</span></span></label>
+              <label class="toggle"><input id="flaresolverr" type="checkbox" checked aria-describedby="flaresolverr-help"><span><strong>FlareSolverr <span class="tag">Default</span></strong><span id="flaresolverr-help">Helps Prowlarr reach indexers behind browser checks. Needs Prowlarr.</span></span></label>
+            </fieldset>
+            <label class="toggle" id="route-toggle"><input id="route-vpn" type="checkbox" disabled aria-describedby="route-help"><span><strong>Route these apps through the VPN</strong><span id="route-help">Turn on the VPN gateway in the previous step to use this.</span></span></label>
+          </section>
+
+          <section class="step" data-step="options" aria-labelledby="options-title" hidden>
+            <h2 id="options-title" tabindex="-1">Ports and storage</h2>
+            <p class="lede">Keep the defaults unless a port is already taken or you want app data somewhere else.</p>
+            <div class="field">
+              <label for="state">Installation state directory</label>
+              <input id="state" type="text" placeholder="~/.local/state/martinflix" aria-describedby="state-help" spellcheck="false">
+              <small id="state-help">Holds app settings, databases and private credentials. Leave blank for the default. An existing installation keeps its current folder unless you enter its absolute path here.</small>
+            </div>
+            <div id="ports" class="ports"></div>
+          </section>
+
+          <section class="step" data-step="location" aria-labelledby="location-title" hidden>
+            <h2 id="location-title" tabindex="-1">Which installation?</h2>
+            <p class="lede">Updates keep the saved address, ports, media directory and services. Setup finds the default installation on its own.</p>
+            <div class="field">
+              <label for="state-update">Installation state directory</label>
+              <input id="state-update" type="text" placeholder="Default installation" aria-describedby="state-update-help" spellcheck="false">
+              <small id="state-update-help">Only needed if you installed with a custom <code>--state-dir</code>. Enter the same absolute path.</small>
+            </div>
+          </section>
+
+          <section class="step" data-step="review" aria-labelledby="review-title" hidden>
+            <h2 id="review-title" tabindex="-1">Ready to install</h2>
+            <dl id="review" class="review"></dl>
+            <div class="callout" id="reset-warning" hidden>
+              <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+              <p>The reset command stops the current stack and moves its app databases, settings and passwords into a private <code>reset-backup-*</code> folder inside the state directory. Run the check first: it validates everything without changing anything.</p>
+            </div>
+          </section>
+
+          <p id="step-error" class="error" role="alert" hidden></p>
+          <div class="step-nav">
+            <button type="button" class="button button-quiet" id="back" hidden><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg>Back</button>
+            <button type="button" class="button button-link" id="skip" hidden>Use defaults for the rest</button>
+            <button type="submit" class="button button-primary" id="next" disabled>Next<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
           </div>
-        </section>
-        <section class="step" aria-labelledby="options-title" hidden>
-          <h2 id="options-title" tabindex="-1">Installation options</h2>
-          <p>Keep the defaults unless you need to change a port or store app data somewhere else.</p>
-          <label><input id="reset" type="checkbox" aria-describedby="reset-help"> Start from scratch with an existing installation</label>
-          <small id="reset-help">Setup archives the existing app settings, databases, and passwords and creates a fresh installation. Media files stay in place. Use the existing state directory and type <code>RESET</code> when the installer asks.</small>
-          <details>
-            <summary>Customize ports and storage</summary>
-            <label for="state">Installation state directory</label>
-            <input id="state" type="text" placeholder="~/.local/state/martinflix" aria-describedby="state-help">
-            <small id="state-help">Stores app settings, databases, and private credentials. Media stays in the separate media directory. Leave blank to use <code>~/.local/state/martinflix</code> for a new install. Existing installations keep their current folder. Enter an absolute path to use a different folder.</small>
-            <div id="ports"></div>
-          </details>
-        </section>
-        <section class="step" aria-labelledby="review-title" hidden>
-          <h2 id="review-title" tabindex="-1">Ready to install</h2>
-          <dl id="review"></dl>
-          <p id="review-instructions">Copy the prerequisite check, then run the install command once the check passes.</p>
-        </section>
-        <p id="step-error" role="alert" hidden></p>
-        <div class="step-nav">
-          <button type="button" id="back" hidden>Back</button>
-          <button type="submit" id="next" disabled>Next</button>
-        </div>
-      </form>
-      <section class="commands" aria-labelledby="commands-title">
-        <h2 id="commands-title">Command preview</h2>
-        <div id="regular-setup">
-          <p>Clone MartinFlix once, then run both commands from the checkout. Run the check first and install after it passes.</p>
-          <p>Already installed with this script? Pull the latest version and rerun it with the same state directory and settings. Setup keeps your app data and may briefly restart containers.</p>
-          <pre>git clone --depth 1 https://github.com/descalzi/martinflix.git
-cd martinflix</pre>
-        </div>
-        <p id="reset-instructions" hidden>Pull the latest version in your MartinFlix checkout, then run the reset command there. The installer checks Docker and asks you to type <code>RESET</code> before stopping the stack.</p>
-        <p id="error" role="status" hidden></p>
-        <div id="prerequisite-command">
-          <div class="command-head"><label for="check-command">Check prerequisites</label><button type="button" data-copy="check-command">Copy check</button></div>
-          <textarea id="check-command" rows="3" readonly spellcheck="false"></textarea>
-        </div>
-        <div class="command-head"><label id="install-label" for="install-command">Install</label><button id="copy-install" type="button" data-copy="install-command">Copy install</button></div>
-        <textarea id="install-command" rows="3" readonly spellcheck="false"></textarea>
-        <p id="copy-status" role="status"></p>
-        <a href="https://github.com/descalzi/martinflix/blob/main/docs/first-run.md">Read the first-run guide</a>
-        <noscript>Enable JavaScript to generate commands, or use the first-run guide.</noscript>
-      </section>
+        </form>
+      </div>
+
+      <aside class="commands card" aria-labelledby="commands-title">
+        <h2 id="commands-title">Your commands</h2>
+        <p class="lede" id="commands-lede">Run these on the Linux host as your normal user, not with sudo.</p>
+        <p id="error" class="error" role="status" hidden></p>
+        <ol class="command-list" id="command-list"></ol>
+        <p id="copy-status" class="sr-only" role="status"></p>
+        <p class="commands-foot">Need more detail? Read the <a href="https://github.com/descalzi/martinflix/blob/main/docs/first-run.md">first-run guide</a>.</p>
+        <noscript><p>Enable JavaScript to generate commands, or follow the first-run guide.</p></noscript>
+      </aside>
     </div>
   </main>
 </body>

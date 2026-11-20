@@ -3,78 +3,150 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111b1b">
-  <title>MartinFlix — Control room</title>
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#142723">
+  <title>MartinFlix</title>
   <meta name="description" content="A local view of your MartinFlix services and media.">
   <link rel="icon" href="/assets/martinflix-mark.webp" type="image/webp">
+  <link rel="preload" href="/fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body data-page="overview">
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-overview" viewBox="0 0 24 24"><path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9v11h4.5v-6h4v6h4.5V9"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M8 4.5v15M16 4.5v15M3.5 9.5H8M3.5 14.5H8M16 9.5h4.5M16 14.5h4.5"/></symbol>
+    <symbol id="i-services" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.25h.01M7 16.75h.01M11 7.25h6M11 16.75h6"/></symbol>
+    <symbol id="i-backups" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4.5" rx="1"/><path d="M4.5 8.5V19a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V8.5M10 12.5h4"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4v4.5H15"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5 11 13M17.5 14v4.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1H10"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-tunnel" viewBox="0 0 24 24"><path d="M12 3.5 5 6.5v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9v-5z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m10 8.5 5.5 3.5-5.5 3.5z"/></symbol>
+  </svg>
   <a class="skip" href="#main">Skip to content</a>
-  <div class="layout">
-    <aside class="sidebar">
-      <a href="/" class="brand"><img class="brand-mark" src="/assets/martinflix-mark.webp" width="41" height="41" alt=""><span>MartinFlix</span></a>
-      <nav aria-label="Main navigation">
-        <a href="/" id="nav-overview">Overview</a><a href="/services" id="nav-services">Services</a>
-        <a href="/#series">Series</a><a href="/#films">Films</a><a href="/#backups">Backups</a>
-        <a href="/change-password" id="nav-password" hidden>Change password</a>
+  <div class="shell">
+    <aside class="rail">
+      <a href="/" class="brand"><img class="brand-mark" src="/assets/martinflix-mark.webp" width="36" height="36" alt=""><span>MartinFlix</span></a>
+      <nav class="nav" aria-label="Main">
+        <a href="/" data-nav="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
+        <a href="/library" data-nav="library"><svg class="icon" aria-hidden="true"><use href="#i-library"/></svg><span>Library</span></a>
+        <a href="/services" data-nav="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span><span class="nav-flag" id="nav-flag" hidden></span></a>
+        <a href="/backups" data-nav="backups"><svg class="icon" aria-hidden="true"><use href="#i-backups"/></svg><span>Backups</span></a>
       </nav>
+      <div class="rail-foot">
+        <a href="/change-password" id="nav-password" hidden><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg><span>Change password</span></a>
+      </div>
     </aside>
-    <main id="main">
-      <header class="topbar"><span id="page-name">OVERVIEW</span><button id="refresh" type="button">↻ &nbsp; Refresh</button></header>
-      <div class="overview-page">
-        <section id="overview" class="hero"><h1><img src="/assets/martinflix-masthead.webp" width="1600" height="533" alt="MartinFlix"></h1></section>
-        <section class="summary" aria-label="System overview">
-          <a id="service-summary" href="/services">
-            <span class="metric-label" id="services-metric-label">SERVICES</span>
-            <strong id="running">—</strong>
-            <small id="services-summary-detail">Checking service status</small>
+
+    <main id="main" tabindex="-1">
+      <header class="pagebar">
+        <h1 id="page-title">Overview</h1>
+        <div class="pagebar-tools">
+          <span id="updated" class="updated">Loading…</span>
+          <button id="refresh" class="button button-quiet" type="button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+      </header>
+
+      <div class="page" data-for="overview">
+        <div class="masthead"><img src="/assets/martinflix-masthead.webp" width="1600" height="533" alt="MartinFlix" fetchpriority="high"></div>
+
+        <section class="status-strip" aria-label="System status">
+          <a class="status-item" id="service-summary" href="/services">
+            <span class="status-label" id="services-metric-label">Services</span>
+            <strong class="status-value" id="running">—</strong>
+            <span class="status-detail" id="services-summary-detail">Checking service status</span>
           </a>
-          <div>
-            <span class="metric-label">PLEX STREAMS</span>
-            <strong id="plex-streams">—</strong>
-            <small id="plex-detail">Checking playback activity</small>
+          <div class="status-item">
+            <span class="status-label">Plex streams</span>
+            <strong class="status-value" id="plex-streams">—</strong>
+            <span class="status-detail" id="plex-detail">Checking playback activity</span>
           </div>
-          <a href="#backups">
-            <span class="metric-label">LATEST BACKUP</span>
-            <strong id="latest-backup">—</strong>
-            <small id="backup-detail">Checking snapshots</small>
+          <a class="status-item" id="backup-summary" href="/backups">
+            <span class="status-label">Latest backup</span>
+            <strong class="status-value" id="latest-backup">—</strong>
+            <span class="status-detail" id="backup-detail">Checking snapshots</span>
           </a>
         </section>
-        <section id="now-playing" class="section now-playing" hidden>
-          <div class="section-head"><h2>Now playing</h2></div>
+
+        <section class="panel" aria-labelledby="pipeline-title">
+          <div class="panel-head">
+            <h2 id="pipeline-title">Media pipeline</h2>
+            <p>Each stage of getting a title from request to your screen.</p>
+          </div>
+          <div id="pipeline" class="pipeline-wrap" aria-live="polite"><p class="empty">Checking services…</p></div>
+        </section>
+
+        <section class="panel" id="attention-panel" aria-labelledby="attention-title" hidden>
+          <div class="panel-head">
+            <h2 id="attention-title">Needs attention</h2>
+            <a class="text-link" href="/services">Open services<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          </div>
+          <ul id="attention-list" class="attention-list"></ul>
+        </section>
+
+        <section class="panel" id="now-playing" aria-labelledby="playing-title" hidden>
+          <div class="panel-head"><h2 id="playing-title">Now playing</h2></div>
           <ul id="streams-list" class="streams-list"></ul>
         </section>
-        <section id="series" class="section library" data-library="sonarr">
-          <div class="section-head"><h2>Upcoming <em>series.</em></h2><p>Monitored series airing in the next 12 months.</p></div>
+
+        <section class="panel" aria-labelledby="next-title">
+          <div class="panel-head">
+            <h2 id="next-title">Up next</h2>
+            <a class="text-link" href="/library#series">All upcoming series<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          </div>
+          <div id="up-next" class="library-content" aria-live="polite"><p class="empty">Loading series…</p></div>
+        </section>
+      </div>
+
+      <div class="page" data-for="library">
+        <nav class="subnav" aria-label="Library sections"><a href="#series">Upcoming series</a><a href="#films">Missing films</a></nav>
+        <section id="series" class="panel library" data-library="sonarr" aria-labelledby="series-title">
+          <div class="panel-head">
+            <div><h2 id="series-title">Upcoming series</h2><p>Monitored series airing in the next 12 months, soonest first.</p></div>
+          </div>
           <div class="library-controls">
             <p class="library-count"></p>
-            <label class="search"><span class="sr-only">Find a series</span><input type="search" placeholder="Find a series…"></label>
+            <label class="search"><span class="sr-only">Find a series</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" placeholder="Find a series" autocomplete="off"></label>
           </div>
           <div class="library-content" aria-live="polite"><p class="empty">Loading series…</p></div>
         </section>
-        <section id="films" class="section library" data-library="radarr">
-          <div class="section-head"><h2>Missing <em>films.</em></h2><p>Monitored films without a file, sorted by release date.</p></div>
+        <section id="films" class="panel library" data-library="radarr" aria-labelledby="films-title">
+          <div class="panel-head">
+            <div><h2 id="films-title">Missing films</h2><p>Monitored films without a file, by release date.</p></div>
+            <a class="button button-tinted" id="seerr-link" href="/" target="_blank" rel="noopener noreferrer" hidden>Request in Seerr<svg class="icon" aria-hidden="true"><use href="#i-external"/></svg><span class="sr-only"> (opens in a new tab)</span></a>
+          </div>
           <div class="library-controls">
             <p class="library-count"></p>
-            <label class="search"><span class="sr-only">Find a film</span><input type="search" placeholder="Find a film…"></label>
+            <label class="search"><span class="sr-only">Find a film</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" placeholder="Find a film" autocomplete="off"></label>
           </div>
           <div class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
-          <div class="library-bottom" id="seerr-row" hidden><span>Requests &amp; discovery</span><a id="seerr-link" href="http://localhost:5055/" target="_blank" rel="noopener noreferrer">Open Seerr</a></div>
-        </section>
-        <section id="backups" class="section">
-          <div class="section-head"><h2>Backups <em>&amp; recovery.</em></h2><p>Snapshots of selected app backups.</p></div>
-          <div id="backups-content" class="backup-list"><p class="empty">Checking snapshots…</p></div>
-          <p class="footnote">Snapshot checksums verify the copied files. A recovery rehearsal verifies they can be restored.</p>
         </section>
       </div>
-      <section id="services" class="section services-page">
-        <div class="section-head"><h1>Services <em>&amp; status.</em></h1><p id="services-description">Service health and dependencies.</p></div>
+
+      <div class="page" data-for="services">
+        <p class="page-intro" id="services-description">Service health and dependencies.</p>
         <div id="services-content" class="service-list" aria-live="polite"><p class="empty">Checking services…</p></div>
         <p class="footnote" id="services-source"></p>
-      </section>
-      <footer><span class="footer-brand">MartinFlix<span>.</span></span><span id="updated">WAITING FOR DATA</span><a href="#main">BACK TO TOP ↑</a></footer>
+      </div>
+
+      <div class="page" data-for="backups">
+        <p class="page-intro">Snapshots of the latest backup each app wrote. A checksum proves the copy matches; only a restore rehearsal proves it works.</p>
+        <section class="panel" aria-labelledby="snapshots-title">
+          <div class="panel-head"><h2 id="snapshots-title">Snapshots</h2></div>
+          <div id="backups-content" class="backup-list"><p class="empty">Checking snapshots…</p></div>
+        </section>
+      </div>
+
+      <footer class="foot">
+        <span>MartinFlix control room</span>
+        <a href="#main"><svg class="icon" aria-hidden="true"><use href="#i-up"/></svg>Back to top</a>
+      </footer>
     </main>
   </div>
 </body>
