@@ -114,6 +114,14 @@ def seed_transmission_defaults(rpc):
         print('   Transmission: the blocklist will download at its nightly update.', flush=True)
 
 
+def refresh_health(api):
+    """Ask the app to re-run its health checks now. A failure only delays the refresh, so it is not fatal."""
+    try:
+        api.request('command', {'name': 'CheckHealth'})
+    except ValueError:
+        print(f'   {api.name}: its health checks will refresh on their own schedule.', flush=True)
+
+
 def ensure_arr_login(api, initial_password):
     config = api.request('config/host')
     if config.get('authenticationMethod') not in ('none', None):
@@ -298,3 +306,7 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
             }, syncLevel='fullSync')
     if prowlarr and seed_prowlarr:
         seed_prowlarr_indexers(prowlarr)
+    # Health warnings, such as a missing download folder, otherwise linger until the apps' next scheduled check.
+    for api in (*(AppApi(name, ports[app], arr_keys[app], address=arr_address) for app, name in ARR_NAMES.items()),
+                *([prowlarr] if prowlarr else [])):
+        refresh_health(api)
