@@ -92,7 +92,8 @@ function serviceCard(service, groupServices, countLabel) {
     </div>
     <div class="service-status"><span class="badge ${tone}">${esc(label)}</span><span class="service-detail">${esc(service.status || 'No status detail')}</span></div>
     ${appHealth(service)}
-    ${localOnly ? '<p class="service-note">Web interface available on the host only.</p>' : ''}
+    ${localOnly ? '<p class="service-note">Its web page only opens on the host itself. Rerun setup with your LAN address to reach it from here.</p>' : ''}
+    ${!service.web && app.note ? `<p class="service-note">${esc(app.note)}</p>` : ''}
     ${dependencyNote}
     ${unavailable.length ? `<p class="service-warning">${icon('alert', ' icon-small')}Check ${unavailable.map(name => esc(appInfo(name).name)).join(' and ')}</p>` : ''}
   </li>`;

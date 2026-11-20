@@ -273,7 +273,9 @@ def service_status():
         installer = app.get('installer')
         if status.get('source') == 'app-probes' and installer:
             port = int(os.environ.get(f'MARTINFLIX_{installer["env"]}_WEB_PORT', port))
-            local_only = installer.get('localOnly', False)
+            # Download apps follow the installer's LAN address; older installs kept them on loopback.
+            local_only = installer.get('localOnly', False) and \
+                os.environ.get('MARTINFLIX_DOWNLOAD_BIND', '127.0.0.1') in ('', '127.0.0.1')
         service['web'] = {'port': port, 'scheme': web.get('scheme', 'http'),
                           'path': web.get('path', '/'), 'localOnly': local_only}
     services = [service for service in all_services

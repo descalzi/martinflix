@@ -292,6 +292,7 @@ def download_overlay(apps, ports, behind_vpn):
     services = {'dashboard': {'environment': {
         'MARTINFLIX_DOWNLOAD_APPS': ','.join(apps),
         'MARTINFLIX_DOWNLOAD_GATEWAY': 'gluetun' if behind_vpn else '',
+        'MARTINFLIX_DOWNLOAD_BIND': '${MARTINFLIX_DOWNLOAD_BIND}',
     }}}
     if 'transmission' in apps:
         # The dashboard writes password changes here; Transmission's sidecar applies them.
@@ -309,7 +310,8 @@ def download_overlay(apps, ports, behind_vpn):
         if app in DOWNLOAD_PORTS:
             services['dashboard']['environment'][f'MARTINFLIX_{app.upper()}_WEB_PORT'] = str(ports[app])
             owner = services.setdefault('gluetun', {}) if behind_vpn else configuration
-            owner.setdefault('ports', []).append(f'127.0.0.1:{ports[app]}:{DOWNLOAD_PORTS[app]}')
+            # Same address as Sonarr and Radarr; setup keeps it on loopback until Prowlarr has a login.
+            owner.setdefault('ports', []).append(f'${{MARTINFLIX_DOWNLOAD_BIND}}:{ports[app]}:{DOWNLOAD_PORTS[app]}')
     return {'services': services}
 
 
@@ -427,17 +429,18 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     if vpn or downloads:
         check_directory(state / 'download-secrets')
     bootstrapping_arr = fresh_arr or any(arr_needs_login(state / app / 'config.xml') for app in APPS)
-    bindings = [
-        (service, str(bind) if service not in DOWNLOAD_APPS else '127.0.0.1', port)
-        for service, port in ports.items()
-    ]
+    bootstrapping_prowlarr = 'prowlarr' in downloads and (fresh_arr or arr_needs_login(state / 'prowlarr/config.xml'))
+    environment['MARTINFLIX_DOWNLOAD_BIND'] = str(bind)
+    bindings = [(service, str(bind), port) for service, port in ports.items()]
     if bootstrapping_arr and str(bind) != '127.0.0.1':
         bindings.extend((app, '127.0.0.1', ports[app]) for app in APPS)
+    if bootstrapping_prowlarr and str(bind) != '127.0.0.1':
+        bindings.extend((app, '127.0.0.1', ports[app]) for app in downloads if app in DOWNLOAD_PORTS)
     return {
         'media': media, 'enabled': enabled, 'downloads': downloads, 'download_network': download_network,
         'vpn': vpn, 'vpn_country': vpn_country, 'vpn_city': vpn_city, 'options': options, 'ports': ports,
         'bind': bind, 'compose': compose, 'environment': environment, 'app_dirs': app_dirs,
-        'bootstrapping_arr': bootstrapping_arr, 'bindings': bindings,
+        'bootstrapping_arr': bootstrapping_arr, 'bootstrapping_prowlarr': bootstrapping_prowlarr, 'bindings': bindings,
     }
 
 
@@ -579,6 +582,7 @@ def run_installation(plan, state, previous, mode='install'):
     vpn, download_network, options = plan['vpn'], plan['download_network'], plan['options']
     ports, bind, compose, environment = plan['ports'], plan['bind'], plan['compose'], plan['environment']
     app_dirs, bootstrapping_arr = plan['app_dirs'], plan['bootstrapping_arr']
+    bootstrapping_prowlarr = plan['bootstrapping_prowlarr']
     project = options['project']
     private_directory(state)
 
@@ -658,22 +662,30 @@ def run_installation(plan, state, previous, mode='install'):
                          ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         step = 4
         prowlarr_key = None
-        if vpn or downloads:
-            services = (['gluetun'] if vpn else []) + downloads + sidecars
+        services = (['gluetun'] if vpn else []) + downloads + sidecars
+        download_address = '127.0.0.1' if bootstrapping_prowlarr else str(bind)
+        environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
+        if services:
             label = 'Starting the VPN and selected services' if vpn else 'Starting selected download and tracker apps'
             compose_step(f'{step}. {label}…', ['up', '-d', '--wait', '--wait-timeout', '210', *services])
             step += 1
         if 'prowlarr' in enabled:
             prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
             write_secret(secret_dir / 'prowlarr-key', prowlarr_key)
-            ensure_arr_login(AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1), lambda: temporary_password)
+            ensure_arr_login(AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=download_address),
+                             lambda: temporary_password)
+        if download_address != str(bind):
+            download_address = str(bind)
+            environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
+            compose_step('   Opening the protected download app logins on your LAN…',
+                         ['up', '-d', '--wait', '--wait-timeout', '210', *services])
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
         seed_radarr_indexers = options['radarr_indexer_defaults_pending']
         seed_prowlarr = bool(prowlarr_key) and not options.get('prowlarr_indexer_defaults_applied')
         configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers,
                        seed_radarr_indexers=seed_radarr_indexers, seed_prowlarr=seed_prowlarr, arr_address=arr_address,
-                       downloads_behind_vpn=download_network == 'vpn')
+                       downloads_behind_vpn=download_network == 'vpn', prowlarr_address=download_address)
         if seed_prowlarr:
             options['prowlarr_indexer_defaults_applied'] = True
         if seed_indexers or seed_radarr_indexers or seed_prowlarr:
@@ -717,7 +729,7 @@ for app in ('sonarr', 'radarr'):
     if downloads:
         print(f'Download network: {"VPN" if download_network == "vpn" else "normal internet connection"}')
     for app in app_dirs:
-        address = '127.0.0.1' if app in DOWNLOAD_APPS else bind
+        address = bind
         print(f'{app.capitalize():13} http://{address}:{ports[app]}')
     if 'prowlarr' in enabled:
         print('Manage indexers in Prowlarr. The installer connected both library apps.')

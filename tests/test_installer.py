@@ -50,6 +50,17 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(plan['ports']['dashboard'], 8765)
         self.assertEqual(plan['ports']['sonarr'], 18989)
 
+    def test_download_apps_follow_the_lan_address_once_prowlarr_has_a_login(self):
+        overlay = install.download_overlay(['transmission', 'prowlarr'], {'transmission': 9091, 'prowlarr': 9696}, True)
+        self.assertEqual(overlay['services']['gluetun']['ports'],
+                         ['${MARTINFLIX_DOWNLOAD_BIND}:9091:9091', '${MARTINFLIX_DOWNLOAD_BIND}:9696:9696'])
+        self.assertEqual(overlay['services']['dashboard']['environment']['MARTINFLIX_DOWNLOAD_BIND'], '${MARTINFLIX_DOWNLOAD_BIND}')
+        plan = self.plan({'dashboard_bind': '192.168.4.166', 'download_apps': ['prowlarr'], 'download_network': 'direct'},
+                         enable_prowlarr=True)
+        self.assertTrue(plan['bootstrapping_prowlarr'])
+        self.assertIn(('prowlarr', '192.168.4.166', 9696), plan['bindings'])
+        self.assertIn(('prowlarr', '127.0.0.1', 9696), plan['bindings'])
+
     def test_transmission_requires_media(self):
         with self.assertRaisesRegex(ValueError, 'media directory'):
             self.plan(download_client='transmission')

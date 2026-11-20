@@ -217,10 +217,10 @@ def seed_prowlarr_indexers(api):
 
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
                    seed_indexers=False, seed_radarr_indexers=False, seed_prowlarr=False, arr_address='127.0.0.1',
-                   downloads_behind_vpn=True):
+                   downloads_behind_vpn=True, prowlarr_address='127.0.0.1'):
     transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
     prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
-    prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1) if prowlarr_key else None
+    prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=prowlarr_address) if prowlarr_key else None
     for app, name in ARR_NAMES.items():
         api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
         ensure_quality_profile(api, app)

@@ -34,7 +34,7 @@ Existing logins are preserved when you rerun the installer. Installations made b
 
 Transmission has no API for changing its own password, so a small `transmission-auth` container applies password changes. It shares Transmission’s process namespace, has no network or capabilities, and makes Transmission reload its settings without stopping downloads.
 
-The dashboard, Sonarr, and Radarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them from another machine. Prowlarr and Transmission remain on loopback.
+The dashboard, Sonarr, Radarr, Prowlarr, and Transmission publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
 
 ### Start from scratch
 
@@ -67,7 +67,7 @@ python3 deploy/bootstrap/install.py --media-path "/mnt/media" --enable-downloads
 python3 deploy/bootstrap/install.py --media-path "/mnt/media" --enable-downloads
 ```
 
-The VPN option requires `/dev/net/tun` and [manual OpenVPN service credentials from your Nord Account](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup). The installer prompts for the credentials without echoing them and saves them in private files outside the repo. Gluetun uses NordVPN and defaults to Prague, matching the reference Compose file. Pass `--enable-vpn` for a standalone VPN gateway. Use `--vpn-city Prague` or a supported `--vpn-country` to choose the exit. VPN-backed Transmission, Prowlarr, and FlareSolverr share Gluetun’s network and wait for its health check. If you explicitly choose `--download-network direct`, those three services use the normal Docker network. Existing download routes are retained on rerun. Their setup screens are on VM loopback at ports 9091 and 9696 by default. Sign in to both with `admin` and your dashboard password.
+The VPN option requires `/dev/net/tun` and [manual OpenVPN service credentials from your Nord Account](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup). The installer prompts for the credentials without echoing them and saves them in private files outside the repo. Gluetun uses NordVPN and defaults to Prague, matching the reference Compose file. Pass `--enable-vpn` for a standalone VPN gateway. Use `--vpn-city Prague` or a supported `--vpn-country` to choose the exit. VPN-backed Transmission, Prowlarr, and FlareSolverr share Gluetun’s network and wait for its health check. If you explicitly choose `--download-network direct`, those three services use the normal Docker network. Existing download routes are retained on rerun. Their web pages use ports 9091 and 9696 by default, on the same address as the dashboard. Sign in to both with `admin` and your dashboard password.
 
 - Choose **MartinFlix HD (720p/1080p)** when adding titles. The installer creates the profile from the reference host’s allowed qualities and upgrade behavior. Existing titles keep their assigned profiles.
 - Sonarr and Radarr use separate `sonarr` and `radarr` Transmission categories and map Transmission’s `/downloads` path to the shared `/data/downloads` folder for imports.
