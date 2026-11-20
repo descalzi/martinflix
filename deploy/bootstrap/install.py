@@ -995,7 +995,7 @@ for app in ('sonarr', 'radarr'):
         print(f'{listed} use admin and the same temporary password. Setting your own password updates every app.')
     if plan['control']:
         print('\nRestart and update apps from the dashboard’s Services page with your PIN. '
-              'To choose a new PIN, rerun setup with --change-pin.')
+              'Change it under Change PIN in the dashboard; if you forget it, rerun setup with --change-pin.')
     else:
         print('\nRestarts and updates from the dashboard need Docker on a local socket, so they are off on this host.')
     if vpn:

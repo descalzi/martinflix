@@ -50,6 +50,17 @@ class PinTests(unittest.TestCase):
         self.assertIsNone(guard.check('2468'))
         self.assertEqual(guard.check('0000')[1], 'Wrong PIN. 4 tries left.')
 
+    def test_changing_the_pin_needs_the_current_one(self):
+        guard = self.guard()
+        self.assertEqual(guard.replace('1111', '9753')[0], 403)
+        self.assertEqual(guard.replace('2468', '97')[0], 400)
+        self.assertEqual(guard.replace('2468', '2468')[0], 400)
+        self.assertIsNone(guard.replace('2468', '9753'))
+        self.assertIsNone(guard.check('9753'))
+        self.assertEqual(guard.check('2468')[0], 403, 'the old PIN stops working')
+        self.assertEqual(guard.pin_file.stat().st_mode & 0o777, 0o600)
+        self.assertEqual([path.name for path in guard.pin_file.parent.iterdir()], ['pin-hash'], 'no temporary files left')
+
     def test_pin_shape(self):
         self.assertTrue(controller.valid_pin('1234'))
         self.assertTrue(controller.valid_pin('12345678'))

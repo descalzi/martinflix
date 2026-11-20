@@ -297,6 +297,45 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(self.post('/api/control/update', {'service': 'sonarr', 'pin': '1111'}),
                              (423, {'error': 'Too many wrong PINs.'}))
 
+    def form(self, fields, token='token'):
+        handler = object.__new__(server.Handler)
+        handler.server = SimpleNamespace(admin_state_file=Path('/nonexistent'), password_setup_required=False,
+                                         password_setup_token='token')
+        handler.path = '/change-pin'
+        body = urllib.parse.urlencode({'token': token, **fields}).encode()
+        handler.headers = __import__('email.message', fromlist=['Message']).Message()
+        for key, value in {'Host': 'dash:8765', 'Origin': 'http://dash:8765', 'Content-Length': str(len(body)),
+                           'Content-Type': 'application/x-www-form-urlencoded'}.items():
+            handler.headers[key] = value
+        handler.authorized = lambda: True
+        handler.rfile = io.BytesIO(body)
+        handler.wfile = io.BytesIO()
+        sent = {}
+        handler.send_response = lambda code, *args: sent.setdefault('status', code)
+        handler.send_header = lambda *args: None
+        handler.end_headers = lambda: None
+        handler.send_error = lambda code, *args: sent.setdefault('status', code)
+        handler.do_POST()
+        return sent.get('status'), handler.wfile.getvalue().decode()
+
+    def test_pin_changes_go_to_the_controller_with_the_current_pin(self):
+        with patch.object(server, 'controller_request', return_value={'ok': True}) as controller:
+            status, page = self.form({'current': '2468', 'pin': '9753', 'confirm': '9753'})
+        self.assertEqual(status, 200)
+        self.assertIn('PIN changed', page)
+        controller.assert_called_once_with('/pin', {'pin': '2468', 'new': '9753'}, timeout=30)
+
+    def test_pin_changes_are_checked_before_they_leave_the_dashboard(self):
+        with patch.object(server, 'controller_request') as controller:
+            self.assertEqual(self.form({'current': '2468', 'pin': '9753', 'confirm': '9754'})[0], 400)
+            self.assertEqual(self.form({'current': '2468', 'pin': '97', 'confirm': '97'})[0], 400)
+            self.assertEqual(self.form({'current': '2468', 'pin': '9753', 'confirm': '9753'}, token='stale')[0], 403)
+            controller.assert_not_called()
+        with patch.object(server, 'controller_request', side_effect=server.ControllerError(403, 'Wrong PIN. 4 tries left.')):
+            status, page = self.form({'current': '1111', 'pin': '9753', 'confirm': '9753'})
+        self.assertEqual(status, 403)
+        self.assertIn('Wrong PIN. 4 tries left.', page)
+
     def test_docker_fills_in_uptime_and_stopped_containers(self):
         services = [{'name': 'nordvpn', 'state': 'reachable', 'status': 'Responded to health check'},
                     {'name': 'radarr', 'state': 'unreachable', 'status': 'Health check did not respond'},

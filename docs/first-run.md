@@ -34,7 +34,7 @@ The installer finishes with an **Open your dashboard** section. Sign in as `admi
 
 ### Restart and update apps from the dashboard
 
-Each card on the **Services** page has **Restart** and **Update** buttons, and the dashboard asks for a PIN before either runs. Setup asks you to choose the PIN (4 to 8 digits) and stores only a hash of it. To choose a new one, rerun setup with `--change-pin`. Five wrong PINs lock these actions for five minutes.
+Each card on the **Services** page has **Restart** and **Update** buttons, and the dashboard asks for a PIN before either runs. Setup asks you to choose the PIN (4 to 8 digits) and stores only a hash of it. To change it, use **Change PIN** in the dashboard's sidebar, which asks for the current PIN first. If you've forgotten it, rerun setup on the VM with `--change-pin`. Five wrong PINs lock restarts, updates, and PIN changes for five minutes.
 
 The buttons are served by a separate **controller** container, the only part of the stack with Docker access. It has no published port, shares a private network with the dashboard alone, and checks the PIN itself, so the dashboard cannot restart or update anything without it. It can only restart or update the stack's apps; the dashboard and the controller update when you rerun setup.
 

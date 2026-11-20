@@ -397,6 +397,7 @@ async function status() {
     const probes = docker.source === 'app-probes';
     const services = docker.groups.flatMap(group => group.services);
     $('#nav-password').hidden = !data.canChangePassword;
+    $('#nav-pin').hidden = !data.canChangePin;
     const problems = attentionRows(docker, services).length;
     $('#nav-flag').hidden = problems === 0;
     $('#nav-flag').innerHTML = `${problems}<span class="sr-only"> ${problems === 1 ? 'issue' : 'issues'}</span>`;

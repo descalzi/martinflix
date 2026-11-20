@@ -93,6 +93,8 @@ services:
     volumes:
       - "${MARTINFLIX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"
       - "${MARTINFLIX_STATE_DIR}:${MARTINFLIX_STATE_DIR}:ro"
+      # Writable only so the PIN can be changed from the dashboard.
+      - "${MARTINFLIX_STATE_DIR}/controller:${MARTINFLIX_STATE_DIR}/controller"
       - "${MARTINFLIX_REPO_DIR:-/nonexistent}:${MARTINFLIX_REPO_DIR:-/nonexistent}:ro"
     healthcheck:
       test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 9800), 2).close()"]

@@ -78,6 +78,26 @@ class PinGuard:
             left = MAX_FAILURES - self.failures
             return 403, f'Wrong PIN. {left} tr{"ies" if left != 1 else "y"} left.'
 
+    def replace(self, current, new):
+        """Store a new PIN once the current one checks out. Returns None, or (HTTP status, message)."""
+        if problem := self.check(current):
+            return problem
+        if not valid_pin(new):
+            return 400, 'Use 4 to 8 digits for the new PIN.'
+        if new == current:
+            return 400, 'Choose a PIN different from the current one.'
+        with self.lock:
+            temporary = self.pin_file.with_name(f'.{self.pin_file.name}.{secrets.token_hex(4)}')
+            try:
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, 'w') as output:
+                    output.write(hash_pin(new) + '\n')
+                os.replace(temporary, self.pin_file)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+                return 500, 'The controller could not save the new PIN. Your current PIN still works.'
+        return None
+
 
 def dependents(services, name):
     """Services that must follow `name`, in order: those using its network or process namespace, transitively."""
@@ -227,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             self.send_json({'error': 'Not authorized.'}, 401)
             return
-        action = {'/restart': 'restart', '/update': 'update'}.get(self.path)
+        action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin'}.get(self.path)
         if action is None:
             self.send_json({'error': 'Not found.'}, 404)
             return
@@ -237,6 +257,12 @@ class Handler(BaseHTTPRequestHandler):
             name, pin = request.get('service'), request.get('pin')
         except (ValueError, AttributeError):
             self.send_json({'error': 'Invalid request.'}, 400)
+            return
+        if action == 'pin':
+            if problem := self.server.pins.replace(pin, request.get('new')):
+                self.send_json({'error': problem[1]}, problem[0])
+            else:
+                self.send_json({'ok': True})
             return
         if problem := self.server.pins.check(pin):
             self.send_json({'error': problem[1]}, problem[0])

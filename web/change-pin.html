@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Change your PIN · MartinFlix</title>
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="/assets/martinflix-mark.webp" type="image/webp">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/auth.js" defer></script>
+</head>
+<body class="setup-page">
+  <main class="setup-panel">
+    <p class="setup-brand"><img src="/assets/martinflix-mark.webp" width="32" height="32" alt="">MartinFlix</p>
+    <h1>Change your PIN</h1>
+    <p>The PIN protects restarts and updates on the Services page. Use 4 to 8 digits.</p>
+    {{NOTICE}}
+    {{ERROR}}
+    <form action="/change-pin" method="post">
+      <input type="hidden" name="token" value="{{TOKEN}}">
+      <label for="current">Current PIN</label>
+      <input type="password" id="current" name="current" inputmode="numeric" autocomplete="off" minlength="4" maxlength="8" pattern="[0-9]{4,8}" required>
+      <label for="pin">New PIN</label>
+      <input type="password" id="pin" name="pin" inputmode="numeric" autocomplete="off" minlength="4" maxlength="8" pattern="[0-9]{4,8}" required>
+      <label for="confirm">Confirm new PIN</label>
+      <input type="password" id="confirm" name="confirm" inputmode="numeric" autocomplete="off" minlength="4" maxlength="8" pattern="[0-9]{4,8}" required>
+      <button type="submit">Change PIN</button>
+    </form>
+    <p class="setup-note">Five wrong PINs lock restarts, updates and PIN changes for five minutes. Forgotten your PIN? Run setup on the VM with <code>--change-pin</code>.</p>
+    <a href="/services">Back to Services</a>
+  </main>
+</body>
+</html>

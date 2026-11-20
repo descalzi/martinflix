@@ -117,6 +117,10 @@ def controller_request(path, payload=None, timeout=5):
         raise ControllerError(502, 'The controller is not responding. Check that its container is running.') from exc
 
 
+def controller_configured():
+    return bool(os.environ.get('MARTINFLIX_CONTROLLER_URL') and read_secret('MARTINFLIX_CONTROLLER_TOKEN'))
+
+
 def controller_status():
     try:
         result = controller_request('/status', timeout=4)
@@ -873,10 +877,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/change-password' and form_login:
             self.send_auth_page('setup-password.html', changing=True)
             return
+        if path == '/change-pin' and form_login and controller_configured():
+            self.send_pin_page()
+            return
         if path == '/api/status':
             catalog = {key: CATALOG.get(key, {}) for key in ('apps', 'branches', 'uses', 'groupRest')}
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
-                    'canChangePassword': form_login, 'catalog': catalog}
+                    'canChangePassword': form_login, 'canChangePin': form_login and controller_configured(),
+                    'catalog': catalog}
             self.send_json(data)
         elif path == '/api/activity':
             self.send_json(dashboard_activity())
@@ -933,7 +941,7 @@ class Handler(BaseHTTPRequestHandler):
         if control := re.fullmatch(r'/api/control/(restart|update)', path):
             self.control_request(control.group(1))
             return
-        if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password'):
+        if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password', '/change-pin'):
             self.send_error(404)
             return
         if not self.same_origin():
@@ -952,6 +960,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == '/login':
             self.sign_in(fields)
+            return
+        if path == '/change-pin':
+            if self.server.password_setup_required:
+                self.redirect('/setup-password')
+            else:
+                self.change_pin(fields)
             return
         changing = path == '/change-password'
         if changing == self.server.password_setup_required:
@@ -1107,6 +1121,40 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', '0')
         self.end_headers()
+
+    def change_pin(self, fields):
+        token = fields.get('token', [''])[0]
+        if not hmac.compare_digest(token.encode(), self.server.password_setup_token.encode()):
+            self.send_error(403, 'Reopen the Change PIN page and try again.')
+            return
+        current, new, confirmation = (fields.get(name, [''])[0] for name in ('current', 'pin', 'confirm'))
+        if not re.fullmatch(r'[0-9]{4,8}', current):
+            self.send_pin_page('Enter your current PIN: 4 to 8 digits.', 400)
+            return
+        if not re.fullmatch(r'[0-9]{4,8}', new):
+            self.send_pin_page('Use 4 to 8 digits for the new PIN.', 400)
+            return
+        if new != confirmation:
+            self.send_pin_page('The new PINs don’t match. Enter the same PIN twice.', 400)
+            return
+        try:
+            # The controller checks the current PIN itself, and wrong guesses count towards its lockout.
+            if controller_request('/pin', {'pin': current, 'new': new}, timeout=30) is None:
+                self.send_error(404)
+                return
+        except ControllerError as exc:
+            self.send_pin_page(str(exc), exc.status if exc.status in (400, 403, 423) else 502)
+            return
+        self.send_pin_page(saved=True)
+
+    def send_pin_page(self, message='', status=200, saved=False):
+        error = f'<p class="setup-error" role="alert">{html.escape(message)}</p>' if message else ''
+        notice = ('<p class="setup-success" role="status">PIN changed. Use the new PIN for restarts and updates.</p>'
+                  if saved else '')
+        body = ((WEB / 'change-pin.html').read_text()
+                .replace('{{TOKEN}}', html.escape(self.server.password_setup_token))
+                .replace('{{NOTICE}}', notice).replace('{{ERROR}}', error).encode())
+        self.send_web_file('change-pin.html', 'text/html', status, body)
 
     def send_auth_page(self, name, message='', status=200, password_set=False, changing=False):
         template = (WEB / name).read_text()
