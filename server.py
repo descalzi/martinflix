@@ -29,6 +29,12 @@ SESSION_COOKIE = 'martinflix_session'
 SESSION_SECONDS = 12 * 60 * 60
 MIN_PERSONAL_PASSWORD = 8
 ARR_COMPOSE_ADDRESSES = {'sonarr': 'http://sonarr:8989', 'radarr': 'http://radarr:7878'}
+ARR_HEALTH_ENDPOINTS = {
+    'sonarr': (8989, '/api/v3/health'),
+    'radarr': (7878, '/api/v3/health'),
+    'prowlarr': (9696, '/api/v1/health'),
+    'bazarr': (6767, '/api/system/health'),
+}
 STACKS = {
     'Core': ['tailscale', 'portainer'],
     'Media server': ['plex'],
@@ -81,7 +87,7 @@ def docker_status():
         return {'available': False, 'error': 'Docker is unavailable or access was denied.', 'groups': []}
 
 
-def service_status():
+def container_status():
     if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') != '1':
         return docker_status()
 
@@ -120,13 +126,18 @@ def service_status():
             'groups': [{'name': 'Downloads & automation' if downloads else 'Library apps', 'services': services}]}
 
 
-def arr_connection(kind):
+def arr_connection(kind, *, prowlarr_via_vpn=False):
     key = read_secret('MARTINFLIX_' + kind.upper() + '_KEY')
-    base = os.environ.get('MARTINFLIX_' + kind.upper() + '_URL', 'http://127.0.0.1:' + ('8989' if kind == 'sonarr' else '7878'))
     if not key:
         return None
+    default = f'http://127.0.0.1:{ARR_HEALTH_ENDPOINTS[kind][0]}'
+    compose_base = ARR_COMPOSE_ADDRESSES.get(kind)
+    if kind == 'prowlarr' and os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1':
+        host = 'gluetun' if prowlarr_via_vpn else 'prowlarr'
+        compose_base = default = f'http://{host}:9696'
+    base = os.environ.get('MARTINFLIX_' + kind.upper() + '_URL', default)
     # The first-run Compose project has fixed Arr service names on its private bridge.
-    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1' and base == ARR_COMPOSE_ADDRESSES.get(kind):
+    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1' and base == compose_base:
         return base, key
     parsed = urllib.parse.urlparse(base)
     if (parsed.scheme != 'http' or parsed.hostname not in ('127.0.0.1', 'localhost', '::1')
@@ -139,6 +150,50 @@ def arr_open(connection, endpoint):
     base, key = connection
     request = urllib.request.Request(base + endpoint, headers={'X-Api-Key': key})
     return ARR_OPENER.open(request, timeout=5)
+
+
+def arr_health(kind, *, prowlarr_via_vpn=False):
+    try:
+        connection = arr_connection(kind, prowlarr_via_vpn=prowlarr_via_vpn)
+        if connection is None:
+            return {'state': 'unconfigured'}
+        with arr_open(connection, ARR_HEALTH_ENDPOINTS[kind][1]) as response:
+            items = json.load(response)
+        if kind == 'bazarr' and isinstance(items, dict):
+            items = items.get('data')
+        if not isinstance(items, list):
+            raise ValueError('Invalid health response')
+        alerts = []
+        for item in items:
+            field = 'issue' if kind == 'bazarr' else 'message'
+            if not isinstance(item, dict) or not isinstance(item.get(field), str) or not item[field].strip():
+                raise ValueError('Invalid health alert')
+            severity = str(item.get('type', '')).lower()
+            if severity not in ('info', 'warning', 'error'):
+                severity = 'warning'
+            message = item[field]
+            if kind == 'bazarr' and item.get('object'):
+                message = f'{item["object"]} · {message}'
+            alerts.append({'severity': severity, 'message': message})
+        return {'state': 'available', 'alerts': alerts}
+    except urllib.error.HTTPError as exc:
+        exc.close()
+    except (OSError, ValueError):
+        pass
+    return {'state': 'unavailable'}
+
+
+def service_status():
+    status = container_status()
+    services = [service for group in status['groups'] for service in group['services']
+                if service['name'] in ARR_HEALTH_ENDPOINTS and service['state'] in ('reachable', 'running')]
+    if services:
+        with ThreadPoolExecutor(max_workers=len(services)) as pool:
+            checks = [pool.submit(arr_health, service['name'], prowlarr_via_vpn=status.get('downloadsBehindVpn', False))
+                      for service in services]
+            for service, check in zip(services, checks):
+                service['health'] = check.result()
+    return status
 
 
 def next_airing(value):

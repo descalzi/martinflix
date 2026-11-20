@@ -18,6 +18,8 @@ services:
       MARTINFLIX_SONARR_KEY_FILE: /run/dashboard-secrets/sonarr-key
       MARTINFLIX_TAUTULLI_KEY_FILE: /run/dashboard-secrets/tautulli-key
       MARTINFLIX_RADARR_KEY_FILE: /run/dashboard-secrets/radarr-key
+      MARTINFLIX_PROWLARR_KEY_FILE: /run/dashboard-secrets/prowlarr-key
+      MARTINFLIX_BAZARR_KEY_FILE: /run/dashboard-secrets/bazarr-key
       MARTINFLIX_DOCKER_STATUS_FILE: /run/host-status/containers.jsonl
       MARTINFLIX_BACKUP_DIR: /run/backup-manifests
     volumes:

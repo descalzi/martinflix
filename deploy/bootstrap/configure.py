@@ -8,6 +8,10 @@ ARR_NAMES = {'sonarr': 'Sonarr', 'radarr': 'Radarr'}
 ARR_PORTS = {'sonarr': 8989, 'radarr': 7878}
 ROOT_FOLDERS = {'sonarr': '/data/TV Shows', 'radarr': '/data/Movies'}
 TRANSMISSION_USER = 'martinflix'
+RELEASE_PROFILES = {
+    'sonarr': [('Bad Stuff', True, ['MeGusta', 'scr', 'exe', 'ETHEL'])],
+    'radarr': [('No OPUS', False, ['Opus']), ('No HEVC', False, ['HEVC'])],
+}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -81,18 +85,19 @@ def ensure_quality_profile(api, app):
     api.request('qualityprofile', profile)
 
 
-def ensure_sonarr_exclusions(api):
-    name = 'Bad Stuff'
-    if any(profile['name'] == name for profile in api.request('releaseprofile')):
-        return
-    api.request('releaseprofile', {
-        'name': name,
-        'enabled': True,
-        'required': [],
-        'ignored': ['MeGusta', 'scr', 'exe', 'ETHEL'],
-        'indexerId': 0,
-        'tags': [],
-    })
+def ensure_release_profiles(api, app):
+    existing_names = {profile['name'].casefold() for profile in api.request('releaseprofile')}
+    for name, enabled, ignored in RELEASE_PROFILES[app]:
+        if name.casefold() in existing_names:
+            continue
+        api.request('releaseprofile', {
+            'name': name,
+            'enabled': enabled,
+            'required': [],
+            'ignored': ignored,
+            'indexerId': 0,
+            'tags': [],
+        })
 
 
 def seed_sonarr_indexer_defaults(api):
@@ -142,17 +147,27 @@ def ensure_download_path(api, host):
         })
 
 
-def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *, seed_indexers=False, arr_address='127.0.0.1', downloads_behind_vpn=True):
+def seed_radarr_indexer_defaults(api):
+    config = api.request('config/indexer')
+    defaults = {'maximumSize': 4500, 'availabilityDelay': 1, 'rssSyncInterval': 120}
+    if any(config.get(name) != value for name, value in defaults.items()):
+        api.request(f'config/indexer/{config["id"]}', {**config, **defaults}, method='PUT')
+
+
+def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
+                   seed_indexers=False, seed_radarr_indexers=False, arr_address='127.0.0.1',
+                   downloads_behind_vpn=True):
     transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
     prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1) if prowlarr_key else None
     for app, name in ARR_NAMES.items():
         api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
         ensure_quality_profile(api, app)
-        if app == 'sonarr':
-            ensure_sonarr_exclusions(api)
-            if seed_indexers:
-                seed_sonarr_indexer_defaults(api)
+        ensure_release_profiles(api, app)
+        if app == 'sonarr' and seed_indexers:
+            seed_sonarr_indexer_defaults(api)
+        if app == 'radarr' and seed_radarr_indexers:
+            seed_radarr_indexer_defaults(api)
         if media_path:
             ensure_root_folder(api, ROOT_FOLDERS[app])
         if transmission_password:

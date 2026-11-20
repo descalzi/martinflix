@@ -46,6 +46,24 @@ function needsAttention(service) {
   return !serviceIsUp(service) || service.status.toLowerCase().includes('unhealthy');
 }
 
+function appHealth(service) {
+  const health = service.health;
+  if (!health) return '';
+  if (health.state !== 'available') {
+    const unavailable = health.state === 'unavailable';
+    return `<div class="app-health"><span class="service-badge ${unavailable ? 'warn' : 'muted'}">
+      ${unavailable ? 'App health unavailable' : 'App health not connected'}</span></div>`;
+  }
+  if (!health.alerts.length) {
+    return '<div class="app-health"><span class="service-badge good">No app health alerts</span></div>';
+  }
+  return `<ul class="app-health">${health.alerts.map(({severity, message}) => `<li>
+    <span class="service-badge ${severity === 'error' ? 'alert' : severity === 'info' ? 'muted' : 'warn'}">
+      ${severity === 'error' ? 'Error' : severity === 'info' ? 'Info' : 'Warning'}</span>
+    <span>${esc(message)}</span>
+  </li>`).join('')}</ul>`;
+}
+
 function serviceCard(service, groupServices, countLabel) {
   const [name, role, icon] = apps[service.name] ?? [service.name, 'Container'];
   const unhealthy = service.status.toLowerCase().includes('unhealthy');
@@ -77,6 +95,7 @@ function serviceCard(service, groupServices, countLabel) {
       <span class="service-badge ${tone}">${esc(label)}</span>
       <span class="service-detail">${esc(service.status || 'No status detail')}</span>
     </div>
+    ${appHealth(service)}
     ${dependencyNote}
     ${unavailable.length ? `<p class="dependency-warning">Check ${unavailable.map(name => esc(apps[name][0])).join(' and ')}</p>` : ''}
   </li>`;
@@ -135,7 +154,8 @@ function date(value) {
 
 function renderOverview(docker, services, backups, probes) {
   const required = services.filter(service => service.name !== 'bookshelf');
-  const attention = required.filter(needsAttention);
+  const attention = required.filter(service => needsAttention(service) ||
+    service.health?.state === 'unavailable' || service.health?.alerts?.length);
   $('#service-summary').classList.toggle('needs-attention', !docker.available || attention.length > 0);
   $('#services-metric-label').textContent = probes ? 'SERVICES REACHABLE' : 'SERVICES RUNNING';
   $('#running').textContent = docker.available ? `${required.filter(serviceIsUp).length} / ${required.length}` : 'Unavailable';
@@ -159,8 +179,9 @@ async function status() {
     $('#nav-password').hidden = !data.canChangePassword;
     if (servicesPage) {
       $('#services-description').textContent = probes ? 'Live health checks for configured services.' : 'Container status and configured service dependencies.';
-      $('#services-source').textContent = probes ? 'These checks show whether each app responds to the dashboard.'
-        : 'Docker reports container status. Dependency lines show the configured stack and do not test VPN connectivity.';
+      $('#services-source').textContent = probes
+        ? 'Reachability shows which apps respond. Connected Arr apps also report their own health alerts.'
+        : 'Docker reports container status. Connected Arr apps also report their own health alerts.';
       $('#services-content').innerHTML = docker.available
         ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running', !probes || docker.downloadsBehindVpn)).join('')
         : `<p class="empty">${esc(docker.error)}</p>`;

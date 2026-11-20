@@ -403,6 +403,7 @@ def install(args, overlay_file):
             runtime_overlay = state / 'downloads-compose.json'
             write_secret(runtime_overlay, overlay_file.read_text())
             compose[compose.index(str(overlay_file))] = str(runtime_overlay)
+        options.setdefault('radarr_indexer_defaults_pending', not (state / 'radarr/config.xml').exists())
         if options != previous:
             write_secret(state / 'install-options.json', json.dumps(options))
         secret_dir = state / 'dashboard-secrets'
@@ -445,12 +446,15 @@ def install(args, overlay_file):
             step += 1
         if 'prowlarr' in enabled:
             prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
+            write_secret(secret_dir / 'prowlarr-key', prowlarr_key)
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
-        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers, arr_address=arr_address,
+        seed_radarr_indexers = options['radarr_indexer_defaults_pending']
+        configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers,
+                       seed_radarr_indexers=seed_radarr_indexers, arr_address=arr_address,
                        downloads_behind_vpn=download_network == 'vpn')
-        if seed_indexers:
-            options['sonarr_indexer_defaults_applied'] = True
+        if seed_indexers or seed_radarr_indexers:
+            options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
         compose_step(f'{step + 1}. Building and starting your dashboard…',
                      ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])

@@ -35,6 +35,8 @@ Overview shows the service count, upcoming series, missing films, download queue
 
 For Plex playback activity, save a Tautulli API key in `tautulli-key` in the same private directory, with mode 0600. The existing-host dashboard reads playback activity from Tautulli at `127.0.0.1:8181` and displays the stream count, titles, and playback states. The first-run stack can show Arr queue counts as soon as the apps are connected.
 
+The Services page shows health alerts from Sonarr, Radarr, Prowlarr, and Bazarr, and the overview highlights services that need attention. Sonarr and Radarr use the same keys as the library panels. The installer connects Prowlarr health automatically when you select Prowlarr. On an existing host, save the respective API keys as `prowlarr-key` and `bazarr-key` in the same private directory with mode 0600, then recreate the dashboard container.
+
 The current deployment has no backup manifests configured. The existing backup scheduler and archives remain independent. Use the [backup and recovery notes](backups.md) to interpret prototype snapshots.
 
 ## Stop or remove the dashboard

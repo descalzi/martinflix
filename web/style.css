@@ -59,6 +59,21 @@
 .service-badge.alert { background: #f6e7e0; color: #81362c; }
 .service-badge.muted { background: #eceee8; color: #47544b; }
 .service-detail { color: #526559; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.app-health {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid #e1e5da;
+  list-style: none;
+  color: #344c40;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.app-health .service-badge { width: fit-content; align-self: start; }
+.app-health li { display: flex; align-items: flex-start; gap: 7px; }
+.app-health li .service-badge { flex: none; }
 @media (max-width: 520px) {
   .hero { margin-top: 18px; }
   .summary { grid-template-columns: 1fr; }
