@@ -72,6 +72,27 @@ function appIcon(name) {
     : esc(app.name.slice(0, 2).toUpperCase())}</span>`;
 }
 
+/** "3 days, 4 hours", "5 hours, 12 minutes", "12 minutes" or "less than a minute". */
+function durationSince(stamp) {
+  const seconds = Math.max(0, (Date.now() - new Date(stamp)) / 1000);
+  const plural = (count, unit) => `${count} ${unit}${count === 1 ? '' : 's'}`;
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor(seconds % 86400 / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  if (days) return hours ? `${plural(days, 'day')}, ${plural(hours, 'hour')}` : plural(days, 'day');
+  if (hours) return minutes ? `${plural(hours, 'hour')}, ${plural(minutes, 'minute')}` : plural(hours, 'hour');
+  return minutes ? plural(minutes, 'minute') : 'less than a minute';
+}
+
+/** Uptime when the app or Docker reports it; otherwise the raw status, such as how long ago it stopped. */
+function serviceDetail(service) {
+  const health = /\((healthy|health: starting)\)/.exec(service.status || '')?.[1];
+  const suffix = health === 'healthy' ? ' · healthy' : health ? ' · starting' : '';
+  if (service.startedAt && !isNaN(new Date(service.startedAt))) return `Up ${durationSince(service.startedAt)}${suffix}`;
+  if (service.uptime) return `Up ${service.uptime.charAt(0).toLowerCase()}${service.uptime.slice(1)}${suffix}`;
+  return service.status || 'No status detail';
+}
+
 function serviceCard(service, groupServices, countLabel) {
   const app = appInfo(service.name);
   const href = serviceHref(service);
@@ -92,7 +113,8 @@ function serviceCard(service, groupServices, countLabel) {
       ${appIcon(service.name)}
       <div><h4>${title}</h4><p>${esc(app.role)}</p></div>
     </div>
-    <div class="service-status"><span class="badge ${tone}">${esc(label)}</span><span class="service-detail">${esc(service.status || 'No status detail')}</span></div>
+    <div class="service-status"><span class="badge ${tone}">${esc(label)}</span><span class="service-detail"${
+      service.status ? ` title="${esc(service.status)}"` : ''}>${esc(serviceDetail(service))}</span></div>
     ${appHealth(service)}
     ${localOnly ? '<p class="service-note">Its web page only opens on the host itself. Rerun setup with your LAN address to reach it from here.</p>' : ''}
     ${!service.web && app.note ? `<p class="service-note">${esc(app.note)}</p>` : ''}

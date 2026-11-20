@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import tempfile
+import urllib.error
 import urllib.parse
 import subprocess
 import unittest
@@ -171,6 +172,51 @@ class AddTitleTests(unittest.TestCase):
                 self.add('sonarr', request, [dict(self.series)])
         with self.assertRaises(server.AddError):
             self.add('radarr', {'id': 99, 'availability': 'tomorrow'}, {'title': 'Hamnet', 'tmdbId': 99})
+
+
+class UptimeTests(unittest.TestCase):
+    def test_docker_status_gives_uptime(self):
+        self.assertEqual(server.docker_uptime('Up 3 days (healthy)'), '3 days')
+        self.assertEqual(server.docker_uptime('Up About an hour'), 'About an hour')
+        self.assertEqual(server.docker_uptime('Up 2 minutes (health: starting)'), '2 minutes')
+        self.assertIsNone(server.docker_uptime('Exited (1) 3 hours ago'))
+
+    def respond(self, payload):
+        return MagicMock(__enter__=lambda self: io.BytesIO(json.dumps(payload).encode()), __exit__=lambda *args: False)
+
+    def test_apps_report_when_they_started(self):
+        environment = {'MARTINFLIX_SONARR_KEY': 's', 'MARTINFLIX_BAZARR_KEY': 'b'}
+        with patch.dict('os.environ', environment, clear=True):
+            with patch.object(server, 'arr_open', return_value=self.respond({'startTime': '2026-11-18T09:30:00Z'})) as opened:
+                self.assertEqual(server.app_started_at('sonarr', False), '2026-11-18T09:30:00+00:00')
+            self.assertEqual(opened.call_args.args[1], '/api/v3/system/status')
+            with patch.object(server, 'arr_open', return_value=self.respond({'data': {'start_time': 1763458200.5}})):
+                self.assertEqual(server.app_started_at('bazarr', False), '2025-11-18T09:30:00.500000+00:00')
+            with patch.object(server, 'arr_open', side_effect=OSError):
+                self.assertIsNone(server.app_started_at('sonarr', False))
+        with patch.dict('os.environ', {}, clear=True):
+            self.assertIsNone(server.app_started_at('radarr', False), 'no key, no lookup')
+
+    def test_transmission_session_age_uses_the_shared_login(self):
+        with tempfile.NamedTemporaryFile('w', delete=False) as secret:
+            secret.write('shared password')
+        environment = {'MARTINFLIX_ARR_COMPOSE_NETWORK': '1', 'MARTINFLIX_TRANSMISSION_PASSWORD_FILE': secret.name}
+        conflict = urllib.error.HTTPError('http://transmission:9091/transmission/rpc', 409, 'Conflict',
+                                          {'X-Transmission-Session-Id': 'abc'}, io.BytesIO())
+        seen = []
+
+        def fake(request, timeout):
+            seen.append((request.full_url, request.get_header('Authorization'), request.get_header('X-transmission-session-id')))
+            if len(seen) == 1:
+                raise conflict
+            return self.respond({'arguments': {'current-stats': {'secondsActive': 7200}}})
+
+        try:
+            with patch.dict('os.environ', environment, clear=True), patch.object(server.ARR_OPENER, 'open', side_effect=fake):
+                self.assertEqual(server.transmission_seconds_active(False), 7200)
+        finally:
+            os.unlink(secret.name)
+        self.assertEqual(seen[1], ('http://transmission:9091/transmission/rpc', 'Basic YWRtaW46c2hhcmVkIHBhc3N3b3Jk', 'abc'))
 
 
 class RouteTests(unittest.TestCase):

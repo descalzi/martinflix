@@ -300,15 +300,86 @@ def service_status():
                 os.environ.get('MARTINFLIX_DOWNLOAD_BIND', '127.0.0.1') in ('', '127.0.0.1')
         service['web'] = {'port': port, 'scheme': web.get('scheme', 'http'),
                           'path': web.get('path', '/'), 'localOnly': local_only}
-    services = [service for service in all_services
-                if service['name'] in ARR_HEALTH_ENDPOINTS and service['state'] in ('reachable', 'running')]
-    if services:
-        with ThreadPoolExecutor(max_workers=len(services)) as pool:
-            checks = [pool.submit(arr_health, service['name'], prowlarr_via_vpn=status.get('downloadsBehindVpn', False))
-                      for service in services]
-            for service, check in zip(services, checks):
+    behind_vpn = status.get('downloadsBehindVpn', False)
+    up = [service for service in all_services if service['state'] in ('reachable', 'running')]
+    for service in up:
+        uptime = docker_uptime(service.get('status', ''))
+        if uptime:
+            service['uptime'] = uptime
+    checked = [service for service in up if service['name'] in ARR_HEALTH_ENDPOINTS]
+    timed = [service for service in up if service['name'] in START_TIME_SOURCES]
+    if checked or timed:
+        with ThreadPoolExecutor(max_workers=len(checked) + len(timed)) as pool:
+            checks = [pool.submit(arr_health, service['name'], prowlarr_via_vpn=behind_vpn) for service in checked]
+            starts = [pool.submit(app_started_at, service['name'], behind_vpn) for service in timed]
+            for service, check in zip(checked, checks):
                 service['health'] = check.result()
+            for service, start in zip(timed, starts):
+                if started := start.result():
+                    service['startedAt'] = started
     return status
+
+
+UPTIME_PATTERN = re.compile(r'Up (.+?)(?: \((?:healthy|unhealthy|health: starting)\))?$')
+START_TIME_SOURCES = ('sonarr', 'radarr', 'prowlarr', 'bazarr', 'transmission-daemon')
+
+
+def docker_uptime(status):
+    """Docker's own wording for how long a container has run, such as "3 days" or "About an hour"."""
+    match = UPTIME_PATTERN.match(status)
+    return match.group(1) if match else None
+
+
+def app_started_at(name, behind_vpn):
+    """When the app says it started, as UTC ISO time. Containers restart apps with them, so this is their uptime."""
+    try:
+        if name == 'transmission-daemon':
+            seconds = transmission_seconds_active(behind_vpn)
+            if seconds is None:
+                return None
+            return datetime.fromtimestamp(time.time() - seconds, timezone.utc).isoformat()
+        connection = arr_connection(name, prowlarr_via_vpn=behind_vpn)
+        if connection is None:
+            return None
+        if name == 'bazarr':
+            with arr_open(connection, '/api/system/status') as response:
+                started = json.load(response)['data']['start_time']
+            if not isinstance(started, (int, float)) or isinstance(started, bool):
+                return None
+            return datetime.fromtimestamp(started, timezone.utc).isoformat()
+        version = 'v1' if name == 'prowlarr' else 'v3'
+        with arr_open(connection, f'/api/{version}/system/status') as response:
+            started = next_airing(json.load(response).get('startTime'))
+        return started.isoformat() if started else None
+    except urllib.error.HTTPError as exc:
+        exc.close()
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        pass
+    return None
+
+
+def transmission_seconds_active(behind_vpn):
+    """Transmission's session age, read with the shared login the installer gives it."""
+    secret = os.environ.get('MARTINFLIX_TRANSMISSION_PASSWORD_FILE')
+    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') != '1' or not secret:
+        return None
+    password = Path(secret).read_text(encoding='utf-8')
+    token = base64.b64encode(f'{ADMIN_APP_USER}:{password}'.encode()).decode()
+    url = f'http://{"gluetun" if behind_vpn else "transmission"}:9091/transmission/rpc'
+    headers = {'Authorization': f'Basic {token}', 'Content-Type': 'application/json'}
+    body = json.dumps({'method': 'session-stats'}).encode()
+    for _ in range(2):
+        try:
+            with ARR_OPENER.open(urllib.request.Request(url, data=body, headers=headers, method='POST'), timeout=3) as response:
+                seconds = json.load(response)['arguments']['current-stats']['secondsActive']
+            return seconds if type(seconds) is int and seconds >= 0 else None
+        except urllib.error.HTTPError as exc:
+            session = exc.headers.get('X-Transmission-Session-Id')
+            exc.close()
+            if exc.code != 409 or not session:
+                return None
+            headers['X-Transmission-Session-Id'] = session
+    return None
 
 
 def next_airing(value):
