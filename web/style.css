@@ -323,14 +323,14 @@
   .group-title { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-4); }
   .group-title h3 { font-size: var(--text-lg); }
   .group-title span { color: var(--fg-muted); font-size: var(--text-sm); }
-  /* Every grid in a group uses the same column tracks, so cards line up across the VPN branch and the apps below it. */
+  /* Every grid in a group uses the same column tracks, so cards line up from one section to the next. */
   .service-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3) var(--space-4); }
   .service-card { display: grid; gap: var(--space-2); align-content: start; padding: var(--space-4); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 0; }
   .service-card.tone-crit { border-color: var(--crit); }
   .service-card.tone-warn { border-color: var(--warn); }
-  .service-identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-3); }
-  .service-status { display: grid; justify-items: start; gap: var(--space-1); }
-  .service-identity h4 { font-size: var(--text-md); overflow-wrap: anywhere; }
+  .service-identity { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
+  .service-chip { align-self: start; white-space: nowrap; }
+  .service-identity h4 { font-size: var(--text-md); overflow-wrap: break-word; }
   .service-identity p { color: var(--fg-muted); font-size: var(--text-sm); }
   .service-link { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
   .service-link:hover { color: var(--accent); text-decoration: underline; }
@@ -339,19 +339,23 @@
   .service-warning { display: flex; align-items: center; gap: 6px; color: var(--crit); font-size: var(--text-sm); font-weight: 600; }
   .app-health { display: grid; gap: 6px; padding-top: var(--space-2); border-top: 1px solid var(--border); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .app-health li { display: grid; justify-items: start; gap: var(--space-1); }
-  .branch { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3) var(--space-4); margin-bottom: var(--space-3); }
-  .branch-children { position: relative; min-width: 0; }
-  /* The connector sits in the gutter beside the cards rather than indenting them. */
-  .branch-children::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-4) / -2 - 1px); width: 2px; border-radius: 1px; background: var(--border-strong); }
-  .branch-children h4 { font-size: var(--text-md); }
-  .branch-children > p { margin: 2px 0 var(--space-3); color: var(--fg-muted); font-size: var(--text-sm); }
-  @container (min-width: 500px) {
+  .service-section { display: grid; gap: var(--space-3); }
+  .service-section + .service-section { margin-top: var(--space-5); }
+  .section-head h4 { font-size: var(--text-md); }
+  .section-head p { margin-top: 2px; color: var(--fg-muted); font-size: var(--text-sm); }
+  /* The shared gateway spans the section, above the apps that use it. */
+  .gateway { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--tint); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .gateway.tone-crit { border-color: var(--crit); }
+  .gateway.tone-warn { border-color: var(--warn); }
+  .gateway p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; }
+  .gateway span { color: var(--fg-muted); font-size: var(--text-sm); }
+  .gateway .app-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--bg); }
+  .gateway .app-icon img { width: 22px; height: 22px; }
+  @container (min-width: 520px) {
     .service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
-  @container (min-width: 760px) {
-    .service-grid, .branch { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .branch-children { grid-column: 2 / -1; }
-    .branch-children > .service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @container (min-width: 1400px) {
+    .service-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   }
   @media (min-width: 1180px) {
     .service-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -14,7 +14,7 @@ if (page === 'add') document.querySelector('[data-nav="library"]').setAttribute(
 else document.querySelector(`[data-nav="${page}"]`)?.setAttribute('aria-current', 'page');
 for (const section of document.querySelectorAll('.page')) section.hidden = section.dataset.for !== page;
 
-let catalog = {apps: {}, branches: {}, startAfter: {}};
+let catalog = {apps: {}, branches: {}, uses: {}, groupRest: {}};
 const appInfo = name => catalog.apps[name] ?? {name, role: 'Container'};
 
 function serviceIsUp(service) {
@@ -57,7 +57,8 @@ function appHealth(service) {
     const unavailable = health.state === 'unavailable';
     return `<div class="app-health"><span class="badge ${unavailable ? 'warn' : 'muted'}">${unavailable ? 'App health unavailable' : 'App health not connected'}</span></div>`;
   }
-  if (!health.alerts.length) return '<div class="app-health"><span class="badge ok">No app alerts</span></div>';
+  // The status chip already says the app is fine, so only problems get a line of their own.
+  if (!health.alerts.length) return '';
   return `<ul class="app-health">${health.alerts.map(({severity, message}) => {
     const tone = severity === 'error' ? 'crit' : severity === 'info' ? 'muted' : 'warn';
     const label = severity === 'error' ? 'Error' : severity === 'info' ? 'Info' : 'Warning';
@@ -84,26 +85,53 @@ function durationSince(stamp) {
   return minutes ? plural(minutes, 'minute') : 'less than a minute';
 }
 
-/** Uptime when the app or Docker reports it; otherwise the raw status, such as how long ago it stopped. */
-function serviceDetail(service) {
-  const health = /\((healthy|health: starting)\)/.exec(service.status || '')?.[1];
-  const suffix = health === 'healthy' ? ' · healthy' : health ? ' · starting' : '';
-  if (service.startedAt && !isNaN(new Date(service.startedAt))) return `Up ${durationSince(service.startedAt)}${suffix}`;
-  if (service.uptime) return `Up ${service.uptime.charAt(0).toLowerCase()}${service.uptime.slice(1)}${suffix}`;
-  return service.status || 'No status detail';
+/** "2d 4h", "3h 49m", "12m" or "<1m": short enough for a status chip. */
+function shortDuration(stamp) {
+  const minutes = Math.floor(Math.max(0, (Date.now() - new Date(stamp)) / 1000) / 60);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor(minutes % 1440 / 60);
+  if (days) return hours ? `${days}d ${hours}h` : `${days}d`;
+  if (hours) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+  return minutes ? `${minutes}m` : '<1m';
 }
 
-function serviceCard(service, groupServices, countLabel) {
+/** One chip per card: the uptime while an app is up, otherwise what is wrong with it. */
+function statusChip(service) {
+  const {label, tone} = serviceState(service);
+  const starting = /\(health: starting\)/.test(service.status || '');
+  let text = label;
+  let tip = service.status || label;
+  if (tone === 'ok' && starting) {
+    return `<span class="badge warn service-chip" title="${esc(tip)}">Starting</span>`;
+  }
+  if (tone === 'ok') {
+    if (service.startedAt && !isNaN(new Date(service.startedAt))) {
+      text = `Up ${shortDuration(service.startedAt)}`;
+      tip = `Up ${durationSince(service.startedAt)}`;
+    } else if (service.uptime) {
+      text = `Up ${service.uptime.charAt(0).toLowerCase()}${service.uptime.slice(1)}`;
+    } else {
+      text = 'Online';
+      tip = 'Responds to health checks. Its uptime is not reported.';
+    }
+  }
+  return `<span class="badge ${tone} service-chip" title="${esc(tip)}">${esc(text)}</span>`;
+}
+
+function relatedNames(names) {
+  const list = names.map(name => appInfo(name).name);
+  return list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : list[0];
+}
+
+function serviceCard(service, groupServices) {
   const app = appInfo(service.name);
   const href = serviceHref(service);
   const title = href
     ? `<a class="service-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(app.name)}${icon('external', ' icon-small')}<span class="sr-only"> (opens in a new tab)</span></a>`
     : esc(app.name);
-  const {label, tone} = serviceState(service);
-  const dependencies = (catalog.startAfter[service.name] ?? []).filter(name => groupServices.some(item => item.name === name));
-  const dependencyNote = dependencies.length ? `<p class="service-note">Own network · ${countLabel === 'reachable' ? 'Uses' : 'Starts after'}
-    ${dependencies.map(name => esc(appInfo(name).name)).join(' and ')}${countLabel === 'reachable' ? '' : ' are healthy'}.</p>` : '';
-  const unavailable = dependencies.filter(name => {
+  const {tone} = serviceState(service);
+  const uses = (catalog.uses?.[service.name] ?? []).filter(name => groupServices.some(item => item.name === name));
+  const unavailable = uses.filter(name => {
     const dependency = groupServices.find(item => item.name === name);
     return dependency && needsAttention(dependency);
   });
@@ -112,44 +140,60 @@ function serviceCard(service, groupServices, countLabel) {
     <div class="service-identity">
       ${appIcon(service.name)}
       <div><h4>${title}</h4><p>${esc(app.role)}</p></div>
+      ${statusChip(service)}
     </div>
-    <div class="service-status"><span class="badge ${tone}">${esc(label)}</span><span class="service-detail"${
-      service.status ? ` title="${esc(service.status)}"` : ''}>${esc(serviceDetail(service))}</span></div>
+    ${tone === 'ok' || !service.status ? '' : `<p class="service-detail">${esc(service.status)}</p>`}
     ${appHealth(service)}
     ${localOnly ? '<p class="service-note">Its web page only opens on the host itself. Rerun setup with your LAN address to reach it from here.</p>' : ''}
     ${!service.web && app.note ? `<p class="service-note">${esc(app.note)}</p>` : ''}
-    ${dependencyNote}
-    ${unavailable.length ? `<p class="service-warning">${icon('alert', ' icon-small')}Check ${unavailable.map(name => esc(appInfo(name).name)).join(' and ')}</p>` : ''}
+    ${uses.length ? `<p class="service-note">Uses ${esc(relatedNames(uses))}</p>` : ''}
+    ${unavailable.length ? `<p class="service-warning">${icon('alert', ' icon-small')}Check ${esc(relatedNames(unavailable))}</p>` : ''}
   </li>`;
+}
+
+/** The service that others share, such as Gluetun for the VPN apps, shown as the bar their section hangs from. */
+function gatewayBar(service) {
+  const app = appInfo(service.name);
+  return `<div class="gateway tone-${serviceState(service).tone}">
+    ${appIcon(service.name)}
+    <p><strong>${esc(app.name)}</strong><span>${esc(app.role)}</span></p>
+    ${statusChip(service)}
+  </div>`;
+}
+
+function serviceSection(title, description, cards, gateway = '') {
+  return `<div class="service-section">
+    <div class="section-head"><h4>${esc(title)}</h4>${description ? `<p>${esc(description)}</p>` : ''}</div>
+    ${gateway}
+    <ul class="service-grid">${cards}</ul>
+  </div>`;
 }
 
 function serviceGroup(group, countLabel, showVpnBranch) {
   const services = group.services;
   const running = services.filter(serviceIsUp).length;
   const nested = new Set();
-  const branches = services.flatMap(parent => {
+  const sections = services.flatMap(parent => {
     const branch = parent.name === 'nordvpn' && !showVpnBranch ? null : catalog.branches[parent.name];
     if (!branch) return [];
     const children = services.filter(service => branch.members.includes(service.name));
     if (!children.length) return [];
     nested.add(parent.name);
     children.forEach(child => nested.add(child.name));
-    return [`<div class="branch">
-      <ul class="branch-parent">${serviceCard(parent, services, countLabel)}</ul>
-      <div class="branch-children">
-        <h4>${esc(branch.title)}</h4>
-        <p>${esc(branch.description)}</p>
-        ${needsAttention(parent) ? `<p class="service-warning">${icon('alert', ' icon-small')}Upstream: check ${esc(appInfo(parent.name).name)}</p>` : ''}
-        <ul class="service-grid">${children.map(child => serviceCard(child, services, countLabel)).join('')}</ul>
-      </div>
-    </div>`];
+    return [serviceSection(branch.title, branch.description,
+      children.map(child => serviceCard(child, services)).join(''), gatewayBar(parent))];
   });
   const standalone = services.filter(service => !nested.has(service.name));
-  const compact = branches.length === 0 && services.length <= 2;
+  if (standalone.length) {
+    const cards = standalone.map(service => serviceCard(service, services)).join('');
+    const rest = catalog.groupRest?.[group.name];
+    sections.push(sections.length && rest ? serviceSection(rest.title, rest.description, cards)
+      : `<ul class="service-grid">${cards}</ul>`);
+  }
+  const compact = nested.size === 0 && services.length <= 2;
   return `<section class="service-group${compact ? ' is-compact' : ''}">
     <div class="group-title"><h3>${esc(group.name)}</h3><span>${running} of ${services.length} ${countLabel}</span></div>
-    ${branches.join('')}
-    ${standalone.length ? `<ul class="service-grid">${standalone.map(service => serviceCard(service, services, countLabel)).join('')}</ul>` : ''}
+    ${sections.join('')}
   </section>`;
 }
 
@@ -256,9 +300,6 @@ async function status() {
       $('#services-description').textContent = probes
         ? 'Live health checks for the services this installer set up.'
         : 'Container status from Docker, grouped by stack, with each app’s own health alerts.';
-      $('#services-source').textContent = probes
-        ? 'Reachability shows which apps respond. Connected Arr apps also report their own health alerts.'
-        : 'Docker reports container status once a minute. Connected Arr apps also report their own health alerts.';
       $('#services-content').innerHTML = docker.available
         ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running', !probes || docker.downloadsBehindVpn)).join('')
         : `<p class="empty">${esc(docker.error)}</p>`;

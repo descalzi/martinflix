@@ -26,11 +26,20 @@
     "bookshelf": {"name": "Bookshelf", "role": "Optional book automation", "icon": "bookshelf", "web": {"port": 8787}, "optional": true}
   },
   "branches": {
-    "nordvpn": {"title": "VPN network", "description": "These services share Gluetun’s network.", "members": ["transmission-daemon", "flaresolverr", "prowlarr", "bazarr"]},
+    "nordvpn": {"title": "VPN network", "description": "Gluetun sends these apps’ traffic through NordVPN.", "members": ["transmission-daemon", "flaresolverr", "prowlarr", "bazarr"]},
     "bookorbit-db": {"title": "BookOrbit database", "description": "BookOrbit starts after PostgreSQL is healthy.", "members": ["bookorbit-app"]}
   },
   "startAfter": {
     "sonarr": ["prowlarr", "transmission-daemon"],
     "radarr": ["prowlarr", "transmission-daemon"]
+  },
+  "uses": {
+    "sonarr": ["prowlarr", "transmission-daemon"],
+    "radarr": ["prowlarr", "transmission-daemon"],
+    "prowlarr": ["flaresolverr"],
+    "bazarr": ["sonarr", "radarr"]
+  },
+  "groupRest": {
+    "Downloads & automation": {"title": "Library", "description": "Sonarr and Radarr find, download and organise your series and films."}
   }
 }

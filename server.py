@@ -790,7 +790,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_auth_page('setup-password.html', changing=True)
             return
         if path == '/api/status':
-            catalog = {key: CATALOG[key] for key in ('apps', 'branches', 'startAfter')}
+            catalog = {key: CATALOG.get(key, {}) for key in ('apps', 'branches', 'uses', 'groupRest')}
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
                     'canChangePassword': form_login, 'catalog': catalog}
             self.send_json(data)
