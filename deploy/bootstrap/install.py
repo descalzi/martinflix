@@ -141,11 +141,14 @@ def prepare_vpn_secrets(path):
         if not sys.stdin.isatty():
             raise ValueError('Run setup in a terminal to enter your NordVPN OpenVPN service credentials.')
         print(NORDVPN_CREDENTIALS_HELP, flush=True)
-        for name, prompt in [('openvpn_user', 'NordVPN service username: '), ('openvpn_password', 'NordVPN service password: ')]:
-            if not credentials[name]:
-                credentials[name] = getpass.getpass(prompt).strip()
-            if not credentials[name]:
-                raise ValueError('Both NordVPN service credentials are needed.')
+        # The username shows as you type so typos are visible; the password stays hidden, as with sudo.
+        if not credentials['openvpn_user']:
+            credentials['openvpn_user'] = input('NordVPN service username: ').strip()
+        if not credentials['openvpn_password']:
+            credentials['openvpn_password'] = getpass.getpass(
+                'NordVPN service password (hidden as you type or paste): ').strip()
+        if not all(credentials.values()):
+            raise ValueError('Both NordVPN service credentials are needed.')
     for name, value in credentials.items():
         write_secret(path / name, value, trailing_newline=False)
 
@@ -234,7 +237,7 @@ def opensubtitles_login():
     username = input('OpenSubtitles.com username: ').strip()
     if not username:
         return None
-    password = getpass.getpass('OpenSubtitles.com password: ')
+    password = getpass.getpass('OpenSubtitles.com password (hidden as you type or paste): ')
     return (username, password) if password else None
 
 
