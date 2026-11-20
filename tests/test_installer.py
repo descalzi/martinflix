@@ -1,9 +1,11 @@
 import argparse
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -238,6 +240,50 @@ class RouteChangeTests(unittest.TestCase):
         self.assertEqual([route for route, _ in self.puts], ['applications/1?forceSave=true', 'indexerproxy/4?forceSave=true'])
         self.assertEqual(self.puts[1][1]['fields'][0]['value'], 'http://127.0.0.1:8191/')
 
+
+    def prowlarr(self, records):
+        api = self.api(records)
+        request = api.request
+        def with_ids(route, payload=None, method=None):
+            result = request(route, payload, method)
+            return {**payload, 'id': 9} if route == 'tag' and payload else result
+        api.request = with_ids
+        return api
+
+    def test_seeded_indexers_are_saved_enabled_without_the_connection_test(self):
+        schema = [{'definitionName': name, 'privacy': 'public', 'implementation': 'Cardigann', 'id': 0, 'fields': []}
+                  for name in configure.PROWLARR_INDEXERS]
+        prowlarr = self.prowlarr({'indexer/schema': schema, 'appprofile': [{'id': 1, 'name': 'Standard'}]})
+        with redirect_stdout(io.StringIO()):
+            configure.seed_prowlarr_indexers(prowlarr, flaresolverr_tag=9)
+        self.assertEqual({route for route, _ in self.posts}, {'indexer?forceSave=true'})
+        self.assertTrue(all(entry['enable'] for _, entry in self.posts))
+        tagged = {entry['definitionName'] for _, entry in self.posts if entry['tags'] == [9]}
+        self.assertEqual(tagged, {'1337x'}, 'only Cloudflare-protected indexers go through FlareSolverr')
+
+    def test_flaresolverr_becomes_the_proxy_for_its_tag(self):
+        prowlarr = self.prowlarr({'indexerproxy/schema': [
+            {'implementation': 'FlareSolverr', 'fields': [{'name': 'host', 'value': ''}, {'name': 'requestTimeout', 'value': 60}]}]})
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(configure.ensure_flaresolverr_proxy(prowlarr, True), 9)
+        self.assertEqual(self.posts[0], ('tag', {'label': 'flaresolverr'}))
+        route, proxy = self.posts[1]
+        self.assertEqual((route, proxy['tags'], proxy['fields'][0]['value']), ('indexerproxy?forceSave=true', [9], 'http://127.0.0.1:8191/'))
+
+    def test_an_existing_flaresolverr_proxy_keeps_its_tag(self):
+        prowlarr = self.prowlarr({'indexerproxy': [{'id': 2, 'implementation': 'FlareSolverr', 'tags': [4], 'fields': []}]})
+        self.assertEqual(configure.ensure_flaresolverr_proxy(prowlarr, True), 4)
+        self.assertEqual(self.posts + self.puts, [])
+
+    def test_earlier_disabled_indexers_are_turned_on_once(self):
+        prowlarr = self.prowlarr({'indexer': [
+            {'id': 1, 'name': '1337x', 'definitionName': '1337x', 'enable': False, 'tags': []},
+            {'id': 2, 'name': 'YTS', 'definitionName': 'yts', 'enable': True, 'tags': []},
+            {'id': 3, 'name': 'Private', 'definitionName': 'someprivate', 'enable': False, 'tags': []}]})
+        with redirect_stdout(io.StringIO()):
+            configure.update_seeded_prowlarr_indexers(prowlarr, enable=True, flaresolverr_tag=9)
+        self.assertEqual([(route, entry['enable'], entry['tags']) for route, entry in self.puts],
+                         [('indexer/1?forceSave=true', True, [9])], 'your own indexers are left alone')
 
 class VpnDiagnosisTests(unittest.TestCase):
     def diagnose(self, log):

@@ -82,7 +82,7 @@ The VPN option requires `/dev/net/tun` and your NordVPN **service credentials**,
   Installations created before these defaults get the same choices applied once. Changes you make later in Transmission are kept.
 - Transmission accepts peers on port 51155 (`--transmission-peer-port` to change it). With direct downloads the port is published on every address, so forward it on your router if you want incoming connections. Behind the VPN it isn’t published, because NordVPN doesn’t forward ports.
 - Sonarr and Radarr use separate `sonarr` and `radarr` Transmission categories and map Transmission’s `/downloads` path to the shared `/data/downloads` folder for imports.
-- Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. For indexers that need FlareSolverr, add its proxy in Prowlarr with the address printed by setup, then apply its tag to those indexers. Setup leaves indexer credentials and searches under your control.
+- Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. When FlareSolverr is installed, setup adds it as Prowlarr’s proxy for the `flaresolverr` tag. Add that tag to any indexer that fails behind Cloudflare’s browser check. Setup leaves indexer credentials and searches under your control.
 
 ### Subtitles with Bazarr
 
@@ -99,7 +99,7 @@ OpenSubtitles.com needs an account, so setup asks for its username and password 
 
 Select individual apps with `--download-client transmission`, `--enable-prowlarr`, `--enable-flaresolverr`, and `--enable-bazarr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects Transmission, Prowlarr, and FlareSolverr.
 
-The first run with Prowlarr adds eight public indexers from the reference setup using Prowlarr’s built-in definitions. Setup reports any unavailable definitions and leaves indexers disabled if Prowlarr rejects them during validation. Existing indexers are preserved, and later reruns respect indexers you remove.
+The first run with Prowlarr adds eight public indexers from the reference setup using Prowlarr’s built-in definitions. They’re saved enabled, without Prowlarr’s connection test, so an indexer that is down during setup still gets added; Prowlarr’s health checks then show any that keep failing, and you can disable those. 1337x gets the `flaresolverr` tag. Setup reports any unavailable definitions. Installs whose indexers an earlier setup left disabled get them enabled once on the next update. Existing indexers are preserved, and later reruns respect indexers you remove.
 
 The media path and enabled download services are remembered when you rerun setup. The installer fills in missing connections and preserves existing named records, including any edits you make in the apps. A different media root requires a separate installation or a planned storage migration.
 

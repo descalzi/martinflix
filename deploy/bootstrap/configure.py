@@ -20,6 +20,9 @@ PROWLARR_INDEXERS = {
     'world-torrent': ('World-torrent', 26),
     'yts': ('YTS', 25),
 }
+# Indexers behind Cloudflare's browser check, which answer only through FlareSolverr.
+FLARESOLVERR_INDEXERS = ('1337x',)
+FLARESOLVERR_TAG = 'flaresolverr'
 # The reference host's Transmission choices, applied once to installs that started before setup shipped them.
 # New installs get the same values from transmission-settings.json before Transmission first starts.
 TRANSMISSION_SESSION = {
@@ -394,7 +397,52 @@ def seed_radarr_indexer_defaults(api):
         api.request(f'config/indexer/{config["id"]}', {**config, **defaults}, method='PUT')
 
 
-def seed_prowlarr_indexers(api):
+def ensure_flaresolverr_proxy(api, behind_vpn):
+    """Make FlareSolverr Prowlarr's proxy for tagged indexers, keeping one that is already set up. Returns its tag ID."""
+    proxy = next((item for item in api.request('indexerproxy') if item.get('implementation') == 'FlareSolverr'), None)
+    if proxy is not None and proxy.get('tags'):
+        return proxy['tags'][0]
+    tag = next((item for item in api.request('tag') if item['label'].casefold() == FLARESOLVERR_TAG), None) \
+        or api.request('tag', {'label': FLARESOLVERR_TAG})
+    if proxy is not None:
+        api.request(f'indexerproxy/{proxy["id"]}?forceSave=true', {**proxy, 'tags': [tag['id']]}, method='PUT')
+        return tag['id']
+    entry = next((item for item in api.request('indexerproxy/schema') if item.get('implementation') == 'FlareSolverr'), None)
+    if entry is None:
+        print('   Prowlarr: FlareSolverr proxy skipped. This Prowlarr version does not offer it.', flush=True)
+        return None
+    entry.pop('id', None)
+    entry.update(name='FlareSolverr', tags=[tag['id']])
+    for field in entry['fields']:
+        if field['name'] == 'host':
+            field['value'] = FLARESOLVERR_URLS[behind_vpn]
+    api.request('indexerproxy?forceSave=true', entry)
+    print(f'   Prowlarr: FlareSolverr added as the proxy for indexers tagged "{FLARESOLVERR_TAG}".', flush=True)
+    return tag['id']
+
+
+def indexer_tags(definition, flaresolverr_tag, tags=()):
+    tags = list(tags)
+    if definition in FLARESOLVERR_INDEXERS and flaresolverr_tag is not None and flaresolverr_tag not in tags:
+        tags.append(flaresolverr_tag)
+    return tags
+
+
+def update_seeded_prowlarr_indexers(api, *, enable, flaresolverr_tag):
+    """Turn on the indexers earlier setups added disabled, and route the Cloudflare ones through FlareSolverr."""
+    for item in api.request('indexer'):
+        definition = item.get('definitionName')
+        if definition not in PROWLARR_INDEXERS:
+            continue
+        tags = indexer_tags(definition, flaresolverr_tag, item.get('tags') or [])
+        if (enable and not item.get('enable')) or tags != (item.get('tags') or []):
+            api.request(f'indexer/{item["id"]}?forceSave=true', {**item, 'enable': item.get('enable') or enable, 'tags': tags},
+                        method='PUT')
+            print(f'   Prowlarr: {item["name"]} is enabled{" and uses FlareSolverr" if flaresolverr_tag in tags else ""}.',
+                  flush=True)
+
+
+def seed_prowlarr_indexers(api, flaresolverr_tag=None):
     existing = api.request('indexer')
     definitions = {item.get('definitionName') for item in existing}
     names = {item['name'].casefold() for item in existing}
@@ -411,21 +459,24 @@ def seed_prowlarr_indexers(api):
             continue
         entry = templates[definition].copy()
         entry.pop('id', None)
-        entry.update(name=name, priority=priority, appProfileId=profile['id'], enable=True, tags=[])
+        entry.update(name=name, priority=priority, appProfileId=profile['id'], enable=True,
+                     tags=indexer_tags(definition, flaresolverr_tag))
+        # Save without Prowlarr's connection test: an indexer that is down today still belongs in the list, and
+        # Prowlarr's health checks report the ones that keep failing.
         try:
-            api.request('indexer', entry)
+            api.request('indexer?forceSave=true', entry)
         except AppApiHttpError as exc:
             if exc.status not in (400, 422):
                 raise
-            api.request('indexer', {**entry, 'enable': False})
-            print(f'   Prowlarr: {name} was added disabled. Test it in Prowlarr before enabling it.', flush=True)
+            print(f'   Prowlarr: {name} skipped. Prowlarr rejected its settings (HTTP {exc.status}).', flush=True)
         else:
             print(f'   Prowlarr: {name} added and enabled.', flush=True)
 
 
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
                    seed_indexers=False, seed_radarr_indexers=False, seed_prowlarr=False, arr_address='127.0.0.1',
-                   downloads_behind_vpn=True, prowlarr_address='127.0.0.1'):
+                   downloads_behind_vpn=True, prowlarr_address='127.0.0.1', setup_flaresolverr=False,
+                   enable_prowlarr_indexers=False):
     transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
     prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=prowlarr_address) if prowlarr_key else None
@@ -454,8 +505,12 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
             }, syncLevel='fullSync')
     if prowlarr:
         sync_prowlarr_routes(prowlarr, prowlarr_host, downloads_behind_vpn)
-    if prowlarr and seed_prowlarr:
-        seed_prowlarr_indexers(prowlarr)
+    if prowlarr:
+        tag = ensure_flaresolverr_proxy(prowlarr, downloads_behind_vpn) if setup_flaresolverr else None
+        if seed_prowlarr:
+            seed_prowlarr_indexers(prowlarr, tag)
+        elif enable_prowlarr_indexers or tag is not None:
+            update_seeded_prowlarr_indexers(prowlarr, enable=enable_prowlarr_indexers, flaresolverr_tag=tag)
     # Health warnings, such as a missing download folder, otherwise linger until the apps' next scheduled check.
     for api in (*(AppApi(name, ports[app], arr_keys[app], address=arr_address) for app, name in ARR_NAMES.items()),
                 *([prowlarr] if prowlarr else [])):

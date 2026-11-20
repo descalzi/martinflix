@@ -880,12 +880,18 @@ def run_installation(plan, state, previous, mode='install'):
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
         seed_radarr_indexers = options['radarr_indexer_defaults_pending']
         seed_prowlarr = bool(prowlarr_key) and not options.get('prowlarr_indexer_defaults_applied')
+        # Earlier setups added indexers that failed Prowlarr's test as disabled; turn those on once.
+        enable_prowlarr_indexers = bool(prowlarr_key) and not seed_prowlarr and not options.get('prowlarr_indexers_enabled')
+        setup_flaresolverr = bool(prowlarr_key) and 'flaresolverr' in downloads and not options.get('flaresolverr_proxy_applied')
         configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers,
                        seed_radarr_indexers=seed_radarr_indexers, seed_prowlarr=seed_prowlarr, arr_address=arr_address,
-                       downloads_behind_vpn=download_network == 'vpn', prowlarr_address=download_address)
-        if seed_prowlarr:
-            options['prowlarr_indexer_defaults_applied'] = True
-        if seed_indexers or seed_radarr_indexers or seed_prowlarr:
+                       downloads_behind_vpn=download_network == 'vpn', prowlarr_address=download_address,
+                       setup_flaresolverr=setup_flaresolverr, enable_prowlarr_indexers=enable_prowlarr_indexers)
+        if seed_prowlarr or enable_prowlarr_indexers:
+            options.update(prowlarr_indexer_defaults_applied=True, prowlarr_indexers_enabled=True)
+        if setup_flaresolverr:
+            options['flaresolverr_proxy_applied'] = True
+        if seed_indexers or seed_radarr_indexers or seed_prowlarr or enable_prowlarr_indexers or setup_flaresolverr:
             options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
         compose_step(f'{step + 1}. Building and starting your dashboard…', ['build', '--pull', '--quiet', 'dashboard'])
@@ -931,8 +937,7 @@ for app in ('sonarr', 'radarr'):
     if 'prowlarr' in enabled:
         print('Manage indexers in Prowlarr. The installer connected both library apps.')
     if 'flaresolverr' in enabled:
-        flare_host = '127.0.0.1' if download_network == 'vpn' else 'flaresolverr'
-        print(f'FlareSolverr proxy address inside Prowlarr: http://{flare_host}:8191')
+        print('FlareSolverr is Prowlarr\'s proxy. Add the "flaresolverr" tag to any indexer that needs it.')
 
 
 def build_parser():

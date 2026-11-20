@@ -993,13 +993,16 @@ class Handler(BaseHTTPRequestHandler):
                    '<input type="password" id="current" name="current" autocomplete="current-password" required>'
                    '<button type="button" class="password-toggle" aria-controls="current" aria-label="Show current password" '
                    'aria-pressed="false" hidden><span class="password-eye" aria-hidden="true"></span></button></div>')
-        scope = f'<p class="setup-note">This password also signs you in to {html.escape(app_list())}.</p>' if synced_apps() else ''
+        apps = app_list() if synced_apps() else ''
+        scope = f'<p class="setup-note">This password also signs you in to {html.escape(apps)}.</p>' if apps else ''
+        # Saving waits for every app to take the new password, so say what is happening while it runs.
+        progress = 'Updating every app with your new password. This can take up to a minute.' if apps else 'Saving your password…'
         if changing:
             scope += '<a href="/">Back to dashboard</a>'
         body = (template.replace('{{ACTION}}', '/change-password' if changing else '/setup-password')
                 .replace('{{HEADING}}', 'Change your dashboard password' if changing else 'Set your dashboard password')
                 .replace('{{CURRENT}}', current if changing else '')
-                .replace('{{PASSWORD_SCOPE}}', scope)
+                .replace('{{PASSWORD_SCOPE}}', scope).replace('{{PROGRESS}}', progress)
                 .replace('{{TOKEN}}', html.escape(self.server.password_setup_token))
                 .replace('{{MIN_PASSWORD}}', str(MIN_PERSONAL_PASSWORD))
                 .replace('{{NOTICE}}', notice).replace('{{ERROR}}', error).encode())
