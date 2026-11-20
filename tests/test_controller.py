@@ -128,5 +128,20 @@ class StackTests(unittest.TestCase):
         self.assertIn(['compose', '-p', 'martinflix-test', 'pull', '--quiet', 'gluetun'], self.calls)
 
 
+
+class BuildContextTests(unittest.TestCase):
+    def test_every_copied_file_is_let_into_the_build_context(self):
+        root = Path(__file__).resolve().parents[1]
+        allowed = [line[1:].rstrip('/*') for line in (root / '.dockerignore').read_text().splitlines() if line.startswith('!')]
+        for dockerfile in root.glob('deploy/*/Dockerfile'):
+            for line in dockerfile.read_text().splitlines():
+                parts = line.split()
+                if not parts or parts[0] != 'COPY' or any(part.startswith('--from') for part in parts):
+                    continue
+                for source in parts[1:-1]:
+                    source = source.rstrip('/')
+                    self.assertTrue(any(source == item or source.startswith(item + '/') for item in allowed),
+                                    f'{dockerfile.relative_to(root)} copies {source}, which .dockerignore leaves out')
+
 if __name__ == '__main__':
     unittest.main()
