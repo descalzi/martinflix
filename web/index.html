@@ -140,7 +140,21 @@
 
       <div class="page" data-for="services">
         <p class="page-intro" id="services-description">Service health and dependencies.</p>
+        <p class="control-notice" id="control-notice" role="status" hidden></p>
         <div id="services-content" class="service-list" aria-live="polite"><p class="empty">Checking services…</p></div>
+        <dialog class="control-dialog" id="control-dialog" aria-labelledby="control-title">
+          <form id="control-form" novalidate>
+            <h2 id="control-title">Restart</h2>
+            <p class="control-detail" id="control-detail"></p>
+            <label for="control-pin">PIN</label>
+            <input id="control-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" minlength="4" maxlength="8" pattern="[0-9]{4,8}" required>
+            <p class="error error-inline" id="control-error" role="alert" hidden></p>
+            <div class="control-actions">
+              <button class="button button-quiet" type="button" id="control-cancel">Cancel</button>
+              <button class="button button-primary" type="submit" id="control-confirm">Restart</button>
+            </div>
+          </form>
+        </dialog>
       </div>
 
       <div class="page" data-for="backups">

@@ -249,6 +249,67 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.request('/nope')[0], 404)
 
 
+
+class ControlTests(unittest.TestCase):
+    def post(self, path, payload, origin='http://dash:8765'):
+        handler = object.__new__(server.Handler)
+        handler.server = SimpleNamespace(admin_state_file=None, admin_user='admin', admin_password='long test password',
+                                         password_setup_required=False)
+        handler.path = path
+        body = json.dumps(payload).encode()
+        handler.headers = __import__('email.message', fromlist=['Message']).Message()
+        for key, value in {'Authorization': 'Basic YWRtaW46bG9uZyB0ZXN0IHBhc3N3b3Jk', 'Host': 'dash:8765',
+                           'Origin': origin, 'Content-Type': 'application/json', 'Content-Length': str(len(body))}.items():
+            handler.headers[key] = value
+        handler.rfile = io.BytesIO(body)
+        handler.wfile = io.BytesIO()
+        sent = {}
+        handler.send_response = lambda code, *args: sent.setdefault('status', code)
+        handler.send_header = lambda *args: None
+        handler.end_headers = lambda: None
+        handler.send_error = lambda code, *args: sent.setdefault('status', code)
+        handler.do_POST()
+        raw = handler.wfile.getvalue()
+        return sent.get('status'), json.loads(raw) if raw else None
+
+    def test_requests_reach_the_controller_under_compose_names(self):
+        calls = []
+        def fake(path, payload=None, timeout=5):
+            calls.append((path, payload))
+            return {'ok': True, 'action': 'restart', 'service': 'gluetun',
+                    'followed': ['transmission', 'transmission-auth', 'prowlarr']}
+        with patch.object(server, 'controller_request', side_effect=fake):
+            status, data = self.post('/api/control/restart', {'service': 'nordvpn', 'pin': '2468'})
+        self.assertEqual(status, 200)
+        self.assertEqual(calls, [('/restart', {'service': 'gluetun', 'pin': '2468'})])
+        self.assertEqual(data['message'], 'Gluetun restarted, then Transmission and Prowlarr.')
+
+    def test_bad_input_and_other_sites_never_reach_the_controller(self):
+        with patch.object(server, 'controller_request') as controller:
+            self.assertEqual(self.post('/api/control/restart', {'service': 'nordvpn', 'pin': '24'})[0], 400)
+            self.assertEqual(self.post('/api/control/update', {'service': 'docker', 'pin': '2468'})[0], 400)
+            self.assertEqual(self.post('/api/control/restart', {'service': 'sonarr', 'pin': '2468'},
+                                       origin='http://evil.example')[0], 403)
+            controller.assert_not_called()
+
+    def test_controller_refusals_are_passed_on(self):
+        with patch.object(server, 'controller_request', side_effect=server.ControllerError(423, 'Too many wrong PINs.')):
+            self.assertEqual(self.post('/api/control/update', {'service': 'sonarr', 'pin': '1111'}),
+                             (423, {'error': 'Too many wrong PINs.'}))
+
+    def test_docker_fills_in_uptime_and_stopped_containers(self):
+        services = [{'name': 'nordvpn', 'state': 'reachable', 'status': 'Responded to health check'},
+                    {'name': 'radarr', 'state': 'unreachable', 'status': 'Health check did not respond'},
+                    {'name': 'sonarr', 'state': 'reachable', 'status': 'ok', 'startedAt': '2026-11-20T09:00:00Z'}]
+        server.apply_control_status(services, {
+            'gluetun': {'state': 'running', 'startedAt': '2026-11-20T08:00:00Z', 'dependents': ['transmission', 'transmission-auth']},
+            'radarr': {'state': 'exited', 'exitCode': 137, 'dependents': []},
+            'sonarr': {'state': 'running', 'startedAt': '2026-11-20T08:59:00Z', 'dependents': []}})
+        self.assertEqual(services[0]['startedAt'], '2026-11-20T08:00:00Z')
+        self.assertEqual(services[0]['control'], {'followers': ['transmission-daemon']}, 'helper sidecars stay hidden')
+        self.assertEqual((services[1]['state'], services[1]['status']), ('exited', 'Exited (exit code 137)'))
+        self.assertEqual(services[2]['startedAt'], '2026-11-20T09:00:00Z', 'an app\'s own start time wins')
+
 @unittest.skipUnless(shutil.which('node'), 'Node.js is needed to test the setup wizard')
 class WizardTests(unittest.TestCase):
     def test_wizard_command_builder(self):

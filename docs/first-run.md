@@ -32,6 +32,17 @@ New Radarr installations start with a maximum release size of 4,500 MB, an avail
 
 The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
 
+### Restart and update apps from the dashboard
+
+Each card on the **Services** page has **Restart** and **Update** buttons, and the dashboard asks for a PIN before either runs. Setup asks you to choose the PIN (4 to 8 digits) and stores only a hash of it. To choose a new one, rerun setup with `--change-pin`. Five wrong PINs lock these actions for five minutes.
+
+The buttons are served by a separate **controller** container, the only part of the stack with Docker access. It has no published port, shares a private network with the dashboard alone, and checks the PIN itself, so the dashboard cannot restart or update anything without it. It can only restart or update the stack's apps; the dashboard and the controller update when you rerun setup.
+
+- **Restart** restarts the app. Restarting Gluetun also restarts Transmission, Prowlarr, FlareSolverr, and Bazarr afterwards, because they use its network connection.
+- **Update** downloads the app's newest image. If there is one, the app is recreated with it, along with any apps on its network; your settings stay in place. Gluetun is pinned to a tested version, so its update arrives with a new MartinFlix release: `git pull`, then rerun setup with `--update`.
+
+The controller also reports each container's uptime, so every card shows how long it has been up. It needs Docker on a local socket, which is the default; setup turns these buttons off when Docker is reached over TCP or SSH.
+
 Existing logins are preserved when you rerun the installer. Installations made before every app shared the dashboard password switch Transmission to the `admin` username and keep its old password; use **Change password** once to bring every app onto your password.
 
 Transmission has no API for changing its own password, so a small `transmission-auth` container applies password changes. It shares Transmission’s process namespace, has no network or capabilities, and makes Transmission reload its settings without stopping downloads.

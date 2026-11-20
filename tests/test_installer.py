@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy/bootstrap'))
 import configure  # noqa: E402
+import controller as install_controller  # noqa: E402
 import install  # noqa: E402
 
 
@@ -41,6 +42,28 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(plan['ports'], {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878})
         self.assertEqual(plan['options']['dashboard_bind'], '127.0.0.1')
         self.assertFalse(plan['downloads'])
+
+    def test_controller_joins_when_docker_has_a_local_socket(self):
+        with patch.object(install, 'docker_socket', return_value=(Path('/var/run/docker.sock'), 998)):
+            plan = self.plan()
+        self.assertTrue(plan['control'])
+        self.assertEqual(plan['compose'][-2:], ['--profile', 'control'])
+        self.assertEqual(plan['environment']['MARTINFLIX_DOCKER_GID'], '998')
+        self.assertEqual(plan['environment']['MARTINFLIX_REPO_DIR'], str(install.REPO_DIR))
+        with patch.object(install, 'docker_socket', return_value=None):
+            self.assertFalse(self.plan()['control'])
+
+    def test_the_pin_is_asked_twice_and_stored_as_a_hash(self):
+        folder = self.state / 'controller'
+        answers = iter(['12', '2468', '2468'])
+        with patch.object(install.sys.stdin, 'isatty', return_value=True), \
+                patch.object(install.getpass, 'getpass', side_effect=lambda prompt: next(answers)), \
+                redirect_stdout(io.StringIO()):
+            install.prepare_control_pin(folder)
+        stored = (folder / 'pin-hash').read_text()
+        self.assertNotIn('2468', stored)
+        self.assertTrue(install_controller.pin_matches('2468', stored))
+        install.prepare_control_pin(folder)  # Already set: no prompt.
 
     def test_saved_address_and_ports_are_reused_unless_overridden(self):
         previous = {'dashboard_bind': '192.168.4.166', 'ports': {'dashboard': 18765, 'sonarr': 18989, 'radarr': 17878}}

@@ -57,6 +57,9 @@ services:
       MARTINFLIX_RADARR_URL: http://radarr:7878
       MARTINFLIX_SONARR_WEB_PORT: "${MARTINFLIX_SONARR_PORT:-8989}"
       MARTINFLIX_RADARR_WEB_PORT: "${MARTINFLIX_RADARR_PORT:-7878}"
+      MARTINFLIX_CONTROLLER_URL: http://controller:9800
+      MARTINFLIX_CONTROLLER_TOKEN_FILE: /run/dashboard-secrets/controller-token
+    networks: [default, control]
     volumes:
       - "${MARTINFLIX_STATE_DIR}/dashboard-secrets:/run/dashboard-secrets:ro"
       - "${MARTINFLIX_STATE_DIR}/dashboard-auth:/run/dashboard-auth"
@@ -65,3 +68,39 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
+
+  # The only container with Docker access. It has no published port and shares a private network with the
+  # dashboard alone, and it acts only for a request that carries the PIN chosen during setup.
+  controller:
+    profiles: [control]
+    build:
+      context: ../..
+      dockerfile: deploy/controller/Dockerfile
+    restart: unless-stopped
+    user: "${MARTINFLIX_UID}:${MARTINFLIX_GID}"
+    group_add: ["${MARTINFLIX_DOCKER_GID:-0}"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      HOME: /tmp
+      MARTINFLIX_CONTROL_CONFIG: "${MARTINFLIX_STATE_DIR}/controller/compose.json"
+      MARTINFLIX_CONTROL_PIN_FILE: "${MARTINFLIX_STATE_DIR}/controller/pin-hash"
+      MARTINFLIX_CONTROL_TOKEN_FILE: "${MARTINFLIX_STATE_DIR}/dashboard-secrets/controller-token"
+    networks: [control]
+    # Compose runs here with the same file and folder paths as on the host, so the stack's paths stay valid.
+    volumes:
+      - "${MARTINFLIX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"
+      - "${MARTINFLIX_STATE_DIR}:${MARTINFLIX_STATE_DIR}:ro"
+      - "${MARTINFLIX_REPO_DIR:-/nonexistent}:${MARTINFLIX_REPO_DIR:-/nonexistent}:ro"
+    healthcheck:
+      test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 9800), 2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  # Internal: nothing on it reaches the internet. Image downloads are done by the Docker daemon, not the controller.
+  control:
+    internal: true

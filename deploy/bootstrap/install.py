@@ -19,10 +19,13 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'controller'))
+from controller import hash_pin, valid_pin  # noqa: E402
 from configure import (AppApi, BazarrApi, TransmissionRpc, configure_apps, configure_bazarr, ensure_arr_login,
                        ensure_bazarr_login, seed_transmission_defaults)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
+REPO_DIR = COMPOSE_FILE.parents[2]
 APPS = ('sonarr', 'radarr')
 DOCKER_INSTALL = 'https://docs.docker.com/engine/install/'
 COMPOSE_INSTALL = 'https://docs.docker.com/compose/install/linux/'
@@ -161,6 +164,51 @@ def prepare_vpn_secrets(path):
     for name, value in credentials.items():
         write_secret(path / name, value, trailing_newline=False)
     return changed
+
+
+CONTROL_PIN_HELP = """
+The dashboard can restart and update apps. Choose a PIN of 4 to 8 digits: the dashboard asks for it before each
+restart or update, and too many wrong tries lock these actions for five minutes. Only a hash of the PIN is stored."""
+
+
+def prepare_control_pin(path, change=False):
+    """Ask for the dashboard PIN when none is set, or when the admin asked to change it."""
+    private_directory(path)
+    pin_file = path / 'pin-hash'
+    if pin_file.is_file() and not change:
+        return
+    if not sys.stdin.isatty():
+        raise ValueError('Run setup in a terminal to choose the dashboard PIN.')
+    print(CONTROL_PIN_HELP, flush=True)
+    for _ in range(3):
+        pin = getpass.getpass('Dashboard PIN (4 to 8 digits, hidden as you type): ').strip()
+        if not valid_pin(pin):
+            print('Use 4 to 8 digits, with no spaces or letters.', flush=True)
+            continue
+        if getpass.getpass('Type the PIN again: ').strip() != pin:
+            print('The two PINs did not match.', flush=True)
+            continue
+        write_secret(pin_file, hash_pin(pin))
+        return
+    raise ValueError('No PIN was set. Rerun setup to choose one.')
+
+
+def docker_socket():
+    """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH."""
+    host = os.environ.get('DOCKER_HOST', '')
+    if not host:
+        try:
+            host = subprocess.run(['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'],
+                                  capture_output=True, text=True, timeout=20).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+    if not host.startswith('unix://'):
+        return None
+    path = Path(host[len('unix://'):])
+    try:
+        return path, path.stat().st_gid
+    except OSError:
+        return None
 
 
 def prepare_transmission_password(path, temporary_password, personal_password_set):
@@ -464,10 +512,11 @@ def reset_installation(state, project):
                            MARTINFLIX_GID=str(os.getgid()), MARTINFLIX_DASHBOARD_BIND='127.0.0.1',
                            MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878')
         subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE),
-                        'down', '--remove-orphans'], env=environment, timeout=120, check=True)
+                        '--profile', 'control', 'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
         managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
-                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun')
+                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun',
+                   'controller')
         moved = []
         try:
             for name in managed:
@@ -559,6 +608,11 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     environment.update(MARTINFLIX_VPN_PROVIDER=args.vpn_provider, MARTINFLIX_VPN_COUNTRY=vpn_country, MARTINFLIX_VPN_CITY=vpn_city,
                        MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
+    environment['MARTINFLIX_REPO_DIR'] = str(REPO_DIR)
+    control_socket = docker_socket()
+    if control_socket:
+        compose += ['--profile', 'control']
+        environment.update(MARTINFLIX_DOCKER_SOCKET=str(control_socket[0]), MARTINFLIX_DOCKER_GID=str(control_socket[1]))
     app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS))
 
     for name in ('dashboard-secrets', 'dashboard-auth', *app_dirs):
@@ -583,6 +637,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'vpn': vpn, 'vpn_country': vpn_country, 'vpn_city': vpn_city, 'options': options, 'ports': ports,
         'bind': bind, 'compose': compose, 'environment': environment, 'app_dirs': app_dirs,
         'bootstrapping_arr': bootstrapping_arr, 'bootstrapping_prowlarr': bootstrapping_prowlarr, 'bindings': bindings,
+        'control': bool(control_socket), 'change_pin': bool(getattr(args, 'change_pin', False)),
     }
 
 
@@ -785,6 +840,10 @@ def run_installation(plan, state, previous, mode='install'):
         temporary_password = password.read_text().rstrip('\r\n')
         personal_password_set = (auth_dir / 'password-hash').is_file()
         vpn_credentials_changed = prepare_vpn_secrets(state / 'download-secrets') if vpn else False
+        if plan['control']:
+            prepare_control_pin(state / 'controller', change=plan['change_pin'])
+            if not (secret_dir / 'controller-token').is_file():
+                write_secret(secret_dir / 'controller-token', secrets.token_urlsafe(32))
         seed_bazarr = 'bazarr' in downloads and not options.get('bazarr_defaults_applied')
         opensubtitles = opensubtitles_login() if seed_bazarr else None
         transmission_password = (prepare_transmission_password(state / 'download-secrets', temporary_password,
@@ -894,8 +953,15 @@ def run_installation(plan, state, previous, mode='install'):
         if seed_indexers or seed_radarr_indexers or seed_prowlarr or enable_prowlarr_indexers or setup_flaresolverr:
             options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
-        compose_step(f'{step + 1}. Building and starting your dashboard…', ['build', '--pull', '--quiet', 'dashboard'])
-        compose_step('   Starting the dashboard…', ['up', '-d', '--wait', '--wait-timeout', '90', 'dashboard'])
+        web = ['dashboard']
+        if plan['control']:
+            # The controller runs Compose exactly as setup does, with the final addresses and ports.
+            write_secret(state / 'controller' / 'compose.json', json.dumps({
+                'project': project, 'compose': compose[1:],
+                'env': {key: value for key, value in environment.items() if key.startswith('MARTINFLIX_')}}))
+            web.append('controller')
+        compose_step(f'{step + 1}. Building and starting your dashboard…', ['build', '--pull', '--quiet', *web])
+        compose_step('   Starting the dashboard…', ['up', '-d', '--wait', '--wait-timeout', '90', *web])
         verify = '''
 import server
 for app in ('sonarr', 'radarr'):
@@ -927,6 +993,11 @@ for app in ('sonarr', 'radarr'):
             print('Apps added before this version keep their old password until you next change your dashboard password.')
     else:
         print(f'{listed} use admin and the same temporary password. Setting your own password updates every app.')
+    if plan['control']:
+        print('\nRestart and update apps from the dashboard’s Services page with your PIN. '
+              'To choose a new PIN, rerun setup with --change-pin.')
+    else:
+        print('\nRestarts and updates from the dashboard need Docker on a local socket, so they are off on this host.')
     if vpn:
         print(f'NordVPN exit: {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
     if downloads:
@@ -959,6 +1030,8 @@ def build_parser():
     parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
                         help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--change-pin', action='store_true',
+                        help='Choose a new PIN for restarting and updating apps from the dashboard.')
     parser.add_argument('--download-client', choices=['transmission'])
     parser.add_argument('--enable-prowlarr', action='store_true')
     parser.add_argument('--enable-flaresolverr', action='store_true')

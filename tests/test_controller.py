@@ -1,0 +1,121 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy/controller'))
+import controller  # noqa: E402
+
+SERVICES = {
+    'gluetun': {'image': 'qmcgaw/gluetun:v3.41.3'},
+    'transmission': {'image': 'lscr.io/linuxserver/transmission:latest', 'network_mode': 'service:gluetun'},
+    'transmission-auth': {'image': 'busybox', 'network_mode': 'none', 'pid': 'service:transmission'},
+    'prowlarr': {'image': 'lscr.io/linuxserver/prowlarr:latest', 'network_mode': 'service:gluetun'},
+    'sonarr': {'image': 'lscr.io/linuxserver/sonarr:latest'},
+    'dashboard': {'build': {'context': '.'}},
+    'controller': {'build': {'context': '.'}},
+}
+
+
+class PinTests(unittest.TestCase):
+    def guard(self, pin='2468'):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / 'pin-hash'
+        path.write_text(controller.hash_pin(pin))
+        self.now = 1000.0
+        return controller.PinGuard(path, clock=lambda: self.now)
+
+    def test_only_the_stored_pin_passes(self):
+        guard = self.guard()
+        self.assertIsNone(guard.check('2468'))
+        self.assertEqual(guard.check('2469')[0], 403)
+        self.assertEqual(guard.check('24a8')[0], 403, 'letters never match')
+
+    def test_five_wrong_pins_lock_actions_for_five_minutes(self):
+        guard = self.guard()
+        for _ in range(4):
+            self.assertEqual(guard.check('0000')[0], 403)
+        self.assertEqual(guard.check('0000')[0], 423)
+        self.assertEqual(guard.check('2468')[0], 423, 'even the right PIN waits out the lock')
+        self.now += controller.LOCKOUT_SECONDS + 1
+        self.assertIsNone(guard.check('2468'))
+
+    def test_a_right_pin_resets_the_count(self):
+        guard = self.guard()
+        for _ in range(4):
+            guard.check('0000')
+        self.assertIsNone(guard.check('2468'))
+        self.assertEqual(guard.check('0000')[1], 'Wrong PIN. 4 tries left.')
+
+    def test_pin_shape(self):
+        self.assertTrue(controller.valid_pin('1234'))
+        self.assertTrue(controller.valid_pin('12345678'))
+        for pin in ('123', '123456789', '12 4', '١٢٣٤', None, 1234):
+            self.assertFalse(controller.valid_pin(pin), pin)
+
+
+class StackTests(unittest.TestCase):
+    def stack(self, ids):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        config = Path(folder.name) / 'compose.json'
+        config.write_text(json.dumps({'project': 'martinflix-test', 'compose': ['compose', '-p', 'martinflix-test'],
+                                      'env': {'MARTINFLIX_UID': '1000'}}))
+        self.calls = []
+        self.ids = ids
+
+        def runner(command, **kwargs):
+            args = command[1:]
+            self.calls.append(args)
+            if args[-3:] == ['config', '--format', 'json']:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({'services': SERVICES}), stderr='')
+            if args[0] == 'ps':
+                return SimpleNamespace(returncode=0, stdout='\n'.join(self.ids), stderr='')
+            if args[0] == 'inspect':
+                return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps([
+                    {'Id': self.ids[service], 'Config': {'Labels': {'com.docker.compose.service': service}, 'Image': 'x'},
+                     'State': {'Status': 'running', 'StartedAt': '2026-11-20T10:00:00Z'}} for service in self.ids]))
+            if args[-3:-1] == ['up', '-d'] or args[-2:] == ['--no-deps', 'gluetun']:
+                self.ids = {**self.ids, 'gluetun': self.ids['gluetun'] + '-new'} if self.image_changed else self.ids
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+        self.image_changed = False
+        return controller.Stack(config, runner=runner)
+
+    def test_followers_share_its_network_or_processes(self):
+        self.assertEqual(controller.dependents(SERVICES, 'gluetun'), ['transmission', 'prowlarr', 'transmission-auth'])
+        self.assertEqual(controller.dependents(SERVICES, 'transmission'), ['transmission-auth'])
+        self.assertEqual(controller.dependents(SERVICES, 'sonarr'), [])
+
+    def test_built_services_are_not_controllable(self):
+        stack = self.stack({'gluetun': 'g'})
+        self.assertNotIn('dashboard', stack.controllable())
+        self.assertNotIn('controller', stack.controllable())
+        self.assertIn('transmission-auth', stack.controllable())
+
+    def test_restarting_gluetun_restarts_the_apps_on_its_network_after_it(self):
+        stack = self.stack({'gluetun': 'g'})
+        result = stack.restart('gluetun')
+        restarts = [call[call.index('restart') + 1:] for call in self.calls if 'restart' in call]
+        self.assertEqual(restarts, [['gluetun'], ['transmission', 'prowlarr', 'transmission-auth']])
+        self.assertEqual(result, {'followed': ['transmission', 'prowlarr', 'transmission-auth']})
+
+    def test_an_update_without_a_new_image_changes_nothing_else(self):
+        stack = self.stack({'gluetun': 'g'})
+        self.assertEqual(stack.update('gluetun'), {'updated': False, 'followed': [], 'image': 'qmcgaw/gluetun:v3.41.3'})
+        self.assertFalse(any('--force-recreate' in call for call in self.calls))
+
+    def test_a_new_gluetun_container_brings_its_followers_with_it(self):
+        stack = self.stack({'gluetun': 'g'})
+        self.image_changed = True
+        result = stack.update('gluetun')
+        self.assertTrue(result['updated'])
+        recreate = next(call for call in self.calls if '--force-recreate' in call)
+        self.assertEqual(recreate[recreate.index('--force-recreate') + 1:], ['transmission', 'prowlarr', 'transmission-auth'])
+        self.assertIn(['compose', '-p', 'martinflix-test', 'pull', '--quiet', 'gluetun'], self.calls)
+
+
+if __name__ == '__main__':
+    unittest.main()

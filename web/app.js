@@ -148,7 +148,18 @@ function serviceCard(service, groupServices) {
     ${!service.web && app.note ? `<p class="service-note">${esc(app.note)}</p>` : ''}
     ${uses.length ? `<p class="service-note">Uses ${esc(relatedNames(uses))}</p>` : ''}
     ${unavailable.length ? `<p class="service-warning">${icon('alert', ' icon-small')}Check ${esc(relatedNames(unavailable))}</p>` : ''}
+    ${controlButtons(service)}
   </li>`;
+}
+
+/** Restart and Update, when the controller can act on this app. */
+function controlButtons(service) {
+  if (!service.control) return '';
+  const name = esc(service.name);
+  return `<div class="service-actions">
+    <button class="button button-quiet button-small" type="button" data-control="restart" data-service="${name}">${icon('refresh')}${serviceIsUp(service) ? 'Restart' : 'Start'}</button>
+    <button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>
+  </div>`;
 }
 
 /** The service that others share, such as Gluetun for the VPN apps, shown as the bar their section hangs from. */
@@ -158,6 +169,7 @@ function gatewayBar(service) {
     ${appIcon(service.name)}
     <p><strong>${esc(app.name)}</strong><span>${esc(app.role)}</span></p>
     ${statusChip(service)}
+    ${controlButtons(service)}
   </div>`;
 }
 
@@ -247,6 +259,98 @@ function renderBackups(backups) {
 
 const servicesPage = page === 'services';
 
+const controlServices = new Map();
+
+function controlText(action, service) {
+  const name = appInfo(service.name).name;
+  const followers = service.control.followers ?? [];
+  const after = followers.length ? relatedNames(followers) : '';
+  if (action === 'restart') {
+    const verb = serviceIsUp(service) ? 'Restart' : 'Start';
+    return {
+      title: `${verb} ${name}?`, verb,
+      detail: after ? `${after} restart${followers.length === 1 ? 's' : ''} after it, because ${followers.length === 1 ? 'it uses' : 'they use'} its connection. Downloads pause for a minute or so.`
+        : verb === 'Start' ? `Starts the ${name} container again.` : `${name} is unavailable for a few seconds while it restarts.`,
+      busy: `${verb === 'Start' ? 'Starting' : 'Restarting'}…`,
+    };
+  }
+  return {
+    title: `Update ${name}?`, verb: 'Update',
+    detail: `Downloads the newest ${name} image and, if there is one, recreates ${name} with it${after ? `, then ${after}` : ''}. Your settings stay. This can take a few minutes.`,
+    busy: 'Updating…',
+  };
+}
+
+function setupControls() {
+  const dialog = $('#control-dialog');
+  const form = $('#control-form');
+  const pin = $('#control-pin');
+  const error = $('#control-error');
+  const confirm = $('#control-confirm');
+  const cancel = $('#control-cancel');
+  const notice = $('#control-notice');
+  let request = null;
+  let busy = false;
+  const setBusy = (state, label) => {
+    busy = state;
+    pin.disabled = state;
+    cancel.disabled = state;
+    confirm.setAttribute('aria-disabled', String(state));
+    confirm.classList.toggle('is-busy', state);
+    confirm.innerHTML = `${icon(request.action === 'restart' ? 'refresh' : 'up')}${esc(label)}`;
+  };
+  $('#services-content').addEventListener('click', event => {
+    const button = event.target.closest('[data-control]');
+    const service = button && controlServices.get(button.dataset.service);
+    if (!service) return;
+    const text = controlText(button.dataset.control, service);
+    request = {action: button.dataset.control, service: service.name, text};
+    $('#control-title').textContent = text.title;
+    $('#control-detail').textContent = text.detail;
+    pin.value = '';
+    error.hidden = true;
+    setBusy(false, request.text.verb);
+    dialog.showModal();
+    pin.focus();
+  });
+  cancel.addEventListener('click', () => dialog.close());
+  // A running action cannot be stopped, so Escape waits for it like the Cancel button does.
+  dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (busy) return;
+    if (!/^[0-9]{4,8}$/.test(pin.value)) {
+      error.textContent = 'Enter your 4 to 8 digit PIN.';
+      error.hidden = false;
+      pin.focus();
+      return;
+    }
+    error.hidden = true;
+    setBusy(true, request.text.busy);
+    try {
+      const response = await fetch(`/api/control/${request.action}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({service: request.service, pin: pin.value}),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || 'The request failed. Try again.');
+      busy = false;
+      dialog.close();
+      notice.textContent = data.message;
+      notice.hidden = false;
+      status();
+      // Apps take a little while to report healthy again after a restart.
+      setTimeout(status, 15000);
+    } catch (failure) {
+      setBusy(false, request.text.verb);
+      error.textContent = failure.message;
+      error.hidden = false;
+      pin.value = '';
+      pin.focus();
+    }
+  });
+}
+
 async function get(url) {
   const response = await fetch(url, {cache: 'no-store'});
   if (response.status === 401 && response.headers.get('X-MartinFlix-Login') === 'required') window.location.assign('/login');
@@ -300,6 +404,8 @@ async function status() {
       $('#services-description').textContent = probes
         ? 'Live health checks for the services this installer set up.'
         : 'Container status from Docker, grouped by stack, with each app’s own health alerts.';
+      controlServices.clear();
+      for (const service of services) if (service.control) controlServices.set(service.name, service);
       $('#services-content').innerHTML = docker.available
         ? docker.groups.map(group => serviceGroup(group, probes ? 'reachable' : 'running', !probes || docker.downloadsBehindVpn)).join('')
         : `<p class="empty">${esc(docker.error)}</p>`;
@@ -730,6 +836,7 @@ async function refresh() {
   refreshing = false;
 }
 
+if (page === 'services') setupControls();
 $('#refresh').addEventListener('click', refresh);
 $('#refresh').hidden = page === 'add';
 if (page === 'add') {

@@ -82,6 +82,86 @@ def docker_status():
         return {'available': False, 'error': 'Docker is unavailable or access was denied.', 'groups': []}
 
 
+# The controller names services as Compose does; the dashboard's catalog uses the names from the reference host.
+CONTROL_NAMES = {'nordvpn': 'gluetun', 'transmission-daemon': 'transmission'}
+CATALOG_NAMES = {value: key for key, value in CONTROL_NAMES.items()}
+
+
+class ControllerError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def controller_request(path, payload=None, timeout=5):
+    """Call the controller container, the only part of the stack with Docker access. None when it isn't installed."""
+    url = os.environ.get('MARTINFLIX_CONTROLLER_URL', '')
+    token = read_secret('MARTINFLIX_CONTROLLER_TOKEN')
+    if not url or not token:
+        return None
+    body = json.dumps(payload).encode() if payload is not None else None
+    request = urllib.request.Request(url.rstrip('/') + path, data=body, method='POST' if body else 'GET', headers={
+        'Authorization': f'Bearer {token}', 'Content-Type': 'application/json', 'Accept': 'application/json'})
+    try:
+        with ARR_OPENER.open(request, timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            message = json.load(exc).get('error')
+        except (ValueError, AttributeError, OSError):
+            message = None
+        finally:
+            exc.close()
+        raise ControllerError(exc.code, message or 'The controller refused the request.') from None
+    except (OSError, ValueError) as exc:
+        raise ControllerError(502, 'The controller is not responding. Check that its container is running.') from exc
+
+
+def controller_status():
+    try:
+        result = controller_request('/status', timeout=4)
+    except ControllerError:
+        return None
+    return result.get('services') if isinstance(result, dict) else None
+
+
+def apply_control_status(services, control):
+    """Fill in what only Docker knows: uptime for apps that do not report it, stopped containers, and what can be
+    restarted from the dashboard along with the apps that follow it."""
+    for service in services:
+        info = control.get(CONTROL_NAMES.get(service['name'], service['name']))
+        if not info or info.get('state') == 'missing':
+            continue
+        followers = [CATALOG_NAMES.get(name, name) for name in info.get('dependents', [])]
+        service['control'] = {'followers': [name for name in followers if name in CATALOG['apps']]}
+        if info.get('state') != 'running':
+            service['state'] = 'exited' if info.get('state') in ('exited', 'dead') else info.get('state', 'unknown')
+            code = info.get('exitCode')
+            service['status'] = f'{info.get("state", "unknown").capitalize()}' + (f' (exit code {code})' if code else '')
+            service.pop('uptime', None)
+            continue
+        if not service.get('startedAt') and info.get('startedAt'):
+            service['startedAt'] = info['startedAt']
+        if info.get('health') == 'starting':
+            service['status'] = 'Up (health: starting)'
+        elif info.get('health') == 'unhealthy':
+            service['status'] = 'Up (unhealthy)'
+
+
+def control_message(result):
+    def label(name):
+        return CATALOG['apps'].get(CATALOG_NAMES.get(name, name), {}).get('name')
+    name = label(result.get('service')) or 'The app'
+    followed = [label(item) for item in result.get('followed', [])]
+    followed = [item for item in followed if item]
+    listed = ', '.join(followed[:-1]) + (' and ' if len(followed) > 1 else '') + (followed[-1] if followed else '')
+    if result.get('action') == 'restart':
+        return f'{name} restarted' + (f', then {listed}.' if followed else '.')
+    if not result.get('updated'):
+        return f'{name} already runs the newest image.'
+    return f'{name} updated' + (f', and {listed} restarted with it.' if followed else '.')
+
+
 def installer_downloads():
     """The download apps the installer enabled, whether they share Gluetun's network, and whether a VPN runs."""
     enabled = os.environ.get('MARTINFLIX_DOWNLOAD_APPS')
@@ -317,6 +397,10 @@ def service_status():
             for service, start in zip(timed, starts):
                 if started := start.result():
                     service['startedAt'] = started
+    control = controller_status()
+    if control is not None:
+        status['control'] = True
+        apply_control_status(all_services, control)
     return status
 
 
@@ -846,6 +930,9 @@ class Handler(BaseHTTPRequestHandler):
         if add := re.fullmatch(r'/api/add/(sonarr|radarr)', path):
             self.add_request(add.group(1))
             return
+        if control := re.fullmatch(r'/api/control/(restart|update)', path):
+            self.control_request(control.group(1))
+            return
         if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password'):
             self.send_error(404)
             return
@@ -871,6 +958,42 @@ class Handler(BaseHTTPRequestHandler):
             self.redirect('/setup-password' if self.server.password_setup_required else '/')
             return
         self.change_password(fields, changing)
+
+    def control_request(self, action):
+        if not self.same_origin():
+            self.send_json({'error': 'Open the dashboard and try again.'}, 403)
+            return
+        if not self.authorized():
+            self.require_login()
+            return
+        if self.server.password_setup_required:
+            self.send_json({'error': 'Set your dashboard password first.'}, 403)
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 1024 or self.headers.get_content_type() != 'application/json':
+                raise ValueError
+            request = json.loads(self.rfile.read(length))
+            name, pin = request['service'], request['pin']
+        except (OSError, ValueError, TypeError, KeyError):
+            self.send_json({'error': 'Invalid request.'}, 400)
+            return
+        if not isinstance(name, str) or name not in CATALOG['apps']:
+            self.send_json({'error': 'Unknown app.'}, 400)
+            return
+        if not isinstance(pin, str) or not re.fullmatch(r'[0-9]{4,8}', pin):
+            self.send_json({'error': 'Enter your 4 to 8 digit PIN.'}, 400)
+            return
+        try:
+            # An update downloads an image and recreates containers, which can take several minutes.
+            result = controller_request(f'/{action}', {'service': CONTROL_NAMES.get(name, name), 'pin': pin}, timeout=900)
+        except ControllerError as exc:
+            self.send_json({'error': str(exc)}, exc.status if exc.status in (400, 403, 404, 409, 423, 503) else 502)
+            return
+        if result is None:
+            self.send_json({'error': 'Restarts and updates need the controller. Rerun setup to add it.'}, 503)
+            return
+        self.send_json({'ok': True, 'message': control_message(result)})
 
     def add_request(self, kind):
         if not self.same_origin():

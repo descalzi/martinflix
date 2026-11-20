@@ -325,7 +325,7 @@
   .group-title span { color: var(--fg-muted); font-size: var(--text-sm); }
   /* Every grid in a group uses the same column tracks, so cards line up from one section to the next. */
   .service-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3) var(--space-4); }
-  .service-card { display: grid; gap: var(--space-2); align-content: start; padding: var(--space-4); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 0; }
+  .service-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 0; }
   .service-card.tone-crit { border-color: var(--crit); }
   .service-card.tone-warn { border-color: var(--warn); }
   .service-identity { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
@@ -339,18 +339,37 @@
   .service-warning { display: flex; align-items: center; gap: 6px; color: var(--crit); font-size: var(--text-sm); font-weight: 600; }
   .app-health { display: grid; gap: 6px; padding-top: var(--space-2); border-top: 1px solid var(--border); font-size: var(--text-sm); overflow-wrap: anywhere; }
   .app-health li { display: grid; justify-items: start; gap: var(--space-1); }
+  .service-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: auto; padding-top: var(--space-2); }
+  .gateway .service-actions { margin: 0; padding: 0; }
+  .button-small { min-height: 32px; padding: 0 var(--space-3); font-size: var(--text-sm); }
+  .button-small .icon { width: 15px; height: 15px; }
+  .control-notice { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: var(--ok-bg); color: var(--ok); font-weight: 500; }
+  .control-dialog { width: min(420px, calc(100vw - 2 * var(--space-4))); padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--fg); box-shadow: var(--shadow); }
+  .control-dialog::backdrop { background: rgb(10 20 16 / .55); }
+  .control-dialog form { display: grid; gap: var(--space-2); }
+  .control-dialog h2 { font-size: var(--text-lg); }
+  .control-detail { margin-bottom: var(--space-2); color: var(--fg-muted); font-size: var(--text-sm); }
+  .control-dialog label { font-weight: 600; font-size: var(--text-sm); }
+  .control-dialog input { width: 12ch; min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--text-lg); letter-spacing: .3em; }
+  .control-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-3); }
+  .control-dialog .button.is-busy { cursor: progress; }
+  .control-dialog .button.is-busy .icon { animation: spin 900ms linear infinite; }
   .service-section { display: grid; gap: var(--space-3); }
   .service-section + .service-section { margin-top: var(--space-5); }
   .section-head h4 { font-size: var(--text-md); }
   .section-head p { margin-top: 2px; color: var(--fg-muted); font-size: var(--text-sm); }
   /* The shared gateway spans the section, above the apps that use it. */
-  .gateway { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--tint); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .gateway { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--tint); border: 1px solid var(--border); border-radius: var(--radius-sm); }
   .gateway.tone-crit { border-color: var(--crit); }
   .gateway.tone-warn { border-color: var(--warn); }
   .gateway p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; }
   .gateway span { color: var(--fg-muted); font-size: var(--text-sm); }
   .gateway .app-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--bg); }
   .gateway .app-icon img { width: 22px; height: 22px; }
+  @container (max-width: 519px) {
+    .gateway { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .gateway .service-actions { grid-column: 1 / -1; }
+  }
   @container (min-width: 520px) {
     .service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
