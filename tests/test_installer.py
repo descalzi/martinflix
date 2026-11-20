@@ -81,6 +81,9 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(self.plan({'discover_region': 'IE'})['environment']['MARTINFLIX_DISCOVER_REGION'], 'IE')
         with self.assertRaisesRegex(ValueError, 'two-letter'):
             self.plan(discover_region='United Kingdom')
+        self.assertEqual(self.plan()['environment']['MARTINFLIX_DISCOVER'], 'on')
+        self.assertEqual(self.plan(discover='off')['options']['discover'], 'off')
+        self.assertEqual(self.plan({'discover': 'off'})['environment']['MARTINFLIX_DISCOVER'], 'off', 'the choice is kept')
 
     def test_the_tmdb_key_is_stored_privately_and_blank_removes_it(self):
         path = self.state / 'tmdb-key'

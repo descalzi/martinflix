@@ -67,11 +67,13 @@ test('shell quoting survives single quotes', () => {
   assert.strictEqual(wizard.shellQuote("/mnt/martin's media"), "'/mnt/martin'\"'\"'s media'");
 });
 
-test('Discover asks setup for a TMDB key and names a region only when it is not the UK', () => {
+test('Discover is on by default; switching it off or using your own key become flags', () => {
   assert.deepStrictEqual(wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, discover: true, region: 'GB'}),
-    ['--media-path=/mnt/media', '--set-tmdb-key']);
+    ['--media-path=/mnt/media']);
+  assert.ok(wizard.installArguments({...defaults, discover: true, ownKey: true}).includes('--set-tmdb-key'));
   assert.ok(wizard.installArguments({...defaults, discover: true, region: 'IE'}).includes('--discover-region=IE'));
-  assert.ok(!wizard.installArguments({...defaults, discover: false, region: 'IE'}).some(arg => arg.startsWith('--discover')));
-  const update = wizard.installArguments({mode: 'update', changes: {route: 'keep', discover: true, region: 'US'}});
-  assert.deepStrictEqual(update, ['--update', '--set-tmdb-key', '--discover-region=US']);
+  const off = wizard.installArguments({...defaults, discover: false, ownKey: true, region: 'IE'});
+  assert.deepStrictEqual(off.filter(arg => arg.includes('discover') || arg.includes('tmdb')), ['--discover=off']);
+  const update = wizard.installArguments({mode: 'update', changes: {route: 'keep', page: 'on', discover: true, region: 'US'}});
+  assert.deepStrictEqual(update, ['--update', '--discover=on', '--set-tmdb-key', '--discover-region=US']);
 });

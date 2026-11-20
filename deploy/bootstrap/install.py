@@ -194,13 +194,13 @@ def prepare_control_pin(path, change=False):
 
 
 TMDB_KEY_HELP = """
-Discover shows trending and upcoming titles from TMDB. It needs a free TMDB API key: sign in at
+Discover uses MartinFlix's own TMDB API key unless you give it yours. To get one, sign in at
 https://www.themoviedb.org, open Settings → API, request a Developer key, and copy the "API Key" (or the longer
-"API Read Access Token"). Leave it blank to turn Discover off."""
+"API Read Access Token"). Leave it blank to go back to MartinFlix's key."""
 
 
 def prepare_tmdb_key(path):
-    """Ask for the TMDB key. A blank answer removes it, which turns Discover off."""
+    """Ask for the admin's own TMDB key. A blank answer removes it, so Discover goes back to MartinFlix's key."""
     if not sys.stdin.isatty():
         raise ValueError('Run setup in a terminal to enter the TMDB API key.')
     print(TMDB_KEY_HELP, flush=True)
@@ -211,7 +211,7 @@ def prepare_tmdb_key(path):
         write_secret(path, key)
     else:
         path.unlink(missing_ok=True)
-    print('Discover is on.' if key else 'Discover is off.', flush=True)
+    print('Discover will use your TMDB key.' if key else 'Discover will use MartinFlix’s TMDB key.', flush=True)
 
 
 def docker_socket():
@@ -635,6 +635,8 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         raise ValueError('Use a two-letter country code for --discover-region, such as GB or US.')
     options['discover_region'] = region
     environment['MARTINFLIX_DISCOVER_REGION'] = region
+    options['discover'] = args.discover or previous.get('discover') or 'on'
+    environment['MARTINFLIX_DISCOVER'] = options['discover']
     control_socket = docker_socket()
     if control_socket:
         compose += ['--profile', 'control']
@@ -762,6 +764,8 @@ def keep_flags(options):
         flags += ['--media-path', options['media_path']]
     if options.get('discover_region', 'GB') != 'GB':
         flags += ['--discover-region', options['discover_region']]
+    if options.get('discover') == 'off':
+        flags += ['--discover', 'off']
     if options.get('vpn'):
         flags.append('--enable-vpn')
         if options.get('vpn_city'):
@@ -1069,8 +1073,10 @@ def build_parser():
     parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
                         help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--discover', choices=['on', 'off'],
+                        help='Show or hide the dashboard’s Discover page of trending and upcoming titles. On by default.')
     parser.add_argument('--set-tmdb-key', action='store_true',
-                        help='Enter, replace or remove the TMDB API key that turns on the dashboard’s Discover page.')
+                        help='Use your own TMDB API key for Discover instead of MartinFlix’s, or go back to it.')
     parser.add_argument('--discover-region',
                         help='Two-letter country for Discover’s cinema and streaming lists. Defaults to GB.')
     parser.add_argument('--change-pin', action='store_true',

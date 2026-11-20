@@ -107,6 +107,7 @@ function changeArguments(change) {
   if (change.flaresolverr) args.push('--enable-flaresolverr');
   if (change.bazarr) args.push('--enable-bazarr');
   if (change.route && change.route !== 'keep') args.push('--download-network=' + change.route);
+  if (change.page && change.page !== 'keep') args.push('--discover=' + change.page);
   if (change.discover) args.push('--set-tmdb-key');
   if (change.region && change.region !== 'keep') args.push('--discover-region=' + change.region);
   return args;
@@ -139,8 +140,9 @@ function installArguments(options) {
     const raw = options.ports[name] ?? '';
     if (raw !== '' && Number(raw) !== fallback) args.push('--' + name + '-port=' + Number(raw));
   }
-  if (options.discover) args.push('--set-tmdb-key');
-  if (options.discover && options.region && options.region !== 'GB') args.push('--discover-region=' + options.region);
+  if (options.discover === false) args.push('--discover=off');
+  if (options.discover !== false && options.ownKey) args.push('--set-tmdb-key');
+  if (options.discover !== false && options.region && options.region !== 'GB') args.push('--discover-region=' + options.region);
   if (mode === 'reset') args.push('--reset');
   return args;
 }
@@ -212,6 +214,7 @@ if (typeof document !== 'undefined') {
       bazarr: byId('bazarr').checked && Boolean(byId('media').value.trim()),
       behindVpn: byId('vpn').checked && preferVpnRoute,
       discover: byId('discover').checked,
+      ownKey: byId('tmdb-own').checked,
       region: byId('discover-region').value,
       state: (update ? byId('state-update') : byId('state')).value.trim(),
       ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
@@ -226,6 +229,7 @@ if (typeof document !== 'undefined') {
         flaresolverr: byId('u-flaresolverr').checked,
         bazarr: byId('u-bazarr').checked,
         discover: byId('u-discover').checked,
+        page: byId('u-discover-page').value,
         region: byId('u-discover-region').value,
         media: byId('u-media').value.trim(),
       },
@@ -333,7 +337,8 @@ if (typeof document !== 'undefined') {
       if (added.length) summary.push(['Add apps', added.join(', ')]);
       if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
       if (change.media) summary.push(['Media directory', change.media]);
-      if (change.discover) summary.push(['Discover', 'Set the TMDB API key']);
+      if (change.page !== 'keep') summary.push(['Discover page', change.page === 'on' ? 'Show it' : 'Hide it']);
+      if (change.discover) summary.push(['TMDB key', 'Use my own']);
       if (change.region !== 'keep') summary.push(['Discover region', byId('u-discover-region').selectedOptions[0].textContent]);
       if (summary.length === 2) summary.push(['Changes', 'None · reapply the latest version with your current settings']);
       else summary.push(['Everything else', 'Kept as it is']);
@@ -346,7 +351,7 @@ if (typeof document !== 'undefined') {
         options.bazarr && 'Bazarr'].filter(Boolean);
       summary.push(['Download apps', apps.join(', ') || 'None yet']);
       if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
-      summary.push(['Discover', options.discover ? `TMDB · ${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')}` : 'Off']);
+      summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
       summary.push(['State directory', options.state || 'Default location']);
       for (const [name, label, fallback] of enabledPorts(options)) {
         const port = options.ports[name];

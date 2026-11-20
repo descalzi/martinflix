@@ -386,6 +386,18 @@ class DiscoverTests(unittest.TestCase):
     def setUp(self):
         server.TMDB_CACHE.clear()
 
+    def test_martinflix_key_is_the_default_until_replaced_or_turned_off(self):
+        with patch.dict('os.environ', {}, clear=True):
+            self.assertEqual(server.tmdb_key(), server.DEFAULT_TMDB_KEY)
+        secret = tempfile.NamedTemporaryFile('w', delete=False)
+        secret.write('f' * 32)
+        secret.close()
+        self.addCleanup(os.unlink, secret.name)
+        with patch.dict('os.environ', {'MARTINFLIX_TMDB_KEY_FILE': secret.name}, clear=True):
+            self.assertEqual(server.tmdb_key(), 'f' * 32)
+        with patch.dict('os.environ', {'MARTINFLIX_TMDB_KEY_FILE': secret.name, 'MARTINFLIX_DISCOVER': 'off'}, clear=True):
+            self.assertEqual(server.tmdb_key(), '')
+
     def test_tmdb_entries_keep_only_safe_fields(self):
         film = server.tmdb_item({'id': 42, 'title': ' Dune ', 'release_date': '2026-12-18', 'poster_path': '/abc.jpg',
                                  'overview': 'Sand.'}, 'radarr')

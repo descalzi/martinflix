@@ -36,7 +36,7 @@ The installer finishes with an **Open your dashboard** section. Sign in as `admi
 
 The **Discover** page shows trending films and series, what's coming to cinemas, and what's new on streaming in your region, whether or not it's in your library. Titles you already have say **In library**; **Add** opens the Add page on that exact title with its options ready.
 
-The lists come from [TMDB](https://www.themoviedb.org/), which needs a free API key: sign in at TMDB, open **Settings → API**, request a **Developer** key, and copy the **API Key** (the longer **API Read Access Token** works too). Run setup with `--set-tmdb-key` and paste it when asked; it's stored privately on the VM, never in the repository. Rerun with `--set-tmdb-key` to replace it, or leave the answer blank to turn Discover off. Cinema and streaming lists use the UK by default; choose another country with `--discover-region`, for example `--discover-region US`. The lists are cached for an hour.
+The lists come from [TMDB](https://www.themoviedb.org/), using MartinFlix's own TMDB API key, so Discover works without any setup. To use your own key instead, get a free one in your TMDB account under **Settings → API** (the **API Key**, or the longer **API Read Access Token**), then run setup with `--set-tmdb-key` and paste it when asked; it's stored privately on the VM. Leave the answer blank to go back to MartinFlix's key. To hide the page, use `--discover off`, and `--discover on` to bring it back. Cinema and streaming lists use the UK by default; choose another country with `--discover-region`, for example `--discover-region US`. The lists are cached for an hour.
 
 ### Restart and update apps from the dashboard
 

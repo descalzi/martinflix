@@ -774,6 +774,17 @@ REGION_NAMES = {'GB': 'UK', 'US': 'US', 'IE': 'Irish', 'CA': 'Canadian', 'AU': '
                 'BR': 'Brazilian', 'SE': 'Swedish', 'NO': 'Norwegian', 'DK': 'Danish'}
 
 
+# MartinFlix's own TMDB API key, registered for this project, so Discover works without setup. Anyone can use
+# their own key instead (setup's --set-tmdb-key), or turn Discover off (--discover off).
+DEFAULT_TMDB_KEY = 'e0d66f10fd16fb72d47c55d8dabc1df1'
+
+
+def tmdb_key():
+    if os.environ.get('MARTINFLIX_DISCOVER', 'on') == 'off':
+        return ''
+    return read_secret('MARTINFLIX_TMDB_KEY') or DEFAULT_TMDB_KEY
+
+
 def discover_region():
     region = os.environ.get('MARTINFLIX_DISCOVER_REGION', 'GB').strip().upper()
     return region if re.fullmatch(r'[A-Z]{2}', region) else 'GB'
@@ -781,9 +792,9 @@ def discover_region():
 
 def tmdb_get(path, **params):
     """One TMDB API call. Accepts a v3 API key or a v4 read access token, whichever setup was given."""
-    key = read_secret('MARTINFLIX_TMDB_KEY')
+    key = tmdb_key()
     if not key:
-        raise AddError('Discover needs a TMDB API key. Rerun setup with --set-tmdb-key.')
+        raise AddError('Discover is turned off. Rerun setup with --discover on.')
     headers = {'Accept': 'application/json'}
     if key.startswith('eyJ'):
         headers['Authorization'] = f'Bearer {key}'
@@ -1025,12 +1036,12 @@ class Handler(BaseHTTPRequestHandler):
             catalog = {key: CATALOG.get(key, {}) for key in ('apps', 'branches', 'uses', 'groupRest')}
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
                     'canChangePassword': form_login, 'canChangePin': form_login and controller_configured(),
-                    'discover': bool(read_secret('MARTINFLIX_TMDB_KEY')),
+                    'discover': bool(tmdb_key()),
                     'catalog': catalog}
             self.send_json(data)
         elif path == '/api/discover':
-            if not read_secret('MARTINFLIX_TMDB_KEY'):
-                self.send_json({'error': 'Discover needs a TMDB API key. Rerun setup with --set-tmdb-key.'}, 404)
+            if not tmdb_key():
+                self.send_json({'error': 'Discover is turned off. Rerun setup with --discover on.'}, 404)
             else:
                 self.send_json(discover_rows())
         elif path == '/api/activity':
