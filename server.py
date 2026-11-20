@@ -335,10 +335,15 @@ def sync_app_passwords(password):
         with ARR_OPENER.open(request, timeout=10):
             pass
     if 'transmission' in apps:
-        # Transmission's sidecar watches this bind-mounted file, so it must be rewritten in place.
+        # Transmission reads this bind-mounted file when it starts, so it is rewritten in place to stay mounted.
         with open(os.environ['MARTINFLIX_TRANSMISSION_PASSWORD_FILE'], 'r+', encoding='utf-8') as secret:
             secret.write(password)
             secret.truncate()
+        # The controller restarts Transmission to apply it. Hosts without one run a helper that applies it instead.
+        try:
+            controller_request('/transmission-password', {}, timeout=300)
+        except ControllerError as exc:
+            raise ValueError(f'Transmission: {exc}') from None
     for connection, endpoint, payload in clients:
         with arr_open(connection, endpoint, payload=payload, method='PUT'):
             pass

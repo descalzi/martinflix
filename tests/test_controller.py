@@ -146,24 +146,27 @@ class TransmissionPasswordTests(unittest.TestCase):
         stack = SimpleNamespace(config=lambda: {'transmissionPasswordFile': str(self.password)},
                                 controllable=lambda: {'transmission': {}},
                                 restart=lambda name: self.restarts.append(name))
-        self.watch = controller.TransmissionPasswordWatch(stack, controller.threading.Lock(), self.folder / 'applied')
+        self.transmission = controller.TransmissionPassword(stack, controller.threading.Lock(), self.folder / 'applied')
 
-    def test_a_new_password_restarts_transmission_once(self):
-        self.assertFalse(self.watch.check(), 'the first look only records the password already in use')
-        self.assertFalse(self.watch.check())
+    def test_each_new_password_restarts_transmission_once(self):
+        self.assertEqual(self.transmission.apply(), {'restarted': True})
+        self.assertEqual(self.transmission.apply(), {'restarted': False}, 'submitting the same password again is a no-op')
         self.password.write_text('second')
-        self.assertTrue(self.watch.check())
-        self.assertFalse(self.watch.check())
-        self.assertEqual(self.restarts, ['transmission'])
+        self.assertEqual(self.transmission.apply(), {'restarted': True})
+        self.assertEqual(self.restarts, ['transmission', 'transmission'])
 
-    def test_a_failed_restart_is_tried_again(self):
-        self.watch.check()
-        self.password.write_text('second')
-        self.watch.stack.restart = lambda name: (_ for _ in ()).throw(RuntimeError('not running'))
+    def test_a_failed_restart_is_tried_again_next_time(self):
+        self.transmission.stack.restart = lambda name: (_ for _ in ()).throw(RuntimeError('not running'))
         with self.assertRaises(RuntimeError):
-            self.watch.check()
-        self.watch.stack.restart = lambda name: self.restarts.append(name)
-        self.assertTrue(self.watch.check())
+            self.transmission.apply()
+        self.transmission.stack.restart = lambda name: self.restarts.append(name)
+        self.assertEqual(self.transmission.apply(), {'restarted': True})
+
+    def test_stacks_without_transmission_say_so(self):
+        self.transmission.stack.controllable = lambda: {'sonarr': {}}
+        with self.assertRaises(KeyError):
+            self.transmission.apply()
+
 
 class BuildContextTests(unittest.TestCase):
     def test_every_copied_file_is_let_into_the_build_context(self):

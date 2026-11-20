@@ -336,6 +336,25 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn('Wrong PIN. 4 tries left.', page)
 
+    def test_a_password_change_asks_the_controller_to_apply_it_to_transmission(self):
+        secret = tempfile.NamedTemporaryFile('w', delete=False)
+        secret.write('old password')
+        secret.close()
+        self.addCleanup(os.unlink, secret.name)
+        def listing(*args, **kwargs):
+            response = MagicMock()
+            response.__enter__.return_value = io.BytesIO(b'[]')
+            return response
+        with patch.dict('os.environ', {'MARTINFLIX_TRANSMISSION_PASSWORD_FILE': secret.name}), \
+                patch.object(server, 'synced_apps', return_value=['transmission']), \
+                patch.object(server, 'installer_downloads', return_value=(set(), False, False)), \
+                patch.object(server, 'arr_connection', return_value=('http://sonarr:8989', 'key')), \
+                patch.object(server, 'arr_open', side_effect=listing), \
+                patch.object(server, 'controller_request', return_value={'ok': True, 'restarted': True}) as controller:
+            server.sync_app_passwords('a brand new password')
+        self.assertEqual(Path(secret.name).read_text(), 'a brand new password')
+        controller.assert_called_once_with('/transmission-password', {}, timeout=300)
+
     def test_martinflix_containers_get_their_own_section(self):
         helpers = server.helper_services({
             'dashboard': {'state': 'running', 'startedAt': '2026-11-20T08:00:00Z', 'dependents': [], 'canUpdate': False},

@@ -217,49 +217,37 @@ class Stack:
         return {'updated': True, 'followed': follow, 'image': services[name].get('image')}
 
 
-class TransmissionPasswordWatch:
-    """Restart Transmission when the dashboard writes a new shared password.
+class TransmissionPassword:
+    """Restart Transmission so it picks up a new shared password, when the dashboard asks after changing it.
 
     The LinuxServer image sets Transmission's login from USER and PASS each time the container starts, and PASS is
-    read from this file, so a restart is all it takes. The last applied version is remembered across restarts.
+    read from the password file the dashboard has just rewritten. The controller only ever restarts Transmission,
+    and only when that file differs from the version it last applied, so this request needs no PIN.
     """
 
-    def __init__(self, stack, busy, marker, interval=5):
+    def __init__(self, stack, busy, marker):
         self.stack = stack
         self.busy = busy
         self.marker = Path(marker)
-        self.interval = interval
 
-    def check(self):
-        """Returns True when it restarted Transmission."""
+    def apply(self):
         source = self.stack.config().get('transmissionPasswordFile')
-        if not source:
-            return False
+        if not source or 'transmission' not in self.stack.controllable():
+            raise KeyError('Transmission is not part of this stack.')
+        digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
         try:
-            digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
-        except OSError:
-            return False
-        try:
-            applied = self.marker.read_text().strip()
+            if self.marker.read_text().strip() == digest:
+                return {'restarted': False}
         except FileNotFoundError:
-            # First run: the running Transmission already has this password, from setup or the old helper.
-            self.marker.write_text(digest)
-            return False
-        if digest == applied or 'transmission' not in self.stack.controllable():
-            return False
-        with self.busy:
+            pass
+        if not self.busy.acquire(timeout=300):
+            raise RuntimeError('Another restart or update is still running. Submit the same password again shortly.')
+        try:
             self.stack.restart('transmission')
+        finally:
+            self.busy.release()
         self.marker.write_text(digest)
-        print('Transmission restarted with the new dashboard password.', flush=True)
-        return True
-
-    def run(self):
-        while True:
-            try:
-                self.check()
-            except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-                print(f'Could not apply the new Transmission password yet: {exc}', flush=True)
-            time.sleep(self.interval)
+        return {'restarted': True}
 
 
 def tail(result, limit=600):
@@ -304,6 +292,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             self.send_json({'error': 'Not authorized.'}, 401)
+            return
+        if self.path == '/transmission-password':
+            try:
+                self.send_json({'ok': True, **self.server.transmission.apply()})
+            except KeyError as exc:
+                self.send_json({'error': exc.args[0]}, 404)
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                self.send_json({'error': str(exc) or 'Transmission could not be restarted.'}, 502)
             return
         action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin'}.get(self.path)
         if action is None:
@@ -351,8 +347,7 @@ def serve():
     server.pins = PinGuard(os.environ['MARTINFLIX_CONTROL_PIN_FILE'])
     server.busy = threading.Lock()
     marker = Path(os.environ['MARTINFLIX_CONTROL_PIN_FILE']).with_name('transmission-password-applied')
-    watch = TransmissionPasswordWatch(server.stack, server.busy, marker)
-    threading.Thread(target=watch.run, daemon=True).start()
+    server.transmission = TransmissionPassword(server.stack, server.busy, marker)
     print('MartinFlix controller listening on port %d' % server.server_address[1], flush=True)
     server.serve_forever()
 

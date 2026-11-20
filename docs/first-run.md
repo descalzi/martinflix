@@ -45,7 +45,7 @@ The controller also reports each container's uptime, so every card shows how lon
 
 Existing logins are preserved when you rerun the installer. Installations made before every app shared the dashboard password switch Transmission to the `admin` username and keep its old password; use **Change password** once to bring every app onto your password.
 
-Transmission has no API for changing its own password, but it takes the shared password from its private file each time it starts. When you change your password, the controller restarts Transmission within a few seconds; downloads pause briefly and resume on their own. On hosts without the controller (Docker reached over TCP or SSH), a small `transmission-auth` helper applies the change instead, without a restart.
+Transmission has no API for changing its own password, but it takes the shared password from its private file each time it starts. When you change your password, the dashboard asks the controller to restart Transmission as part of the change, so it takes the new password straight away; downloads pause briefly and resume on their own. On hosts without the controller (Docker reached over TCP or SSH), a small `transmission-auth` helper applies the change instead, without a restart.
 
 The dashboard, Sonarr, Radarr, Prowlarr, Transmission, and Bazarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
 
