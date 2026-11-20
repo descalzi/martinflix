@@ -85,6 +85,34 @@ class InstallerPlanTests(unittest.TestCase):
                 ('gluetun', '127.0.0.1', 9696, 9696)])
 
 
+class ResetSummaryTests(unittest.TestCase):
+    # The test host's saved options, plus the address and ports recovered from its running containers.
+    current = {'media_path': '/mnt/martinflix/blah', 'downloads': True,
+               'download_apps': ['transmission', 'prowlarr', 'flaresolverr'], 'vpn': False, 'vpn_country': '',
+               'vpn_city': 'Prague', 'download_network': 'direct', 'dashboard_bind': '192.168.4.166',
+               'ports': {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, 'transmission': 9091, 'prowlarr': 9696}}
+
+    def test_keep_flags_recreate_the_current_installation(self):
+        self.assertEqual(install.keep_flags(self.current), [
+            '--dashboard-bind', '192.168.4.166', '--media-path', '/mnt/martinflix/blah',
+            '--download-client', 'transmission', '--enable-prowlarr', '--enable-flaresolverr',
+            '--download-network', 'direct'])
+
+    def test_a_bare_reset_lists_what_it_will_drop(self):
+        plan = {'options': {'dashboard_bind': '127.0.0.1', 'media_path': None, 'download_apps': [], 'vpn': False,
+                            'ports': {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878}},
+                'bind': '127.0.0.1', 'media': None, 'vpn': False, 'downloads': [], 'ports': {}}
+        lines = []
+        with patch('builtins.print', side_effect=lambda *a, **k: lines.append(' '.join(map(str, a)))):
+            install.describe_plan(plan, Path('/state'), arguments(reset=True), self.current)
+        output = '\n'.join(lines)
+        self.assertRegex(output, r'Address +192\.168\.4\.166 → 127\.0\.0\.1')
+        self.assertRegex(output, r'Media directory +/mnt/martinflix/blah → Not set')
+        self.assertRegex(output, r'Download apps +transmission, prowlarr, flaresolverr → None')
+        self.assertNotIn('Transmission port', output)
+        self.assertIn('--dashboard-bind 192.168.4.166', output)
+
+
 class InstallerFlowTests(unittest.TestCase):
     """The installer must validate everything before it stops or archives anything."""
 

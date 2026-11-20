@@ -443,18 +443,19 @@ def install(args, overlay_file):
                          f'Check --state-dir, or run setup without {flag} for a new installation.')
     saved = saved_options(state)
     old_project = compose_project(state, saved) if existing else None
-    # A reset discards the saved options, so validate the new installation as if it were fresh.
-    previous = {} if args.reset else saved
-    project = compose_project(state, previous, fresh=args.reset)
+    project = compose_project(state, {} if args.reset else saved, fresh=args.reset)
     published = published_ports({project, old_project} - {None})
-    if not args.reset and existing and 'ports' not in previous:
+    current = dict(saved)
+    if existing and 'ports' not in current:
         running_bind, running_ports = running_settings(published)
-        previous = dict(previous, ports=running_ports)
+        current['ports'] = running_ports
         if running_bind:
-            previous['dashboard_bind'] = running_bind
-        elif args.dashboard_bind is None:
+            current['dashboard_bind'] = running_bind
+        elif args.dashboard_bind is None and not args.reset:
             print('This installation was created before setup remembered its address, and its dashboard is not running. '
                   'If you open MartinFlix from another device, add --dashboard-bind with the VM’s LAN address.', flush=True)
+    # A reset discards the saved options, so validate the new installation as if it were fresh.
+    previous = {} if args.reset else current
     plan = plan_installation(args, state, previous, project, overlay_file, fresh_arr=args.reset)
     check_ports(plan['bindings'], published)
     try:
@@ -462,8 +463,8 @@ def install(args, overlay_file):
             print('Docker storage has less than 2 GiB free. Free up space if the image download or build fails.', flush=True)
     except OSError:
         pass
+    describe_plan(plan, state, args, current if args.reset else None)
     if args.check:
-        describe_plan(plan, state, args)
         if args.reset:
             print('Preflight passed. Run the same command without --check. Setup will ask you to type RESET '
                   'before it stops and archives the current installation.')
@@ -473,11 +474,69 @@ def install(args, overlay_file):
     if args.reset:
         reset_installation(state, old_project)
         previous = {}
-    run_installation(plan, state, previous)
+    run_installation(plan, state, previous, mode='reset' if args.reset else 'update' if existing else 'install')
 
 
-def describe_plan(plan, state, args):
+def current_settings(options):
+    """Describe a saved installation the same way as a plan, for comparison."""
+    vpn = bool(options.get('vpn'))
+    apps = list(options.get('download_apps', DOWNLOAD_APPS if options.get('downloads') else ()))
+    return {
+        'Address': options.get('dashboard_bind') or '127.0.0.1',
+        'Media directory': options.get('media_path') or 'Not set',
+        'VPN': f'NordVPN · {options.get("vpn_city") or options.get("vpn_country") or "Automatic"}' if vpn else 'Not installed',
+        'Download apps': ', '.join(apps) or 'None',
+        'Download route': (options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')) if apps else 'None',
+        **{f'{name.capitalize()} port': str(port) for name, port in (options.get('ports') or {}).items()},
+    }
+
+
+def keep_flags(options):
+    """The options that recreate a saved installation's settings after a reset."""
+    flags = []
+    if options.get('dashboard_bind') and options['dashboard_bind'] != '127.0.0.1':
+        flags += ['--dashboard-bind', options['dashboard_bind']]
+    if options.get('media_path'):
+        flags += ['--media-path', options['media_path']]
+    if options.get('vpn'):
+        flags.append('--enable-vpn')
+        if options.get('vpn_city'):
+            flags += ['--vpn-city', options['vpn_city']]
+        elif options.get('vpn_country'):
+            flags += ['--vpn-country', options['vpn_country']]
+    apps = options.get('download_apps', DOWNLOAD_APPS if options.get('downloads') else ())
+    if 'transmission' in apps:
+        flags += ['--download-client', 'transmission']
+    if 'prowlarr' in apps:
+        flags.append('--enable-prowlarr')
+    if 'flaresolverr' in apps:
+        flags.append('--enable-flaresolverr')
+    if apps:
+        flags += ['--download-network', options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')]
+    for name, port in (options.get('ports') or {}).items():
+        if port != DEFAULT_PORTS.get(name):
+            flags += [f'--{name}-port', str(port)]
+    return flags
+
+
+def describe_plan(plan, state, args, current=None):
     mode = 'Start from scratch' if args.reset else 'Update' if args.update else 'Install'
+    if current is not None:
+        before = current_settings(current)
+        after = current_settings(plan['options'])
+        # Ports and routes of apps that are going away are covered by the Download apps line.
+        changes = [(label, before.get(label, 'Not set'), after.get(label, 'Not set'))
+                   for label in dict.fromkeys([*before, *after]) if before.get(label) != after.get(label)
+                   and label in after and not (label == 'Download route' and after[label] == 'None')]
+        if changes:
+            width = max(len(label) for label, _, _ in changes) + 2
+            print('\nChanges from the current installation')
+            for label, old, new in changes:
+                print(f'{label:<{width}}{old} → {new}')
+            flags = keep_flags(current)
+            if flags:
+                print('To keep the current settings instead, rerun with:')
+                print('  ' + shlex.join(flags))
     print(f'\n{mode} plan')
     print(f'State directory   {state}')
     print(f'Address           {plan["bind"]}')
@@ -493,7 +552,7 @@ def describe_plan(plan, state, args):
     print()
 
 
-def run_installation(plan, state, previous):
+def run_installation(plan, state, previous, mode='install'):
     import fcntl
 
     media, enabled, downloads = plan['media'], plan['enabled'], plan['downloads']
@@ -558,7 +617,10 @@ def run_installation(plan, state, previous):
         if bootstrapping_arr:
             arr_address = '127.0.0.1'
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
-        compose_step('2. Starting Sonarr and Radarr. The first download may take a few minutes…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
+        images = [*APPS, *(['gluetun'] if vpn else []), *downloads]
+        compose_step('2. Downloading the latest app images. The first download may take a few minutes…',
+                     ['pull', '--quiet', *images])
+        compose_step('3. Starting Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
@@ -569,7 +631,7 @@ def run_installation(plan, state, previous):
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
             compose_step('   Opening the protected Sonarr and Radarr logins on your LAN…',
                          ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
-        step = 3
+        step = 4
         prowlarr_key = None
         if vpn or downloads:
             services = (['gluetun'] if vpn else []) + downloads
@@ -591,8 +653,8 @@ def run_installation(plan, state, previous):
         if seed_indexers or seed_radarr_indexers or seed_prowlarr:
             options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
-        compose_step(f'{step + 1}. Building and starting your dashboard…',
-                     ['up', '-d', '--build', '--wait', '--wait-timeout', '90', 'dashboard'])
+        compose_step(f'{step + 1}. Building and starting your dashboard…', ['build', '--pull', '--quiet', 'dashboard'])
+        compose_step('   Starting the dashboard…', ['up', '-d', '--wait', '--wait-timeout', '90', 'dashboard'])
         verify = '''
 import server
 for app in ('sonarr', 'radarr'):
@@ -602,7 +664,8 @@ for app in ('sonarr', 'radarr'):
     print(f'{app} monitoring connected', flush=True)
 '''
         compose_step(f'{step + 2}. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
-    print('\nSetup complete · Sonarr and Radarr are connected.\n')
+    done = {'update': 'Update complete', 'reset': 'Fresh installation complete'}.get(mode, 'Setup complete')
+    print(f'\n{done} · Sonarr and Radarr are connected.\n')
     print('Open your dashboard')
     print('───────────────────')
     print(f'Address   http://{bind}:{ports["dashboard"]}')
@@ -614,8 +677,9 @@ for app in ('sonarr', 'radarr'):
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
     print('\nApp setup')
-    print('New Sonarr and Radarr installations use admin and the same temporary password.')
-    print('Set or change your dashboard password to update both app passwords.')
+    if not (auth_dir / 'password-hash').is_file():
+        print('New Sonarr and Radarr installations use admin and the same temporary password.')
+    print('Changing your dashboard password also updates the Sonarr and Radarr passwords.')
     if vpn:
         print(f'NordVPN exit: {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
     if downloads:
