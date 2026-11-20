@@ -162,12 +162,12 @@ function controlButtons(service) {
   </div>`;
 }
 
-/** The service that others share, such as Gluetun for the VPN apps, shown as the bar their section hangs from. */
+/** The service that others share, such as Gluetun for the VPN apps: a card spanning the section it heads. */
 function gatewayBar(service) {
   const app = appInfo(service.name);
-  return `<div class="gateway tone-${serviceState(service).tone}">
+  return `<div class="gateway service-card tone-${serviceState(service).tone}">
     ${appIcon(service.name)}
-    <p><strong>${esc(app.name)}</strong><span>${esc(app.role)}</span></p>
+    <div class="gateway-name"><h4>${esc(app.name)}</h4><p>${esc(app.role)}</p></div>
     ${statusChip(service)}
     ${controlButtons(service)}
   </div>`;
