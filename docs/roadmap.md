@@ -6,7 +6,8 @@
 
 - Local read-only view of expected container names and Docker-reported state.
 - Live Sonarr/Radarr monitored lists via privately mounted API keys on MartinFlix.
-- Link to existing Seerr and a view of snapshots produced by the prototype backup command.
+- Add series and films from the dashboard through Sonarr’s and Radarr’s own lookup, and a view of snapshots produced by the prototype backup command.
+- One shared admin password across the dashboard, Sonarr, Radarr, Prowlarr, and Transmission.
 - Copied Compose/stackctl configuration, [live inventory](live-inventory.md), and legacy runbook. Effective cutover settings still need validation.
 - Partial app-archive snapshot and checksum verification.
 
@@ -20,6 +21,6 @@ Inventory actual running containers, ownership, image versions, mounts, networks
 2. Real recovery workflows, off-host encrypted backups, retention, scheduling, visibility, and tested restores.
 3. Authenticated admin and household roles, using an appropriate identity provider; protect any network-facing interface.
 4. Restricted, auditable service operations with clear progress and cancellation; preserve VPN and dependency safety. Do not expose a general shell or Docker socket to the browser.
-5. Integrate Seerr requests and library views with role-aware access. Add monitoring for mounts, VPN connectivity and application health; do not infer VPN safety from container state.
+5. Give household members a request view with role-aware access, built on the dashboard’s Add page. Add monitoring for mounts, VPN connectivity and application health; do not infer VPN safety from container state.
 
 Keep existing services and cron unchanged until the replacement is verified and the migration is deliberately performed.

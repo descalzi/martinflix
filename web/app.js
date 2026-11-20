@@ -4,7 +4,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;'
 const icon = (name, extra = '') => `<svg class="icon${extra}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 const page = document.body.dataset.page;
-const pageTitles = {overview: 'Overview', library: 'Library', services: 'Services', backups: 'Backups'};
+const pageTitles = {overview: 'Overview', library: 'Library', add: 'Add', services: 'Services', backups: 'Backups'};
 const legacyAnchors = {'#series': '/library#series', '#films': '/library#films', '#library': '/library', '#backups': '/backups', '#services': '/services'};
 if (page === 'overview' && legacyAnchors[window.location.hash]) window.location.replace(legacyAnchors[window.location.hash]);
 $('#page-title').textContent = pageTitles[page];
@@ -12,7 +12,7 @@ document.title = page === 'overview' ? 'MartinFlix' : `${pageTitles[page]} · Ma
 document.querySelector(`[data-nav="${page}"]`)?.setAttribute('aria-current', 'page');
 for (const section of document.querySelectorAll('.page')) section.hidden = section.dataset.for !== page;
 
-let catalog = {apps: {}, branches: {}, startAfter: {}, pipeline: []};
+let catalog = {apps: {}, branches: {}, startAfter: {}};
 const appInfo = name => catalog.apps[name] ?? {name, role: 'Container'};
 
 function serviceIsUp(service) {
@@ -128,74 +128,40 @@ function serviceGroup(group, countLabel, showVpnBranch) {
   </section>`;
 }
 
-function renderPipeline(docker, services) {
-  const byName = Object.fromEntries(services.map(service => [service.name, service]));
-  const gateway = byName.nordvpn;
-  const tunnelled = gateway && (docker.source !== 'app-probes' || docker.downloadsBehindVpn);
-  const stages = catalog.pipeline
-    .map(stage => ({...stage, members: stage.services.map(name => byName[name]).filter(Boolean)}))
-    .filter(stage => stage.members.length);
-  if (!stages.length) {
-    $('#pipeline').innerHTML = '<p class="empty">No pipeline services are installed yet.</p>';
-    return;
-  }
-  const items = stages.map(stage => {
-    const down = stage.members.filter(member => serviceState(member).tone === 'crit' || serviceState(member).tone === 'warn');
-    const tone = down.length ? 'crit' : stage.members.some(member => healthIssues(member).length) ? 'warn' : 'ok';
-    const summary = down.length ? `${down.length} down` : tone === 'warn' ? 'Has alerts' : 'Flowing';
-    return `<li class="stage tone-${tone}${stage.tunnel && tunnelled ? ' is-tunnelled' : ''}">
-      <div class="stage-head"><h3>${esc(stage.name)}</h3><span class="badge ${tone}">${summary}</span></div>
-      <p>${esc(stage.detail)}</p>
-      <ul class="stage-apps">${stage.members.map(member => {
-        const {label, tone: memberTone} = serviceState(member);
-        return `<li>${appIcon(member.name)}<span>${esc(appInfo(member.name).name)}</span><span class="dot ${memberTone}" title="${esc(label)}"></span><span class="sr-only">${esc(label)}</span></li>`;
-      }).join('')}</ul>
-    </li>`;
-  }).join('');
-  let tunnel = '';
-  if (tunnelled) {
-    const {label, tone} = serviceState(gateway);
-    tunnel = `<p class="tunnel tone-${tone}">${icon('tunnel')}<span><strong>Find and Download run through the Gluetun VPN tunnel.</strong> Gateway ${esc(label.toLowerCase())}.</span></p>`;
-  }
-  $('#pipeline').innerHTML = `<ol class="pipeline">${items}</ol>${tunnel}`;
-}
-
 function attentionRows(docker, services) {
   const rows = [];
   if (!docker.available) rows.push({tone: 'crit', name: 'Service status', message: docker.error || 'Status unavailable'});
   for (const service of services) {
     if (appInfo(service.name).optional) continue;
     const {label, tone} = serviceState(service);
-    if (tone !== 'ok') rows.push({tone, name: appInfo(service.name).name, message: `${label} · ${service.status}`});
+    if (tone !== 'ok') rows.push({tone, name: appInfo(service.name).name, message: label.toLowerCase()});
     for (const issue of healthIssues(service)) {
-      rows.push({tone: issue.severity === 'error' ? 'crit' : 'warn', name: appInfo(service.name).name, message: issue.message});
+      rows.push({tone: issue.severity === 'error' ? 'crit' : 'warn', name: appInfo(service.name).name,
+        message: issue.severity === 'error' ? 'has an error' : 'has a warning'});
     }
   }
   return rows;
 }
 
-function renderAttention(docker, services) {
-  const rows = attentionRows(docker, services);
-  $('#attention-panel').hidden = rows.length === 0;
-  $('#attention-list').innerHTML = rows.map(row => `<li class="tone-${row.tone}">
-    ${icon('alert')}<strong>${esc(row.name)}</strong><span>${esc(row.message)}</span></li>`).join('');
-  return rows.length;
-}
-
 function renderOverview(docker, services, backups, probes) {
   const required = services.filter(service => !appInfo(service.name).optional);
-  const attention = renderAttention(docker, services);
-  $('#service-summary').classList.toggle('is-alert', !docker.available || attention > 0);
+  const rows = attentionRows(docker, services);
+  const summary = $('#service-summary');
+  summary.classList.toggle('is-alert', rows.some(row => row.tone === 'crit'));
+  summary.classList.toggle('is-warn', rows.length > 0 && !rows.some(row => row.tone === 'crit'));
   $('#services-metric-label').textContent = probes ? 'Services reachable' : 'Services running';
   $('#running').textContent = docker.available ? `${required.filter(serviceIsUp).length} of ${required.length}` : 'Unavailable';
-  $('#services-summary-detail').textContent = !docker.available ? 'Status unavailable'
-    : attention ? `${attention} ${attention === 1 ? 'issue needs' : 'issues need'} attention` : 'Everything required is up';
-  renderPipeline(docker, services);
+  // Name the problems so the tile is enough to act on; the link opens the full picture.
+  const named = rows.slice(0, 2).map(row => `${row.name} ${row.message}`);
+  if (rows.length > 2) named.push(`${rows.length - 2} more`);
+  $('#services-summary-detail').textContent = rows.length ? named.join(' · ') : 'Everything required is up';
+  summary.setAttribute('aria-label', rows.length ? `Services: ${rows.length} need attention. Open services.` : 'Services: all up. Open services.');
+
   const latest = backups[0];
   const incomplete = latest && (latest.errors?.length || latest.missing?.length);
   $('#backup-summary').classList.toggle('is-warn', Boolean(incomplete));
   $('#latest-backup').textContent = latest ? relativeDay(latest.created) : 'None yet';
-  $('#backup-detail').textContent = latest ? (incomplete ? 'Incomplete snapshot' : 'Captured · restore untested') : 'No snapshots found';
+  $('#backup-detail').textContent = latest ? (incomplete ? `Incomplete · missing ${[...(latest.missing || []), ...(latest.errors || [])].join(', ')}` : 'Captured · restore untested') : 'No snapshots found';
 }
 
 function renderBackups(backups) {
@@ -215,8 +181,9 @@ const servicesPage = page === 'services';
 async function get(url) {
   const response = await fetch(url, {cache: 'no-store'});
   if (response.status === 401 && response.headers.get('X-MartinFlix-Login') === 'required') window.location.assign('/login');
-  if (!response.ok) throw new Error('Request failed');
-  return response.json();
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || 'Request failed');
+  return data;
 }
 
 function date(value) {
@@ -224,14 +191,29 @@ function date(value) {
   return isNaN(stamp) ? 'Unknown' : stamp.toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
 }
 
+function dayOffset(stamp) {
+  return Math.round((new Date(stamp).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+}
+
 function relativeDay(value) {
   const stamp = new Date(value);
   if (isNaN(stamp)) return 'Unknown';
-  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(stamp).setHours(0, 0, 0, 0)) / 86400000);
+  const days = -dayOffset(stamp);
   if (days === 0) return 'Today';
   if (days === 1) return 'Yesterday';
   if (days < 7) return `${days} days ago`;
   return stamp.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+}
+
+/** "Today", "Tomorrow", "Thu 26 Nov", or with the year when it isn't this year. */
+function upcomingDay(stamp, options = {}) {
+  const days = dayOffset(stamp);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  const format = {weekday: 'short', day: 'numeric', month: 'short', ...options};
+  if (days >= 7) delete format.weekday;
+  if (new Date(stamp).getFullYear() !== new Date().getFullYear()) format.year = 'numeric';
+  return new Date(stamp).toLocaleDateString(undefined, format);
 }
 
 async function status() {
@@ -245,9 +227,6 @@ async function status() {
     const problems = attentionRows(docker, services).length;
     $('#nav-flag').hidden = problems === 0;
     $('#nav-flag').innerHTML = `${problems}<span class="sr-only"> ${problems === 1 ? 'issue' : 'issues'}</span>`;
-    const seerr = services.find(service => service.name === 'seerr' && serviceIsUp(service) && serviceHref(service));
-    $('#seerr-link').hidden = !seerr;
-    if (seerr) $('#seerr-link').href = serviceHref(seerr);
     if (servicesPage) {
       $('#services-description').textContent = probes
         ? 'Live health checks for the services this installer set up.'
@@ -269,7 +248,6 @@ async function status() {
     $('#running').textContent = 'Unavailable';
     $('#services-summary-detail').textContent = 'Could not load status';
     $('#service-summary').classList.add('is-alert');
-    $('#pipeline').innerHTML = '<p class="empty">Could not load status. Check the dashboard server and try again.</p>';
     $('#services-content').innerHTML = '<p class="empty">Could not load status. Check the dashboard server and try again.</p>';
     $('#backups-content').innerHTML = '<p class="empty">Could not load snapshots.</p>';
   }
@@ -282,54 +260,93 @@ async function activity() {
   try {
     const data = await get('/api/activity');
     const plex = data.plex;
-    $('#plex-streams').textContent = plex.streams ?? '—';
-    $('#plex-detail').textContent = !plex.configured ? 'Not connected' : plex.error ||
-      (plex.streams ? 'Active via Tautulli' : 'Nothing streaming right now');
-    const streams = plex.sessions || [];
-    $('#now-playing').hidden = streams.length === 0;
-    $('#streams-list').innerHTML = streams.map(stream =>
-      `<li>${icon('play')}<strong>${esc(stream.title)}</strong><span class="badge muted">${esc(stream.state)}</span></li>`).join('');
+    // No Plex on this install: leave the space to the tiles that apply.
+    $('#plex-summary').hidden = !plex.configured;
+    $('#plex-streams').textContent = plex.error ? '—' : plex.streams ?? '—';
+    const titles = (plex.sessions || []).map(stream => stream.title);
+    $('#plex-detail').textContent = plex.error || (titles.length ? titles.join(' · ') : 'Nothing playing right now');
     Object.assign(queues, data.queues);
     for (const library of Object.values(libraries)) renderLibraryCount(library);
   } catch {
     $('#plex-streams').textContent = '—';
     $('#plex-detail').textContent = 'Could not load Plex activity';
-    $('#now-playing').hidden = true;
   }
 }
 
-function posterCard(item, index, kind) {
-  const airing = item.nextAiring && new Date(item.nextAiring);
-  const dateFormat = {day: 'numeric', month: 'short', year: 'numeric'};
-  const release = item.releaseDate && new Date(item.releaseDate + 'T00:00:00Z');
-  const when = airing ? airing.toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short'})
-    : release ? release.toLocaleDateString(undefined, {...dateFormat, timeZone: 'UTC'}) : 'Date unknown';
-  const detail = airing ? `Next episode ${when}` : release ? `Released ${when}` : 'Release date unknown';
+function episodeCode(episode) {
+  if (!episode || episode.season == null || episode.number == null) return '';
+  return `S${String(episode.season).padStart(2, '0')}E${String(episode.number).padStart(2, '0')}`;
+}
+
+function posterDetails(item, kind) {
+  if (kind === 'sonarr') {
+    const airing = item.nextAiring && new Date(item.nextAiring);
+    const when = airing ? upcomingDay(airing) : 'Date unknown';
+    const code = episodeCode(item.nextEpisode);
+    return {meta: code ? `${code} · ${when}` : `Next episode ${when}`, extra: item.nextEpisode?.title || ''};
+  }
+  if (item.nextRelease) {
+    const when = upcomingDay(item.nextRelease.date + 'T12:00:00');
+    return {meta: `${item.nextRelease.type} · ${when}`, extra: ''};
+  }
+  if (item.releaseDate) {
+    const released = new Date(item.releaseDate + 'T00:00:00Z').toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC'});
+    return {meta: `Released ${released}`, extra: 'Not downloaded yet'};
+  }
+  return {meta: 'Release date unknown', extra: ''};
+}
+
+function posterCard(item, kind) {
+  const {meta, extra} = posterDetails(item, kind);
   const title = item.year ? `${item.title} (${item.year})` : item.title;
   return `<li class="poster-card">
     <div class="poster-art">
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" width="250" height="375">` : ''}
     </div>
-    <h3 class="poster-title" id="poster-${kind}-${index}">${esc(title)}</h3>
-    <p class="poster-meta">${esc(detail)}</p>
+    <h3 class="poster-title">${esc(title)}</h3>
+    <p class="poster-meta">${esc(meta)}</p>
+    ${extra ? `<p class="poster-extra">${esc(extra)}</p>` : ''}
   </li>`;
 }
 
-function renderLibraryCount({kind, data, count}) {
+function libraryItems(library) {
+  const items = library.data?.items || [];
+  return library.upcomingOnly ? items.filter(item => item.nextRelease)
+    .sort((a, b) => a.nextRelease.date.localeCompare(b.nextRelease.date)) : items;
+}
+
+function renderLibraryCount(library) {
+  const {kind, data, count} = library;
   if (!count) return;
   if (!data?.configured || data.error) {
-    count.textContent = '';
+    count.textContent = library.limit ? count.dataset.default : '';
     return;
   }
+  const total = libraryItems(library).length;
   const queued = queues[kind];
-  count.textContent = `${data.items.length} ${kind === 'sonarr' ? 'upcoming' : 'missing'}${queued == null ? '' : ` · ${queued} in the download queue`}`;
+  const queue = queued ? ` · ${queued} in the download queue` : '';
+  if (library.limit) {
+    count.textContent = kind === 'sonarr' ? `${total} ${total === 1 ? 'series airs' : 'series air'} in the next 12 months${queue}`
+      : `${total} ${total === 1 ? 'film has' : 'films have'} a release ahead${queue}`;
+  } else {
+    count.textContent = `${total} ${kind === 'sonarr' ? 'upcoming' : 'missing'}${queue}`;
+  }
 }
 
 function libraryMessage(kind, data) {
-  const series = kind === 'sonarr';
-  if (!data.configured) return `<div class="empty-state"><h3>${series ? 'Sonarr' : 'Radarr'} isn’t connected</h3><p>Save its API key in the dashboard secrets directory. The dashboard guide explains where.</p></div>`;
+  const name = kind === 'sonarr' ? 'Sonarr' : 'Radarr';
+  if (!data.configured) return `<div class="empty-state"><h3>${name} isn’t connected</h3><p>Save its API key in the dashboard secrets directory. The dashboard guide explains where.</p></div>`;
   return `<p class="empty">${esc(data.error)}</p>`;
+}
+
+function emptyLibrary(library) {
+  if (library.kind === 'sonarr') {
+    return '<div class="empty-state"><h3>Nothing airing soon</h3><p>No monitored series have an episode due in the next 12 months.</p><a class="text-link" href="/add">Add a series</a></div>';
+  }
+  return library.upcomingOnly
+    ? '<div class="empty-state"><h3>No releases ahead</h3><p>None of your monitored films have a cinema, digital or physical release coming up.</p><a class="text-link" href="/add">Add a film</a></div>'
+    : '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has a file.</p><a class="text-link" href="/add">Add a film</a></div>';
 }
 
 function renderLibrary(library) {
@@ -341,14 +358,11 @@ function renderLibrary(library) {
     return;
   }
   const search = filter ? filter.value.trim().toLowerCase() : '';
-  let items = data.items.filter(item => item.title.toLowerCase().includes(search));
+  let items = libraryItems(library).filter(item => item.title.toLowerCase().includes(search));
   if (library.limit) items = items.slice(0, library.limit);
   content.innerHTML = items.length
-    ? `<ul class="poster-grid${library.limit ? ' is-row' : ''}">${items.map((item, index) => posterCard(item, index, kind + (library.limit ? '-next' : ''))).join('')}</ul>`
-    : search ? `<p class="empty">No titles match “${esc(filter.value.trim())}”.</p>`
-      : `<div class="empty-state"><h3>${kind === 'sonarr' ? 'Nothing airing soon' : 'No missing films'}</h3><p>${kind === 'sonarr'
-        ? 'No monitored series have an episode due in the next 12 months. Add or monitor series in Sonarr.'
-        : 'Every monitored film has a file. Request more in Seerr or add them in Radarr.'}</p></div>`;
+    ? `<ul class="poster-grid${library.limit ? ' is-rail' : ''}">${items.map(item => posterCard(item, kind)).join('')}</ul>`
+    : search ? `<p class="empty">No titles match “${esc(filter.value.trim())}”.</p>` : emptyLibrary(library);
 }
 
 function hidePosterOnError(content) {
@@ -363,9 +377,15 @@ async function loadLibrary(library) {
     renderLibrary(library);
   } catch {
     library.data = null;
-    if (library.count) library.count.textContent = '';
+    if (library.count && !library.limit) library.count.textContent = '';
     library.content.innerHTML = '<p class="empty">Could not load titles.</p>';
   }
+}
+
+function overviewLibrary(kind, content, count, extra = {}) {
+  hidePosterOnError(content);
+  count.dataset.default = count.textContent;
+  return {kind, content, count, limit: 12, ...extra};
 }
 
 if (page === 'library') {
@@ -378,14 +398,118 @@ if (page === 'library') {
     libraries[library.kind] = library;
   }
 } else if (page === 'overview') {
-  const content = $('#up-next');
-  hidePosterOnError(content);
-  libraries.sonarr = {kind: 'sonarr', content, limit: 6};
+  libraries.sonarr = overviewLibrary('sonarr', $('#next-series'), $('#next-series-count'));
+  libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'), {upcomingOnly: true});
+}
+
+/* Add page: search Sonarr or Radarr's own lookup and add a title with the MartinFlix defaults. */
+const addSettings = {};
+
+function addKind() {
+  return document.querySelector('#add-form input[name="kind"]:checked').value;
+}
+
+async function showAddTarget(kind) {
+  const target = $('#add-target');
+  try {
+    addSettings[kind] ??= await get('/api/add-settings/' + kind);
+    if (addKind() !== kind) return;
+    const settings = addSettings[kind];
+    target.classList.toggle('is-problem', !settings.ready);
+    target.textContent = settings.ready
+      ? `Adds to ${settings.folder} with the ${settings.profile} profile, then starts searching.`
+      : settings.problem;
+  } catch {
+    target.textContent = 'Could not read the add settings.';
+  }
+}
+
+function resultCard(item, kind) {
+  const facts = kind === 'sonarr'
+    ? [item.year, item.network, item.seasons ? `${item.seasons} ${item.seasons === 1 ? 'season' : 'seasons'}` : '', item.status === 'ended' ? 'Ended' : item.status === 'upcoming' ? 'Upcoming' : '']
+    : [item.year, item.studio, item.runtime ? `${item.runtime} min` : ''];
+  const action = item.added
+    ? '<span class="badge ok">In your library</span>'
+    : `<button class="button button-primary button-small" type="button" data-add="${esc(item.id)}">${icon('plus')}Add</button>`;
+  return `<li class="result">
+    <div class="poster-art result-art">
+      <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
+      ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="120" height="180">` : ''}
+    </div>
+    <div class="result-body">
+      <h3>${esc(item.title)}</h3>
+      <p class="result-facts">${esc(facts.filter(Boolean).join(' · '))}</p>
+      ${item.overview ? `<p class="result-overview">${esc(item.overview)}</p>` : ''}
+      <div class="result-action">${action}</div>
+    </div>
+  </li>`;
+}
+
+if (page === 'add') {
+  const form = $('#add-form');
+  const results = $('#add-results');
+  const term = $('#add-term');
+  let lastSearch = null;
+  hidePosterOnError(results);
+  const syncKind = () => {
+    const kind = addKind();
+    term.placeholder = kind === 'sonarr' ? 'Search for a series' : 'Search for a film';
+    showAddTarget(kind);
+    if (lastSearch && lastSearch.kind !== kind && term.value.trim()) form.requestSubmit();
+  };
+  form.addEventListener('change', event => { if (event.target.name === 'kind') syncKind(); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const kind = addKind();
+    const query = term.value.trim();
+    if (!query) return term.focus();
+    const button = $('#add-submit');
+    button.disabled = true;
+    button.textContent = 'Searching…';
+    lastSearch = {kind, query};
+    results.innerHTML = '<p class="empty">Searching…</p>';
+    try {
+      const data = await get(`/api/search/${kind}?` + new URLSearchParams({term: query}));
+      if (lastSearch.kind !== kind || lastSearch.query !== query) return;
+      results.innerHTML = data.results.length
+        ? `<p class="result-count">${data.results.length} ${data.results.length === 1 ? 'match' : 'matches'} for “${esc(query)}”</p><ul class="results" data-kind="${kind}">${data.results.map(item => resultCard(item, kind)).join('')}</ul>`
+        : `<div class="empty-state"><h3>Nothing found for “${esc(query)}”</h3><p>Check the spelling, or try the original title.</p></div>`;
+    } catch (error) {
+      results.innerHTML = `<p class="error">${esc(error.message)}</p>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Search';
+    }
+  });
+  results.addEventListener('click', async event => {
+    const button = event.target.closest('[data-add]');
+    if (!button) return;
+    const kind = button.closest('.results').dataset.kind;
+    const action = button.parentElement;
+    button.disabled = true;
+    button.innerHTML = 'Adding…';
+    try {
+      const response = await fetch('/api/add/' + kind, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: Number(button.dataset.add)}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not add this title.');
+      action.innerHTML = `<span class="badge ok">Added · searching</span>`;
+    } catch (error) {
+      action.innerHTML = `<p class="error error-inline">${esc(error.message)}</p>`;
+    }
+  });
+  showAddTarget(addKind());
+  if (new URLSearchParams(window.location.search).get('kind') === 'radarr') {
+    form.querySelector('input[value="radarr"]').checked = true;
+    syncKind();
+  }
+  term.focus();
 }
 
 let refreshing = false;
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing || page === 'add') return;
   refreshing = true;
   const button = $('#refresh');
   button.disabled = true;
@@ -402,5 +526,11 @@ async function refresh() {
 }
 
 $('#refresh').addEventListener('click', refresh);
-refresh();
+$('#refresh').hidden = page === 'add';
+if (page === 'add') {
+  status();
+  $('#updated').hidden = true;
+} else {
+  refresh();
+}
 setInterval(() => { if (!document.hidden) refresh(); }, 60000);

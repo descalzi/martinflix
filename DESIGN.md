@@ -19,7 +19,7 @@ fonts:
 ## Overview
 A calm home cinema control room. The dashboard and the public setup wizard are Operate surfaces: someone who uses admin tools should find everything before they notice the style. The brand comes from the real masthead artwork, a midcentury woodcut house with a projector, drawn in forest, ivory and mint. The dashboard puts real state first.
 
-**Signature move:** the overview shows the stack as a media pipeline: Request, Find, Download, Organise, Watch. Each stage is coloured by the health of its apps. Stages that run inside the Gluetun tunnel are underlined in the accent colour, with the gateway state written beside them.
+**Signature move:** the overview reads like a TV guide for your own library. Every monitored series shows its next episode code and air day, and every film shows its next release, such as “Digital · Tue 24 Nov”. Above it, a three-tile status strip is the only alarm: problems are named in the tile, which links to the page that explains them.
 
 ## Colors
 The navigation rail and wizard header stay forest in both themes. This is the committed shell. The working surface follows the system theme. Light uses a cool sage paper, not cream. Dark uses the masthead’s forest-black, so the banner sits on its own ground. Ivory is for text on forest. Mint is the dark-theme accent and the current-page marker in the rail. State colours always come with a text label. Every pair is checked at 4.5:1 or better.
@@ -28,7 +28,8 @@ The navigation rail and wizard header stay forest in both themes. This is the co
 Gabarito sets page and section headings. Figtree sets everything else at 16 px with 1.55 line height. Numbers use tabular figures. Use sentence case everywhere, with no uppercase tracked labels or eyebrows. Monospace is only for commands and paths.
 
 ## Layout
-- The dashboard has a 232 px rail with Overview, Library, Services and Backups. Each is a real URL. Below 860 px the rail becomes a top bar with icon and label tabs.
+- The dashboard has a 232 px rail with Overview, Library, Add, Services and Backups. Each is a real URL. Below 860 px the rail becomes a top bar with icon and label tabs, and the overview’s poster rows scroll sideways.
+- The Add page searches through Sonarr’s and Radarr’s lookup and shows TMDB and TheTVDB artwork, which the page’s content security policy allows by host.
 - Content sits on panels: 12 px radius, 24 px padding, one soft offset shadow. Use 8 px radius for inputs, buttons and inner cards, and pills for badges.
 - The wizard is two columns: the steps on the left and the live commands on the right, which stay in view. Below 900 px it stacks into one column.
 
@@ -41,4 +42,4 @@ Gabarito sets page and section headings. Figtree sets everything else at 16 px w
 - **Accessibility:** visible focus rings (3 px), labelled controls, skip link, `prefers-reduced-motion` respected, 44 px touch targets.
 
 ## Source of truth
-`web/catalog.json` lists every service, its group, role, icon, web port, dependency branch and pipeline stage. `server.py` and `web/app.js` read it, and a test checks that it matches `deploy/hosts/martinflix/stacks.conf`. The tokens live at the top of `web/style.css` and `docs/setup.css`; keep the two in step.
+`web/catalog.json` lists every service, its group, role, icon, web port and dependency branch. `server.py` and `web/app.js` read it, and a test checks that it matches `deploy/hosts/martinflix/stacks.conf`. The tokens live at the top of `web/style.css` and `docs/setup.css`; keep the two in step.

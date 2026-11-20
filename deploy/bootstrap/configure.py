@@ -7,7 +7,7 @@ PROFILE_NAME = 'MartinFlix HD (720p/1080p)'
 ARR_NAMES = {'sonarr': 'Sonarr', 'radarr': 'Radarr'}
 ARR_PORTS = {'sonarr': 8989, 'radarr': 7878}
 ROOT_FOLDERS = {'sonarr': '/data/TV Shows', 'radarr': '/data/Movies'}
-TRANSMISSION_USER = 'martinflix'
+TRANSMISSION_USER = 'admin'
 PROWLARR_INDEXERS = {
     '1337x': ('1337x', 25),
     'eztv': ('EZTV', 25),
@@ -155,6 +155,21 @@ def ensure_connection(api, route, name, implementation, match_field, values, **s
     api.request(route, entry)
 
 
+def sync_transmission_client(api, host, password):
+    """Point existing Transmission connections at the shared admin login."""
+    for item in api.request('downloadclient'):
+        if item['implementation'] != 'Transmission':
+            continue
+        if item['name'] != 'MartinFlix Transmission' and field_value(item, 'host') != host:
+            continue
+        for field in item['fields']:
+            if field['name'] == 'username':
+                field['value'] = TRANSMISSION_USER
+            elif field['name'] == 'password':
+                field['value'] = password
+        api.request(f'downloadclient/{item["id"]}?forceSave=true', item, method='PUT')
+
+
 def ensure_download_path(api, host):
     mappings = api.request('remotepathmapping')
     if not any(item['host'] == host and item['remotePath'].rstrip('/') == '/downloads'
@@ -222,6 +237,7 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
                 'host': transmission_host, 'port': 9091, 'username': TRANSMISSION_USER,
                 'password': transmission_password, category: app,
             })
+            sync_transmission_client(api, transmission_host, transmission_password)
             ensure_download_path(api, transmission_host)
         if prowlarr:
             ensure_connection(prowlarr, 'applications', name, name, 'baseUrl', {

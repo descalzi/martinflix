@@ -6,7 +6,7 @@ services:
     environment:
       PUID: "${MARTINFLIX_UID}"
       PGID: "${MARTINFLIX_GID}"
-      USER: martinflix
+      USER: admin
       FILE__PASS: /run/secrets/transmission_password
       HOST_WHITELIST: gluetun,transmission,localhost
     secrets: [transmission_password]
@@ -23,6 +23,27 @@ services:
       timeout: 4s
       retries: 15
       start_period: 20s
+
+  transmission-auth:
+    profiles: [transmission]
+    image: busybox:1.37
+    restart: unless-stopped
+    user: "${MARTINFLIX_UID}:${MARTINFLIX_GID}"
+    pid: "service:transmission"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      transmission: {condition: service_started, restart: true}
+    command: [sh, /usr/local/bin/transmission-auth]
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/transmission:/config"
+      - "./transmission-auth.sh:/usr/local/bin/transmission-auth:ro"
+      - type: bind
+        source: ${MARTINFLIX_STATE_DIR}/download-secrets/transmission_password
+        target: /run/transmission-password
+        read_only: true
 
   prowlarr:
     profiles: [prowlarr]

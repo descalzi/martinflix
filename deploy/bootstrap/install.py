@@ -130,11 +130,19 @@ def prepare_vpn_secrets(path):
         write_secret(path / name, value, trailing_newline=False)
 
 
-def prepare_download_secrets(path):
+def prepare_transmission_password(path, temporary_password, personal_password_set):
+    """Transmission signs in with the dashboard password, like every other app in the stack.
+
+    Until the admin chooses a personal password, every app uses the temporary dashboard password. After that the
+    dashboard keeps this file in step whenever the password changes, so setup leaves it alone.
+    """
     private_directory(path)
-    password = private_secret(path / 'transmission_password') or secrets.token_urlsafe(24)
-    # LinuxServer loads every byte from FILE__PASS, including any trailing newline.
-    write_secret(path / 'transmission_password', password, trailing_newline=False)
+    target = path / 'transmission_password'
+    current = private_secret(target)
+    password = current if current and personal_password_set else temporary_password
+    # LinuxServer loads every byte from FILE__PASS, including any trailing newline. Running containers bind-mount
+    # this file, so it is rewritten in place rather than replaced.
+    write_secret(target, password, trailing_newline=False, in_place=True)
     return password
 
 
@@ -144,7 +152,7 @@ def private_directory(path):
         raise ValueError(f'{path} must be a private directory owned by the current account (mode 0700).')
 
 
-def write_secret(path, value, trailing_newline=True):
+def write_secret(path, value, trailing_newline=True, in_place=False):
     content = value + '\n' if trailing_newline else value
     if path.is_symlink():
         raise ValueError(f'{path} must be a regular file.')
@@ -152,6 +160,11 @@ def write_secret(path, value, trailing_newline=True):
         if not path.is_file() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
             raise ValueError(f'{path} must be private and owned by the current account.')
         if path.read_text() == content:
+            return
+        if in_place:
+            with path.open('r+') as output:
+                output.write(content)
+                output.truncate()
             return
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
         temporary = Path(output.name)
@@ -280,6 +293,13 @@ def download_overlay(apps, ports, behind_vpn):
         'MARTINFLIX_DOWNLOAD_APPS': ','.join(apps),
         'MARTINFLIX_DOWNLOAD_GATEWAY': 'gluetun' if behind_vpn else '',
     }}}
+    if 'transmission' in apps:
+        # The dashboard writes password changes here; Transmission's sidecar applies them.
+        services['dashboard']['environment']['MARTINFLIX_TRANSMISSION_PASSWORD_FILE'] = '/run/transmission-password'
+        services['dashboard']['volumes'] = [{
+            'type': 'bind', 'source': '${MARTINFLIX_STATE_DIR}/download-secrets/transmission_password',
+            'target': '/run/transmission-password', 'bind': {'create_host_path': False},
+        }]
     for app in apps:
         configuration = services.setdefault(app, {})
         if behind_vpn:
@@ -584,9 +604,25 @@ def run_installation(plan, state, previous, mode='install'):
         if {key: value for key, value in saved_options(state).items() if key not in ('ports', 'dashboard_bind')} != \
                 {key: value for key, value in previous.items() if key not in ('ports', 'dashboard_bind')}:
             raise ValueError('Setup options changed while this command was waiting. Run the installer again.')
+        secret_dir = state / 'dashboard-secrets'
+        private_directory(secret_dir)
+        auth_dir = state / 'dashboard-auth'
+        private_directory(auth_dir)
+        password = secret_dir / 'admin-password'
+        if password.exists() or password.is_symlink():
+            if password.is_symlink() or not password.is_file() or password.stat().st_uid != os.getuid() or password.stat().st_mode & 0o077:
+                raise ValueError('The existing dashboard password file must be private and owned by the current account.')
+            if len(password.read_text().rstrip('\r\n')) < 16:
+                raise ValueError('The existing dashboard password must be at least 16 characters.')
+        else:
+            write_secret(password, secrets.token_urlsafe(32))
+        temporary_password = password.read_text().rstrip('\r\n')
+        personal_password_set = (auth_dir / 'password-hash').is_file()
         if vpn:
             prepare_vpn_secrets(state / 'download-secrets')
-        transmission_password = prepare_download_secrets(state / 'download-secrets') if 'transmission' in enabled else None
+        transmission_password = (prepare_transmission_password(state / 'download-secrets', temporary_password,
+                                                               personal_password_set)
+                                 if 'transmission' in enabled else None)
         if media:
             for folder in MEDIA_FOLDERS:
                 (media / folder).mkdir(mode=0o700, exist_ok=True)
@@ -598,26 +634,15 @@ def run_installation(plan, state, previous, mode='install'):
         options.setdefault('radarr_indexer_defaults_pending', not (state / 'radarr/config.xml').exists())
         if options != saved_options(state):
             write_secret(state / 'install-options.json', json.dumps(options))
-        secret_dir = state / 'dashboard-secrets'
-        private_directory(secret_dir)
-        auth_dir = state / 'dashboard-auth'
-        private_directory(auth_dir)
         for app in app_dirs:
             private_directory(state / app)
-        password = secret_dir / 'admin-password'
-        if password.exists() or password.is_symlink():
-            if password.is_symlink() or not password.is_file() or password.stat().st_uid != os.getuid() or password.stat().st_mode & 0o077:
-                raise ValueError('The existing dashboard password file must be private and owned by the current account.')
-            if len(password.read_text().rstrip('\r\n')) < 16:
-                raise ValueError('The existing dashboard password must be at least 16 characters.')
-        else:
-            write_secret(password, secrets.token_urlsafe(32))
 
         arr_address = str(bind)
         if bootstrapping_arr:
             arr_address = '127.0.0.1'
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
-        images = [*APPS, *(['gluetun'] if vpn else []), *downloads]
+        sidecars = ['transmission-auth'] if 'transmission' in downloads else []
+        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *sidecars]
         compose_step('2. Downloading the latest app images. The first download may take a few minutes…',
                      ['pull', '--quiet', *images])
         compose_step('3. Starting Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
@@ -625,7 +650,7 @@ def run_installation(plan, state, previous, mode='install'):
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
             api = AppApi(app.capitalize(), ports[app], key, address=arr_address)
-            ensure_arr_login(api, lambda: password.read_text().rstrip('\r\n'))
+            ensure_arr_login(api, lambda: temporary_password)
         if bootstrapping_arr and arr_address != str(bind):
             arr_address = str(bind)
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
@@ -634,13 +659,14 @@ def run_installation(plan, state, previous, mode='install'):
         step = 4
         prowlarr_key = None
         if vpn or downloads:
-            services = (['gluetun'] if vpn else []) + downloads
+            services = (['gluetun'] if vpn else []) + downloads + sidecars
             label = 'Starting the VPN and selected services' if vpn else 'Starting selected download and tracker apps'
             compose_step(f'{step}. {label}…', ['up', '-d', '--wait', '--wait-timeout', '210', *services])
             step += 1
         if 'prowlarr' in enabled:
             prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
             write_secret(secret_dir / 'prowlarr-key', prowlarr_key)
+            ensure_arr_login(AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1), lambda: temporary_password)
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
         seed_radarr_indexers = options['radarr_indexer_defaults_pending']
@@ -676,10 +702,16 @@ for app in ('sonarr', 'radarr'):
         print('Password  Run this on the VM to show your temporary password:')
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
-    print('\nApp setup')
-    if not (auth_dir / 'password-hash').is_file():
-        print('New Sonarr and Radarr installations use admin and the same temporary password.')
-    print('Changing your dashboard password also updates the Sonarr and Radarr passwords.')
+    names = ['Sonarr', 'Radarr', *(name for app, name in (('prowlarr', 'Prowlarr'), ('transmission', 'Transmission'))
+                                   if app in enabled)]
+    listed = ', '.join(names[:-1]) + ' and ' + names[-1]
+    print('\nApp sign-in')
+    if personal_password_set:
+        print(f'{listed} use admin and your dashboard password. Changing it in the dashboard updates every app.')
+        if mode == 'update':
+            print('Apps added before this version keep their old password until you next change your dashboard password.')
+    else:
+        print(f'{listed} use admin and the same temporary password. Setting your own password updates every app.')
     if vpn:
         print(f'NordVPN exit: {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
     if downloads:
@@ -687,9 +719,6 @@ for app in ('sonarr', 'radarr'):
     for app in app_dirs:
         address = '127.0.0.1' if app in DOWNLOAD_APPS else bind
         print(f'{app.capitalize():13} http://{address}:{ports[app]}')
-    if 'transmission' in enabled:
-        password_path = shlex.quote(str(state / 'download-secrets/transmission_password'))
-        print(f'\nTransmission username: martinflix. To show its password: cat {password_path}')
     if 'prowlarr' in enabled:
         print('Manage indexers in Prowlarr. The installer connected both library apps.')
     if 'flaresolverr' in enabled:

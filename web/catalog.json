@@ -32,12 +32,5 @@
   "startAfter": {
     "sonarr": ["prowlarr", "transmission-daemon"],
     "radarr": ["prowlarr", "transmission-daemon"]
-  },
-  "pipeline": [
-    {"name": "Request", "detail": "Household asks", "services": ["seerr"]},
-    {"name": "Find", "detail": "Search indexers", "services": ["prowlarr", "flaresolverr"], "tunnel": true},
-    {"name": "Download", "detail": "Fetch releases", "services": ["transmission-daemon"], "tunnel": true},
-    {"name": "Organise", "detail": "Rename and file", "services": ["sonarr", "radarr", "bazarr"]},
-    {"name": "Watch", "detail": "Stream at home", "services": ["plex", "tautulli"]}
-  ]
+  }
 }

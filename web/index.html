@@ -27,6 +27,7 @@
     <symbol id="i-tunnel" viewBox="0 0 24 24"><path d="M12 3.5 5 6.5v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9v-5z"/><path d="m9 12 2 2 4-4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m10 8.5 5.5 3.5-5.5 3.5z"/></symbol>
   </svg>
   <a class="skip" href="#main">Skip to content</a>
@@ -36,6 +37,7 @@
       <nav class="nav" aria-label="Main">
         <a href="/" data-nav="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
         <a href="/library" data-nav="library"><svg class="icon" aria-hidden="true"><use href="#i-library"/></svg><span>Library</span></a>
+        <a href="/add" data-nav="add"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>Add</span></a>
         <a href="/services" data-nav="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span><span class="nav-flag" id="nav-flag" hidden></span></a>
         <a href="/backups" data-nav="backups"><svg class="icon" aria-hidden="true"><use href="#i-backups"/></svg><span>Backups</span></a>
       </nav>
@@ -54,16 +56,14 @@
       </header>
 
       <div class="page" data-for="overview">
-        <div class="masthead"><img src="/assets/martinflix-masthead.webp" width="1600" height="533" alt="MartinFlix" fetchpriority="high"></div>
-
         <section class="status-strip" aria-label="System status">
           <a class="status-item" id="service-summary" href="/services">
             <span class="status-label" id="services-metric-label">Services</span>
             <strong class="status-value" id="running">—</strong>
             <span class="status-detail" id="services-summary-detail">Checking service status</span>
           </a>
-          <div class="status-item">
-            <span class="status-label">Plex streams</span>
+          <div class="status-item" id="plex-summary">
+            <span class="status-label">Playing now</span>
             <strong class="status-value" id="plex-streams">—</strong>
             <span class="status-detail" id="plex-detail">Checking playback activity</span>
           </div>
@@ -74,38 +74,28 @@
           </a>
         </section>
 
-        <section class="panel" aria-labelledby="pipeline-title">
+        <section class="panel" aria-labelledby="next-series-title">
           <div class="panel-head">
-            <h2 id="pipeline-title">Media pipeline</h2>
-            <p>Each stage of getting a title from request to your screen.</p>
+            <div><h2 id="next-series-title">Next episodes</h2><p id="next-series-count">Monitored series, soonest first.</p></div>
+            <a class="text-link" href="/library#series">All series<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
           </div>
-          <div id="pipeline" class="pipeline-wrap" aria-live="polite"><p class="empty">Checking services…</p></div>
+          <div id="next-series" class="library-content" aria-live="polite"><p class="empty">Loading series…</p></div>
         </section>
 
-        <section class="panel" id="attention-panel" aria-labelledby="attention-title" hidden>
+        <section class="panel" aria-labelledby="next-films-title">
           <div class="panel-head">
-            <h2 id="attention-title">Needs attention</h2>
-            <a class="text-link" href="/services">Open services<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+            <div><h2 id="next-films-title">Coming films</h2><p id="next-films-count">Monitored films with a release still ahead.</p></div>
+            <a class="text-link" href="/library#films">All films<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
           </div>
-          <ul id="attention-list" class="attention-list"></ul>
-        </section>
-
-        <section class="panel" id="now-playing" aria-labelledby="playing-title" hidden>
-          <div class="panel-head"><h2 id="playing-title">Now playing</h2></div>
-          <ul id="streams-list" class="streams-list"></ul>
-        </section>
-
-        <section class="panel" aria-labelledby="next-title">
-          <div class="panel-head">
-            <h2 id="next-title">Up next</h2>
-            <a class="text-link" href="/library#series">All upcoming series<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
-          </div>
-          <div id="up-next" class="library-content" aria-live="polite"><p class="empty">Loading series…</p></div>
+          <div id="next-films" class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
         </section>
       </div>
 
       <div class="page" data-for="library">
-        <nav class="subnav" aria-label="Library sections"><a href="#series">Upcoming series</a><a href="#films">Missing films</a></nav>
+        <div class="library-bar">
+          <nav class="subnav" aria-label="Library sections"><a href="#series">Upcoming series</a><a href="#films">Missing films</a></nav>
+          <a class="button button-primary" href="/add"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add a series or film</a>
+        </div>
         <section id="series" class="panel library" data-library="sonarr" aria-labelledby="series-title">
           <div class="panel-head">
             <div><h2 id="series-title">Upcoming series</h2><p>Monitored series airing in the next 12 months, soonest first.</p></div>
@@ -119,13 +109,33 @@
         <section id="films" class="panel library" data-library="radarr" aria-labelledby="films-title">
           <div class="panel-head">
             <div><h2 id="films-title">Missing films</h2><p>Monitored films without a file, by release date.</p></div>
-            <a class="button button-tinted" id="seerr-link" href="/" target="_blank" rel="noopener noreferrer" hidden>Request in Seerr<svg class="icon" aria-hidden="true"><use href="#i-external"/></svg><span class="sr-only"> (opens in a new tab)</span></a>
           </div>
           <div class="library-controls">
             <p class="library-count"></p>
             <label class="search"><span class="sr-only">Find a film</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" placeholder="Find a film" autocomplete="off"></label>
           </div>
           <div class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
+        </section>
+      </div>
+
+      <div class="page" data-for="add">
+        <p class="page-intro">Find a series or film and add it to Sonarr or Radarr. New titles use the MartinFlix profile and start searching straight away.</p>
+        <section class="panel" aria-labelledby="add-search-title">
+          <h2 id="add-search-title" class="sr-only">Search</h2>
+          <form id="add-form" class="add-form" role="search">
+            <fieldset class="segmented">
+              <legend class="sr-only">Kind of title</legend>
+              <label><input type="radio" name="kind" value="sonarr" checked><span>Series</span></label>
+              <label><input type="radio" name="kind" value="radarr"><span>Films</span></label>
+            </fieldset>
+            <label class="search search-wide"><span class="sr-only">Title</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input id="add-term" type="search" name="term" placeholder="Search for a series" maxlength="100" autocomplete="off" required></label>
+            <button class="button button-primary" type="submit" id="add-submit">Search</button>
+          </form>
+          <p class="add-target" id="add-target" aria-live="polite"></p>
+        </section>
+        <section aria-labelledby="add-results-title">
+          <h2 id="add-results-title" class="sr-only">Results</h2>
+          <div id="add-results" aria-live="polite"></div>
         </section>
       </div>
 

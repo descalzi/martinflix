@@ -85,6 +85,23 @@ class InstallerPlanTests(unittest.TestCase):
                 ('gluetun', '127.0.0.1', 9696, 9696)])
 
 
+class SharedPasswordTests(unittest.TestCase):
+    def test_transmission_uses_the_dashboard_password(self):
+        with tempfile.TemporaryDirectory() as folder:
+            secrets = Path(folder) / 'download-secrets'
+            # A new install, and an old one still on the temporary password, share the temporary password.
+            self.assertEqual(install.prepare_transmission_password(secrets, 'temporary-password', False), 'temporary-password')
+            target = secrets / 'transmission_password'
+            target.write_text('old-random-password')
+            inode = target.stat().st_ino
+            self.assertEqual(install.prepare_transmission_password(secrets, 'temporary-password', False), 'temporary-password')
+            self.assertEqual(target.read_text(), 'temporary-password')
+            self.assertEqual(target.stat().st_ino, inode, 'running containers bind-mount this file')
+            # Once a personal password exists, the dashboard owns the file and setup leaves it alone.
+            target.write_text('personal password')
+            self.assertEqual(install.prepare_transmission_password(secrets, 'temporary-password', True), 'personal password')
+
+
 class ResetSummaryTests(unittest.TestCase):
     # The test host's saved options, plus the address and ports recovered from its running containers.
     current = {'media_path': '/mnt/martinflix/blah', 'downloads': True,
