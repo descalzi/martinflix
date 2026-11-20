@@ -19,10 +19,10 @@ test('a new installation uses the defaults', () => {
 
 test('custom answers become flags, quoting only when needed', () => {
   const args = wizard.installArguments({...defaults, lan: true, address: '192.168.4.166', media: '/mnt/my media',
-    vpn: true, exit: 'United Kingdom', downloader: 'transmission', behindVpn: true, ports: {sonarr: '18989'}});
+    vpn: true, exit: 'United Kingdom', downloader: 'transmission', behindVpn: true, ports: {sonarr: '18989', 'transmission-peer': '51413'}});
   assert.deepStrictEqual(args, ['--dashboard-bind=192.168.4.166', "--media-path='/mnt/my media'", '--enable-vpn',
     '--vpn-provider=nordvpn', "--vpn-country='United Kingdom'", '--download-client=transmission', '--enable-prowlarr',
-    '--enable-flaresolverr', '--download-network=vpn', '--sonarr-port=18989']);
+    '--enable-flaresolverr', '--download-network=vpn', '--sonarr-port=18989', '--transmission-peer-port=51413']);
 });
 
 test('an update keeps saved settings and only names a custom state directory', () => {

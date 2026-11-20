@@ -8,7 +8,8 @@ services:
       PGID: "${MARTINFLIX_GID}"
       USER: admin
       FILE__PASS: /run/secrets/transmission_password
-      HOST_WHITELIST: gluetun,transmission,localhost
+      PEERPORT: "${MARTINFLIX_TRANSMISSION_PEER_PORT:-51155}"
+      UMASK: "022"
     secrets: [transmission_password]
     volumes:
       - "${MARTINFLIX_STATE_DIR}/transmission:/config"

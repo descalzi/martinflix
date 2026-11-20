@@ -1,4 +1,5 @@
 """Apply the initial library and download settings through the apps' local APIs."""
+import base64
 import json
 import urllib.error
 import urllib.request
@@ -17,6 +18,18 @@ PROWLARR_INDEXERS = {
     'torrentdownloads': ('Torrent Downloads', 25),
     'world-torrent': ('World-torrent', 26),
     'yts': ('YTS', 25),
+}
+# The reference host's Transmission choices, applied once to installs that started before setup shipped them.
+# New installs get the same values from transmission-settings.json before Transmission first starts.
+TRANSMISSION_SESSION = {
+    'seedRatioLimit': 0,
+    'seedRatioLimited': True,
+    'blocklist-enabled': True,
+    'blocklist-url': 'https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz',
+    'encryption': 'required',
+    'utp-enabled': True,
+    'lpd-enabled': True,
+    'peer-limit-per-torrent': 75,
 }
 RELEASE_PROFILES = {
     'sonarr': [('Bad Stuff', True, ['MeGusta', 'scr', 'exe', 'ETHEL'])],
@@ -60,6 +73,45 @@ class AppApi:
             raise AppApiHttpError(self.name, route, exc.code) from None
         except (OSError, ValueError):
             raise ValueError(f'{self.name}: could not read {route}. Check the app is running and rerun.') from None
+
+
+class TransmissionRpc:
+    """Minimal Transmission RPC client: basic auth plus the session ID handshake."""
+
+    def __init__(self, address, port, username, password):
+        self.url = f'http://{address}:{port}/transmission/rpc'
+        token = base64.b64encode(f'{username}:{password}'.encode()).decode()
+        self.headers = {'Authorization': f'Basic {token}', 'Content-Type': 'application/json'}
+
+    def call(self, method, arguments=None, timeout=30):
+        body = json.dumps({'method': method, 'arguments': arguments or {}}).encode()
+        for _ in range(2):
+            request = urllib.request.Request(self.url, data=body, headers=self.headers, method='POST')
+            try:
+                with OPENER.open(request, timeout=timeout) as response:
+                    result = json.loads(response.read())
+            except urllib.error.HTTPError as exc:
+                session = exc.headers.get('X-Transmission-Session-Id')
+                exc.close()
+                if exc.code == 409 and session:
+                    self.headers['X-Transmission-Session-Id'] = session
+                    continue
+                raise ValueError(f'Transmission: {method} returned HTTP {exc.code}. Check its login and rerun.') from None
+            except (OSError, ValueError):
+                raise ValueError(f'Transmission: could not reach {method}. Check the app is running and rerun.') from None
+            if result.get('result') != 'success':
+                raise ValueError(f'Transmission: {method} failed: {result.get("result")}')
+            return result.get('arguments') or {}
+        raise ValueError('Transmission: the RPC session could not be established.')
+
+
+def seed_transmission_defaults(rpc):
+    rpc.call('session-set', TRANSMISSION_SESSION)
+    try:
+        size = rpc.call('blocklist-update', timeout=90).get('blocklist-size')
+        print(f'   Transmission: blocklist loaded{f" with {size:,} rules" if isinstance(size, int) else ""}.', flush=True)
+    except ValueError:
+        print('   Transmission: the blocklist will download at its nightly update.', flush=True)
 
 
 def ensure_arr_login(api, initial_password):

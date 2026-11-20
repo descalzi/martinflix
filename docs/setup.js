@@ -8,6 +8,7 @@ const portOptions = [
   ['radarr', 'Radarr', 7878],
   ['prowlarr', 'Prowlarr', 9696],
   ['transmission', 'Transmission', 9091],
+  ['transmission-peer', 'Transmission peer', 51155],
 ];
 const STEPS = {
   new: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
@@ -45,7 +46,7 @@ function checkPath(value, label) {
 }
 
 function enabledPorts(options) {
-  return portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name === 'transmission' ? options.downloader : true);
+  return portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name.startsWith('transmission') ? options.downloader : true);
 }
 
 function checkPorts(options) {
@@ -312,6 +313,7 @@ if (typeof document !== 'undefined') {
           : 'These apps will use the host’s normal internet connection.';
     byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
     byId('transmission-port').parentElement.hidden = !options.downloader;
+    byId('transmission-peer-port').parentElement.hidden = !options.downloader;
     byId('commands-lede').textContent = options.mode === 'new'
       ? 'Run these on the Linux host as your normal user, not with sudo.'
       : 'Run these in your existing MartinFlix checkout, as the account that installed it.';

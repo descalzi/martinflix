@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
-from configure import AppApi, configure_apps, ensure_arr_login
+from configure import AppApi, TransmissionRpc, configure_apps, ensure_arr_login, seed_transmission_defaults
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
 APPS = ('sonarr', 'radarr')
@@ -39,7 +39,8 @@ MEDIA_FOLDERS = ('TV Shows', 'Movies', 'downloads')
 DOWNLOAD_APPS = ('transmission', 'prowlarr', 'flaresolverr')
 DOWNLOAD_PORTS = {'transmission': 9091, 'prowlarr': 9696}
 CONTAINER_PORTS = {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, **DOWNLOAD_PORTS}
-DEFAULT_PORTS = dict(CONTAINER_PORTS)
+DEFAULT_PORTS = {**CONTAINER_PORTS, 'transmission_peer': 51155}
+TRANSMISSION_SETTINGS = Path(__file__).resolve().with_name('transmission-settings.json')
 
 
 def saved_options(state):
@@ -268,7 +269,7 @@ def check_ports(bindings, published):
         except OSError as exc:
             if exc.errno == errno.EADDRINUSE:
                 raise ValueError(f'{app}: {address}:{port} is already in use. '
-                                 f'Rerun with --{app}-port and a different port.') from exc
+                                 f'Rerun with --{app.replace("_", "-")}-port and a different port.') from exc
             if exc.errno == errno.EADDRNOTAVAIL:
                 raise ValueError(f'{address} is not assigned to this VM. Use --dashboard-bind 127.0.0.1 '
                                  'or use the VM’s LAN IPv4 address.') from exc
@@ -307,6 +308,10 @@ def download_overlay(apps, ports, behind_vpn):
             configuration.update(network_mode='service:gluetun', depends_on={
                 'gluetun': {'condition': 'service_healthy', 'restart': True},
             })
+        if app == 'transmission' and not behind_vpn:
+            # Lets other peers connect in. NordVPN forwards no ports, so behind the VPN this would do nothing.
+            peer = ports['transmission_peer']
+            configuration.setdefault('ports', []).extend([f'{peer}:{peer}/tcp', f'{peer}:{peer}/udp'])
         if app in DOWNLOAD_PORTS:
             services['dashboard']['environment'][f'MARTINFLIX_{app.upper()}_WEB_PORT'] = str(ports[app])
             owner = services.setdefault('gluetun', {}) if behind_vpn else configuration
@@ -390,7 +395,8 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
 
     saved_ports = previous.get('ports') or {}
     ports = {}
-    for name in ('dashboard', 'sonarr', 'radarr', *(app for app in downloads if app in DOWNLOAD_PORTS)):
+    for name in ('dashboard', 'sonarr', 'radarr', *(app for app in downloads if app in DOWNLOAD_PORTS),
+                 *(['transmission_peer'] if 'transmission' in downloads else [])):
         requested = getattr(args, name + '_port')
         ports[name] = requested if requested is not None else saved_ports.get(name, DEFAULT_PORTS[name])
     if len(set(ports.values())) != len(ports) or any(not 1024 <= port <= 65535 for port in ports.values()):
@@ -431,7 +437,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     bootstrapping_arr = fresh_arr or any(arr_needs_login(state / app / 'config.xml') for app in APPS)
     bootstrapping_prowlarr = 'prowlarr' in downloads and (fresh_arr or arr_needs_login(state / 'prowlarr/config.xml'))
     environment['MARTINFLIX_DOWNLOAD_BIND'] = str(bind)
-    bindings = [(service, str(bind), port) for service, port in ports.items()]
+    bindings = [(service, str(bind), port) for service, port in ports.items() if service != 'transmission_peer']
+    if 'transmission_peer' in ports and download_network != 'vpn':
+        bindings.append(('transmission_peer', '0.0.0.0', ports['transmission_peer']))
     if bootstrapping_arr and str(bind) != '127.0.0.1':
         bindings.extend((app, '127.0.0.1', ports[app]) for app in APPS)
     if bootstrapping_prowlarr and str(bind) != '127.0.0.1':
@@ -510,7 +518,7 @@ def current_settings(options):
         'VPN': f'NordVPN · {options.get("vpn_city") or options.get("vpn_country") or "Automatic"}' if vpn else 'Not installed',
         'Download apps': ', '.join(apps) or 'None',
         'Download route': (options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')) if apps else 'None',
-        **{f'{name.capitalize()} port': str(port) for name, port in (options.get('ports') or {}).items()},
+        **{f'{name.replace("_", " ").capitalize()} port': str(port) for name, port in (options.get('ports') or {}).items()},
     }
 
 
@@ -538,7 +546,7 @@ def keep_flags(options):
         flags += ['--download-network', options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')]
     for name, port in (options.get('ports') or {}).items():
         if port != DEFAULT_PORTS.get(name):
-            flags += [f'--{name}-port', str(port)]
+            flags += [f'--{name.replace("_", "-")}-port', str(port)]
     return flags
 
 
@@ -636,10 +644,14 @@ def run_installation(plan, state, previous, mode='install'):
             write_secret(runtime_overlay, Path(compose[overlay_index]).read_text())
             compose[overlay_index] = str(runtime_overlay)
         options.setdefault('radarr_indexer_defaults_pending', not (state / 'radarr/config.xml').exists())
-        if options != saved_options(state):
-            write_secret(state / 'install-options.json', json.dumps(options))
         for app in app_dirs:
             private_directory(state / app)
+        if 'transmission' in downloads and not (state / 'transmission/settings.json').exists():
+            # The image copies its own defaults only when this file is missing, so ours win on a new install.
+            write_secret(state / 'transmission/settings.json', TRANSMISSION_SETTINGS.read_text(), trailing_newline=False)
+            options['transmission_defaults_applied'] = True
+        if options != saved_options(state):
+            write_secret(state / 'install-options.json', json.dumps(options))
 
         arr_address = str(bind)
         if bootstrapping_arr:
@@ -680,6 +692,10 @@ def run_installation(plan, state, previous, mode='install'):
             compose_step('   Opening the protected download app logins on your LAN…',
                          ['up', '-d', '--wait', '--wait-timeout', '210', *services])
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
+        if 'transmission' in downloads and not options.get('transmission_defaults_applied'):
+            seed_transmission_defaults(TransmissionRpc(download_address, ports['transmission'], 'admin', transmission_password))
+            options['transmission_defaults_applied'] = True
+            write_secret(state / 'install-options.json', json.dumps(options))
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
         seed_radarr_indexers = options['radarr_indexer_defaults_pending']
         seed_prowlarr = bool(prowlarr_key) and not options.get('prowlarr_indexer_defaults_applied')
@@ -759,6 +775,8 @@ def main():
     parser.add_argument('--enable-flaresolverr', action='store_true')
     parser.add_argument('--prowlarr-port', type=int)
     parser.add_argument('--transmission-port', type=int)
+    parser.add_argument('--transmission-peer-port', type=int,
+                        help='Port Transmission accepts peers on. Defaults to 51155. Published only for direct downloads.')
     parser.add_argument('--sonarr-port', type=int)
     parser.add_argument('--radarr-port', type=int)
     parser.add_argument('--check', action='store_true',

@@ -16,7 +16,7 @@ def arguments(**overrides):
     values = dict(state_dir=None, dashboard_bind=None, dashboard_port=None, media_path=None, enable_downloads=False,
                   enable_vpn=False, vpn_provider='nordvpn', vpn_country=None, vpn_city=None, download_network=None,
                   download_client=None, enable_prowlarr=False, enable_flaresolverr=False, prowlarr_port=None,
-                  transmission_port=None, sonarr_port=None, radarr_port=None, check=False, update=False, reset=False)
+                  transmission_port=None, transmission_peer_port=None, sonarr_port=None, radarr_port=None, check=False, update=False, reset=False)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -60,6 +60,27 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertTrue(plan['bootstrapping_prowlarr'])
         self.assertIn(('prowlarr', '192.168.4.166', 9696), plan['bindings'])
         self.assertIn(('prowlarr', '127.0.0.1', 9696), plan['bindings'])
+
+    def test_transmission_peer_port_is_published_only_for_direct_downloads(self):
+        ports = {'transmission': 9091, 'transmission_peer': 51155}
+        direct = install.download_overlay(['transmission'], ports, False)
+        self.assertEqual(direct['services']['transmission']['ports'],
+                         ['51155:51155/tcp', '51155:51155/udp', '${MARTINFLIX_DOWNLOAD_BIND}:9091:9091'])
+        vpn = install.download_overlay(['transmission'], ports, True)
+        self.assertEqual(vpn['services']['gluetun']['ports'], ['${MARTINFLIX_DOWNLOAD_BIND}:9091:9091'])
+        media = self.root / 'media'
+        media.mkdir()
+        plan = self.plan(media_path=str(media), download_client='transmission', download_network='direct',
+                         transmission_peer_port=51413)
+        self.assertEqual(plan['ports']['transmission_peer'], 51413)
+        self.assertIn(('transmission_peer', '0.0.0.0', 51413), plan['bindings'])
+
+    def test_transmission_settings_carry_the_reference_choices(self):
+        settings = json.loads(install.TRANSMISSION_SETTINGS.read_text())
+        self.assertEqual((settings['ratio-limit'], settings['ratio-limit-enabled']), (0.0, True))
+        self.assertEqual((settings['encryption'], settings['blocklist-enabled'], settings['utp-enabled']), (2, True, True))
+        self.assertEqual(settings['rpc-password'], '')
+        self.assertTrue(settings['incomplete-dir-enabled'])
 
     def test_transmission_requires_media(self):
         with self.assertRaisesRegex(ValueError, 'media directory'):
