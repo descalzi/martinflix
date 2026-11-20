@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-12">
-  <script src="./setup.js?v=wizard-12" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-13">
+  <script src="./setup.js?v=wizard-13" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -100,7 +100,7 @@
           <section class="step" data-step="vpn" aria-labelledby="vpn-title" hidden>
             <h2 id="vpn-title" tabindex="-1">VPN gateway</h2>
             <p class="lede">Gluetun keeps download traffic inside a NordVPN tunnel and blocks it if the tunnel drops.</p>
-            <label class="toggle"><input id="vpn" type="checkbox"><span><strong>Install the VPN gateway</strong><span>Off by default. You’ll need your NordVPN service credentials.</span></span></label>
+            <label class="toggle"><input id="vpn" type="checkbox" checked><span><strong>Install the VPN gateway <span class="tag">Default</span></strong><span>Keeps download traffic inside the tunnel. You’ll need your NordVPN service credentials.</span></span></label>
             <div id="vpn-options" class="field-group" hidden>
               <div class="field">
                 <label for="vpn-provider">Provider</label>
@@ -122,7 +122,7 @@
             <h2 id="downloads-title" tabindex="-1">Downloads, indexers and subtitles</h2>
             <div class="field">
               <label for="download-client">Download client</label>
-              <select id="download-client" aria-describedby="client-help"><option value="">Set up later</option><option value="transmission">Transmission</option></select>
+              <select id="download-client" aria-describedby="client-help"><option value="transmission" selected>Transmission (default with media)</option><option value="">Set up later</option></select>
               <small id="client-help">Transmission needs the media directory from the Media step.</small>
             </div>
             <fieldset class="toggles">

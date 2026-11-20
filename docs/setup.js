@@ -197,7 +197,8 @@ if (typeof document !== 'undefined') {
       vpn: byId('vpn').checked,
       provider: byId('vpn-provider').value,
       exit: byId('vpn-exit').value,
-      downloader: byId('download-client').value,
+      // Transmission saves into the media directory, so like Bazarr it only counts once one is set.
+      downloader: byId('media').value.trim() ? byId('download-client').value : '',
       prowlarr: byId('prowlarr').checked,
       flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
       // Bazarr needs the media directory, so it only counts once one is set.
@@ -374,6 +375,10 @@ if (typeof document !== 'undefined') {
       ? 'Finds subtitles in English, French, Brazilian Portuguese and Spanish, and saves them beside your videos.'
       : 'Needs the media directory from the Media step.';
     byId('flaresolverr').disabled = !options.prowlarr;
+    byId('download-client').disabled = !options.media;
+    byId('client-help').textContent = options.media
+      ? 'Downloads go to the downloads folder in your media directory.'
+      : 'Transmission needs the media directory from the Media step, so it is off for now.';
     route.disabled = !options.vpn || !hasDownloadApps;
     route.checked = !route.disabled && preferVpnRoute;
     byId('route-help').textContent = !options.vpn ? 'Turn on the VPN gateway in the previous step to use this.'
