@@ -402,23 +402,43 @@ if (page === 'library') {
   libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'), {upcomingOnly: true});
 }
 
-/* Add page: search Sonarr or Radarr's own lookup and add a title with the MartinFlix defaults. */
+/* Add page: search Sonarr or Radarr's own lookup, then add a title with the defaults or the admin's choices. */
 const addSettings = {};
+const addResults = new Map();
 
 function addKind() {
   return document.querySelector('#add-form input[name="kind"]:checked').value;
 }
 
+async function loadAddSettings(kind) {
+  addSettings[kind] ??= get('/api/add-settings/' + kind).catch(error => {
+    delete addSettings[kind];
+    throw error;
+  });
+  return addSettings[kind];
+}
+
+function sizeLabel(bytes) {
+  if (bytes == null) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit += 1; }
+  return `${new Intl.NumberFormat(undefined, {maximumFractionDigits: value < 10 ? 1 : 0}).format(value)} ${units[unit]} free`;
+}
+
 async function showAddTarget(kind) {
   const target = $('#add-target');
   try {
-    addSettings[kind] ??= await get('/api/add-settings/' + kind);
+    const settings = await loadAddSettings(kind);
     if (addKind() !== kind) return;
-    const settings = addSettings[kind];
     target.classList.toggle('is-problem', !settings.ready);
-    target.textContent = settings.ready
-      ? `Adds to ${settings.folder} with the ${settings.profile} profile, then starts searching.`
-      : settings.problem;
+    if (!settings.ready) {
+      target.textContent = settings.problem;
+      return;
+    }
+    const profile = settings.profiles.find(item => item.id === settings.profile);
+    target.textContent = `New titles use the ${profile.name} profile and ${settings.folder} unless you change them when adding.`;
   } catch {
     target.textContent = 'Could not read the add settings.';
   }
@@ -430,19 +450,134 @@ function resultCard(item, kind) {
     : [item.year, item.studio, item.runtime ? `${item.runtime} min` : ''];
   const action = item.added
     ? '<span class="badge ok">In your library</span>'
-    : `<button class="button button-primary button-small" type="button" data-add="${esc(item.id)}">${icon('plus')}Add</button>`;
-  return `<li class="result">
+    : `<button class="button button-primary button-small" type="button" data-add="${esc(item.id)}" aria-expanded="false">${icon('plus')}Add</button>`;
+  return `<li class="result" data-id="${esc(item.id)}">
     <div class="poster-art result-art">
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="120" height="180">` : ''}
     </div>
     <div class="result-body">
-      <h3>${esc(item.title)}</h3>
+      <h3 id="result-title-${esc(item.id)}">${esc(item.title)}</h3>
       <p class="result-facts">${esc(facts.filter(Boolean).join(' · '))}</p>
       ${item.overview ? `<p class="result-overview">${esc(item.overview)}</p>` : ''}
-      <div class="result-action">${action}</div>
     </div>
+    <div class="result-action">${action}</div>
   </li>`;
+}
+
+function seasonLabel(number) {
+  return number === 0 ? 'Specials' : String(number);
+}
+
+/** The options panel shown in place of the Add button. Every control starts on the default. */
+function addOptionsForm(item, kind, settings) {
+  const series = kind === 'sonarr';
+  const id = `add-${kind}-${item.id}`;
+  const profiles = settings.profiles.map(profile =>
+    `<option value="${esc(profile.id)}"${profile.id === settings.profile ? ' selected' : ''}>${esc(profile.name)}</option>`).join('');
+  const folders = settings.folders.length > 1 ? `<div class="field"><label for="${id}-folder">Folder</label>
+    <select id="${id}-folder" name="folder">${settings.folders.map(folder =>
+      `<option value="${esc(folder.path)}"${folder.path === settings.folder ? ' selected' : ''}${folder.accessible ? '' : ' disabled'}>${esc(folder.path)}${folder.freeSpace != null ? ` · ${esc(sizeLabel(folder.freeSpace))}` : ''}</option>`).join('')}</select></div>` : '';
+  const regular = (item.seasonNumbers || []).filter(number => number > 0);
+  const latest = regular.at(-1);
+  const choice = series ? `<div class="field"><label for="${id}-monitor">Seasons</label>
+      <select id="${id}-monitor" name="monitor">
+        <option value="all" selected>All seasons</option>
+        <option value="future">Future episodes only</option>
+        ${latest ? `<option value="latest">Latest season (${latest})</option>` : ''}
+        ${regular.length > 1 ? '<option value="first">First season</option>' : ''}
+        ${(item.seasonNumbers || []).length ? '<option value="custom">Choose seasons…</option>' : ''}
+      </select></div>`
+    : `<div class="field"><label for="${id}-availability">Available from</label>
+      <select id="${id}-availability" name="availability" aria-describedby="${id}-availability-help">
+        <option value="announced">Announcement</option>
+        <option value="inCinemas">Cinema release</option>
+        <option value="released" selected>Digital or physical release</option>
+      </select>
+      <small class="option-help" id="${id}-availability-help">Radarr only grabs the film once it reaches this point.</small></div>`;
+  const seasons = series && (item.seasonNumbers || []).length ? `<fieldset class="season-picker" hidden>
+      <legend>Seasons to monitor</legend>
+      <div class="chips">${item.seasonNumbers.map(number => `<label class="chip"><input type="checkbox" name="season" value="${number}"${number > 0 ? ' checked' : ''}><span>${seasonLabel(number)}</span></label>`).join('')}</div>
+    </fieldset>` : '';
+  return `<form class="add-options" aria-labelledby="result-title-${esc(item.id)}" novalidate>
+    <div class="option-row">
+      <div class="field"><label for="${id}-profile">Quality profile</label><select id="${id}-profile" name="profile">${profiles}</select></div>
+      ${choice}
+      ${folders}
+    </div>
+    ${seasons}
+    <label class="check"><input type="checkbox" name="search" checked><span>Start searching now</span></label>
+    <p class="error error-inline" role="alert" hidden></p>
+    <div class="option-actions">
+      <button class="button button-primary" type="submit">${icon('plus')}Add ${series ? 'series' : 'film'}</button>
+      <button class="button button-quiet" type="button" data-cancel>Cancel</button>
+    </div>
+  </form>`;
+}
+
+function addButton(id) {
+  return `<button class="button button-primary button-small" type="button" data-add="${esc(id)}" aria-expanded="false">${icon('plus')}Add</button>`;
+}
+
+function closeOptions(card) {
+  card.classList.remove('is-open');
+  card.querySelector('.result-action').innerHTML = addButton(card.dataset.id);
+  card.querySelector('[data-add]').focus();
+}
+
+async function openOptions(card, kind) {
+  const action = card.querySelector('.result-action');
+  const item = addResults.get(`${kind}:${card.dataset.id}`);
+  action.querySelector('[data-add]').disabled = true;
+  try {
+    const settings = await loadAddSettings(kind);
+    if (!settings.ready) throw new Error(settings.problem);
+    for (const open of document.querySelectorAll('.result.is-open')) if (open !== card) closeOptions(open);
+    card.classList.add('is-open');
+    action.innerHTML = addOptionsForm(item, kind, settings);
+    action.querySelector('select').focus();
+    card.scrollIntoView({block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  } catch (error) {
+    action.innerHTML = `<p class="error error-inline">${esc(error.message || 'Could not load the add options.')}</p>${addButton(card.dataset.id)}`;
+  }
+}
+
+async function submitOptions(form, card, kind) {
+  const error = form.querySelector('.error');
+  const data = new FormData(form);
+  const request = {id: Number(card.dataset.id), profile: Number(data.get('profile')), search: data.get('search') === 'on'};
+  if (data.get('folder')) request.folder = data.get('folder');
+  if (kind === 'sonarr') {
+    request.monitor = data.get('monitor');
+    if (request.monitor === 'custom') {
+      request.seasons = data.getAll('season').map(Number);
+      if (!request.seasons.length) {
+        error.textContent = 'Choose at least one season, or pick another option under Seasons.';
+        error.hidden = false;
+        return;
+      }
+    }
+  } else {
+    request.availability = data.get('availability');
+  }
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
+  submit.textContent = 'Adding…';
+  error.hidden = true;
+  try {
+    const response = await fetch('/api/add/' + kind, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(request),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'Could not add this title.');
+    card.classList.remove('is-open');
+    card.querySelector('.result-action').innerHTML = `<span class="badge ok" role="status">${result.searching ? 'Added · searching' : 'Added'}</span>`;
+  } catch (failure) {
+    error.textContent = failure.message;
+    error.hidden = false;
+    submit.disabled = false;
+    submit.innerHTML = `${icon('plus')}Add ${kind === 'sonarr' ? 'series' : 'film'}`;
+  }
 }
 
 if (page === 'add') {
@@ -471,6 +606,7 @@ if (page === 'add') {
     try {
       const data = await get(`/api/search/${kind}?` + new URLSearchParams({term: query}));
       if (lastSearch.kind !== kind || lastSearch.query !== query) return;
+      for (const item of data.results) addResults.set(`${kind}:${item.id}`, item);
       results.innerHTML = data.results.length
         ? `<p class="result-count">${data.results.length} ${data.results.length === 1 ? 'match' : 'matches'} for “${esc(query)}”</p><ul class="results" data-kind="${kind}">${data.results.map(item => resultCard(item, kind)).join('')}</ul>`
         : `<div class="empty-state"><h3>Nothing found for “${esc(query)}”</h3><p>Check the spelling, or try the original title.</p></div>`;
@@ -481,23 +617,26 @@ if (page === 'add') {
       button.textContent = 'Search';
     }
   });
-  results.addEventListener('click', async event => {
-    const button = event.target.closest('[data-add]');
-    if (!button) return;
-    const kind = button.closest('.results').dataset.kind;
-    const action = button.parentElement;
-    button.disabled = true;
-    button.innerHTML = 'Adding…';
-    try {
-      const response = await fetch('/api/add/' + kind, {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: Number(button.dataset.add)}),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not add this title.');
-      action.innerHTML = `<span class="badge ok">Added · searching</span>`;
-    } catch (error) {
-      action.innerHTML = `<p class="error error-inline">${esc(error.message)}</p>`;
-    }
+  results.addEventListener('click', event => {
+    const card = event.target.closest('.result');
+    if (!card) return;
+    const kind = card.closest('.results').dataset.kind;
+    if (event.target.closest('[data-add]')) openOptions(card, kind);
+    if (event.target.closest('[data-cancel]')) closeOptions(card);
+  });
+  results.addEventListener('change', event => {
+    if (event.target.name !== 'monitor') return;
+    const picker = event.target.form.querySelector('.season-picker');
+    if (picker) picker.hidden = event.target.value !== 'custom';
+  });
+  results.addEventListener('submit', event => {
+    if (!event.target.matches('.add-options')) return;
+    event.preventDefault();
+    const card = event.target.closest('.result');
+    submitOptions(event.target, card, card.closest('.results').dataset.kind);
+  });
+  results.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && event.target.closest('.add-options')) closeOptions(event.target.closest('.result'));
   });
   showAddTarget(addKind());
   if (new URLSearchParams(window.location.search).get('kind') === 'radarr') {

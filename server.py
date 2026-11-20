@@ -516,31 +516,48 @@ def arr_json(connection, endpoint, payload=None, method=None):
     return json.loads(body) if body else None
 
 
-def add_target(kind):
-    """The quality profile and root folder new titles use: the MartinFlix profile and the first root folder."""
+SERIES_MONITOR = ('all', 'future', 'latest', 'first', 'custom')
+FILM_AVAILABILITY = ('announced', 'inCinemas', 'released')
+
+
+def add_choices(kind):
+    """The quality profiles and root folders a new title can use, with the MartinFlix defaults marked."""
     connection = arr_connection(kind)
     if connection is None:
         raise AddError(f'Connect {kind.capitalize()} to the dashboard first.')
-    profiles = arr_json(connection, '/api/v3/qualityprofile')
-    folders = arr_json(connection, '/api/v3/rootfolder')
-    if not isinstance(profiles, list) or not profiles:
+    profiles = [item for item in arr_json(connection, '/api/v3/qualityprofile') or []
+                if isinstance(item, dict) and type(item.get('id')) is int and isinstance(item.get('name'), str)]
+    folders = [item for item in arr_json(connection, '/api/v3/rootfolder') or []
+               if isinstance(item, dict) and isinstance(item.get('path'), str)]
+    if not profiles:
         raise AddError(f'{kind.capitalize()} has no quality profiles.')
-    if not isinstance(folders, list) or not folders:
+    if not folders:
         raise AddError(f'{kind.capitalize()} has no root folder yet. Rerun setup with --media-path, '
                        f'or add a root folder in {kind.capitalize()}.')
-    profile = next((item for item in profiles if item.get('name') == PROFILE_NAME), profiles[0])
+    profile = next((item for item in profiles if item['name'] == PROFILE_NAME), profiles[0])
     folder = next((item for item in folders if item.get('accessible', True)), folders[0])
-    return connection, profile, folder
+    return connection, profiles, folders, profile, folder
 
 
 def add_settings(kind):
     try:
-        _, profile, folder = add_target(kind)
+        _, profiles, folders, profile, folder = add_choices(kind)
     except AddError as exc:
         return {'ready': False, 'problem': str(exc)}
     except (OSError, ValueError, TypeError, KeyError):
         return {'ready': False, 'problem': f'Could not reach {kind.capitalize()}.'}
-    return {'ready': True, 'profile': profile.get('name'), 'folder': folder.get('path')}
+    return {
+        'ready': True,
+        'profiles': [{'id': item['id'], 'name': item['name']} for item in profiles],
+        'folders': [{'path': item['path'], 'freeSpace': item.get('freeSpace') if type(item.get('freeSpace')) is int else None,
+                     'accessible': item.get('accessible', True) is not False} for item in folders],
+        'profile': profile['id'], 'folder': folder['path'],
+    }
+
+
+def season_numbers(item):
+    return sorted({season['seasonNumber'] for season in item.get('seasons') or []
+                   if isinstance(season, dict) and type(season.get('seasonNumber')) is int and season['seasonNumber'] >= 0})
 
 
 def search_titles(kind, term):
@@ -565,8 +582,8 @@ def search_titles(kind, term):
         }
         if kind == 'sonarr':
             entry['network'] = item.get('network') if isinstance(item.get('network'), str) else ''
-            entry['seasons'] = item.get('seasonCount') or len([season for season in item.get('seasons') or []
-                                                               if season.get('seasonNumber')])
+            entry['seasonNumbers'] = season_numbers(item)
+            entry['seasons'] = item.get('seasonCount') or len([number for number in entry['seasonNumbers'] if number])
         else:
             entry['studio'] = item.get('studio') if isinstance(item.get('studio'), str) else ''
             entry['runtime'] = item.get('runtime') if type(item.get('runtime')) is int else None
@@ -576,8 +593,22 @@ def search_titles(kind, term):
     return found
 
 
-def add_title(kind, identifier):
-    connection, profile, folder = add_target(kind)
+def add_title(kind, request):
+    """Add one title with the choices from the Add page. Every choice is checked against what the app offers."""
+    identifier = request.get('id')
+    if type(identifier) is not int or not 0 < identifier <= 2147483647:
+        raise AddError('Choose a title from the search results.')
+    connection, profiles, folders, default_profile, default_folder = add_choices(kind)
+    profile_id = request.get('profile', default_profile['id'])
+    if not any(item['id'] == profile_id for item in profiles):
+        raise AddError('That quality profile no longer exists. Reload the page and choose again.')
+    folder_path = request.get('folder', default_folder['path'])
+    if not any(item['path'] == folder_path for item in folders):
+        raise AddError('That folder is no longer a root folder. Reload the page and choose again.')
+    search = request.get('search', True)
+    if type(search) is not bool:
+        raise AddError('Invalid search choice.')
+
     if kind == 'sonarr':
         matches = arr_json(connection, '/api/v3/series/lookup?' + urllib.parse.urlencode({'term': f'tvdb:{identifier}'}))
         item = next((match for match in matches or [] if match.get('tvdbId') == identifier), None)
@@ -590,15 +621,41 @@ def add_title(kind, identifier):
     if item.get('id') or item.get('isExisting'):
         raise AddError(f'{item.get("title", "This title")} is already in {kind.capitalize()}.')
     item.pop('id', None)
-    item.update(qualityProfileId=profile['id'], rootFolderPath=folder['path'], monitored=True)
+    item.update(qualityProfileId=profile_id, rootFolderPath=folder_path, monitored=True)
+
     if kind == 'sonarr':
-        item.update(seasonFolder=True, addOptions={'monitor': 'all', 'searchForMissingEpisodes': True,
-                                                  'searchForCutoffUnmetEpisodes': False})
+        monitor = request.get('monitor', 'all')
+        if monitor not in SERIES_MONITOR:
+            raise AddError('Choose which seasons to monitor.')
+        numbers = season_numbers(item)
+        regular = [number for number in numbers if number > 0]
+        if monitor == 'latest':
+            chosen = set(regular[-1:])
+        elif monitor == 'first':
+            chosen = set(regular[:1])
+        elif monitor == 'custom':
+            chosen = request.get('seasons')
+            if not isinstance(chosen, list) or not chosen or not all(type(number) is int for number in chosen) \
+                    or not set(chosen) <= set(numbers):
+                raise AddError('Choose at least one season.')
+            chosen = set(chosen)
+        options = {'searchForMissingEpisodes': search, 'searchForCutoffUnmetEpisodes': False}
+        if monitor in ('all', 'future'):
+            # Sonarr's own monitor modes; "future" follows only episodes that have not aired yet.
+            options['monitor'] = monitor
+        else:
+            # Monitor exactly the chosen seasons. Specials stay unmonitored unless chosen.
+            item['seasons'] = [dict(season, monitored=season.get('seasonNumber') in chosen)
+                               for season in item.get('seasons') or [] if isinstance(season, dict)]
+        item.update(seasonFolder=True, addOptions=options)
         added = arr_json(connection, '/api/v3/series', payload=item, method='POST')
     else:
-        item.update(minimumAvailability='released', addOptions={'searchForMovie': True})
+        availability = request.get('availability', 'released')
+        if availability not in FILM_AVAILABILITY:
+            raise AddError('Choose when the film counts as available.')
+        item.update(minimumAvailability=availability, addOptions={'searchForMovie': search})
         added = arr_json(connection, '/api/v3/movie', payload=item, method='POST')
-    return {'added': True, 'title': (added or item).get('title') or item.get('title')}
+    return {'added': True, 'title': (added or item).get('title') or item.get('title'), 'searching': search}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -732,16 +789,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 < length <= 256 or self.headers.get_content_type() != 'application/json':
+            if not 0 < length <= 4096 or self.headers.get_content_type() != 'application/json':
                 raise ValueError
-            identifier = json.loads(self.rfile.read(length)).get('id')
-            if type(identifier) is not int or not 0 < identifier <= 2147483647:
+            request = json.loads(self.rfile.read(length))
+            if not isinstance(request, dict):
                 raise ValueError
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError):
             self.send_json({'error': 'Invalid request.'}, 400)
             return
         try:
-            self.send_json(add_title(kind, identifier))
+            self.send_json(add_title(kind, request))
         except AddError as exc:
             self.send_json({'error': str(exc)}, 409)
         except urllib.error.HTTPError as exc:

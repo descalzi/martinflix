@@ -280,12 +280,40 @@
   .result-count { margin-bottom: var(--space-3); color: var(--fg-muted); font-size: var(--text-sm); }
   .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--space-3); }
   .result { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-4); padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
-  .result-art .poster-placeholder { font-size: var(--text-xs); }
+  .result-art .poster-placeholder { padding: var(--space-2); font-size: .6875rem; overflow-wrap: break-word; }
   .result-body { display: grid; align-content: start; gap: var(--space-1); min-width: 0; }
   .result-body h3 { font-size: var(--text-lg); overflow-wrap: anywhere; }
   .result-facts { color: var(--fg-muted); font-size: var(--text-sm); }
   .result-overview { font-size: var(--text-sm); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
-  .result-action { margin-top: var(--space-2); }
+  .result-action { grid-column: 2; margin-top: calc(-1 * var(--space-2)); min-width: 0; }
+  .result.is-open .result-action { grid-column: 1 / -1; margin-top: 0; }
+  .result { scroll-margin-top: var(--space-5); align-content: start; }
+  .result.is-open { grid-column: 1 / -1; border-color: var(--accent); }
+  .add-options { display: grid; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+  .option-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-3); }
+  .field { display: grid; gap: var(--space-1); min-width: 0; }
+  .field label, .season-picker legend { font-weight: 600; font-size: var(--text-sm); }
+  .field select {
+    width: 100%; min-height: 44px; padding: 0 var(--space-3);
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  }
+  .field select:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 40%, transparent); outline-offset: 0; border-color: var(--accent); }
+  .option-help { color: var(--fg-muted); font-size: var(--text-xs); }
+  .season-picker { border: 0; padding: 0; margin: 0; min-width: 0; }
+  .season-picker legend { padding: 0; margin-bottom: var(--space-2); }
+  .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .chip { position: relative; }
+  .chip input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .chip span {
+    display: grid; place-items: center; min-width: 44px; min-height: 40px; padding: 0 var(--space-3);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--bg);
+    font-weight: 600; font-size: var(--text-sm); font-variant-numeric: tabular-nums;
+  }
+  .chip input:checked + span { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .chip input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .check { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 40px; font-weight: 500; cursor: pointer; }
+  .check input { width: 18px; height: 18px; margin: 0; }
+  .option-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .error { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: var(--crit-bg); color: var(--crit); font-weight: 500; }
   .error-inline { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
 
@@ -382,7 +410,7 @@
     /* On phones the overview rows scroll sideways, so both lists stay within a thumb's reach. */
     .poster-grid.is-rail { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 42%; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: var(--space-2); }
     .poster-grid.is-rail > li { scroll-snap-align: start; }
-    .result { grid-template-columns: 72px minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3); }
+    .result { grid-template-columns: 72px minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3); scroll-margin-top: 132px; }
     .search, .search input { width: 100%; }
     .table th:nth-child(2), .table td:nth-child(2) { display: none; }
   }

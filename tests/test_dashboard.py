@@ -101,6 +101,64 @@ class PasswordSyncTests(unittest.TestCase):
             self.assertEqual(server.synced_apps(), [])
 
 
+class AddTitleTests(unittest.TestCase):
+    profiles = [{'id': 1, 'name': 'Any'}, {'id': 4, 'name': 'MartinFlix HD (720p/1080p)'}, {'id': 6, 'name': 'Ultra-HD'}]
+    folders = [{'path': '/data/TV Shows', 'accessible': True}, {'path': '/archive/TV', 'accessible': True}]
+    series = {'title': 'Slow Horses', 'tvdbId': 1234, 'seasons': [{'seasonNumber': n, 'monitored': True} for n in range(5)]}
+
+    def add(self, kind, request, lookup):
+        posted = {}
+
+        def fake_json(connection, endpoint, payload=None, method=None):
+            if method == 'POST':
+                posted.update(payload)
+                return payload
+            return lookup
+
+        choices = (('base', 'key'), self.profiles, self.folders, self.profiles[1], self.folders[0])
+        with patch.object(server, 'add_choices', return_value=choices), patch.object(server, 'arr_json', side_effect=fake_json):
+            result = server.add_title(kind, request)
+        return result, posted
+
+    def monitored(self, posted):
+        return [season['seasonNumber'] for season in posted['seasons'] if season['monitored']]
+
+    def test_defaults_match_the_old_behaviour(self):
+        _, posted = self.add('sonarr', {'id': 1234}, [dict(self.series)])
+        self.assertEqual(posted['qualityProfileId'], 4)
+        self.assertEqual(posted['rootFolderPath'], '/data/TV Shows')
+        self.assertEqual(posted['addOptions'], {'searchForMissingEpisodes': True, 'searchForCutoffUnmetEpisodes': False, 'monitor': 'all'})
+
+    def test_chosen_profile_folder_and_seasons(self):
+        result, posted = self.add('sonarr', {'id': 1234, 'profile': 6, 'folder': '/archive/TV', 'monitor': 'custom',
+                                             'seasons': [2, 4], 'search': False}, [dict(self.series)])
+        self.assertEqual((posted['qualityProfileId'], posted['rootFolderPath']), (6, '/archive/TV'))
+        self.assertEqual(self.monitored(posted), [2, 4])
+        self.assertNotIn('monitor', posted['addOptions'])
+        self.assertFalse(posted['addOptions']['searchForMissingEpisodes'])
+        self.assertFalse(result['searching'])
+
+    def test_latest_and_first_season_skip_specials(self):
+        _, posted = self.add('sonarr', {'id': 1234, 'monitor': 'latest'}, [dict(self.series)])
+        self.assertEqual(self.monitored(posted), [4])
+        _, posted = self.add('sonarr', {'id': 1234, 'monitor': 'first'}, [dict(self.series)])
+        self.assertEqual(self.monitored(posted), [1])
+
+    def test_film_availability(self):
+        _, posted = self.add('radarr', {'id': 99, 'availability': 'inCinemas'}, {'title': 'Hamnet', 'tmdbId': 99})
+        self.assertEqual(posted['minimumAvailability'], 'inCinemas')
+        self.assertEqual(posted['addOptions'], {'searchForMovie': True})
+
+    def test_choices_outside_what_the_app_offers_are_refused(self):
+        for request in ({'id': 1234, 'profile': 77}, {'id': 1234, 'folder': '/etc'}, {'id': 1234, 'monitor': 'pilot'},
+                        {'id': 1234, 'monitor': 'custom', 'seasons': [9]}, {'id': 1234, 'monitor': 'custom', 'seasons': []},
+                        {'id': 1234, 'search': 'yes'}, {'id': 'x'}):
+            with self.assertRaises(server.AddError, msg=request):
+                self.add('sonarr', request, [dict(self.series)])
+        with self.assertRaises(server.AddError):
+            self.add('radarr', {'id': 99, 'availability': 'tomorrow'}, {'title': 'Hamnet', 'tmdbId': 99})
+
+
 class RouteTests(unittest.TestCase):
     def request(self, path):
         handler = object.__new__(server.Handler)
