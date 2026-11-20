@@ -113,11 +113,14 @@ class InstallerPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'enable-prowlarr'):
             self.plan(enable_flaresolverr=True)
 
-    def test_download_route_cannot_change_without_reset(self):
+    def test_download_route_can_change_on_update(self):
         previous = {'download_apps': ['prowlarr'], 'download_network': 'direct'}
         with patch.object(install.Path, 'is_char_device', return_value=True):
-            with self.assertRaisesRegex(ValueError, '--reset'):
-                self.plan(previous, download_network='vpn')
+            plan = self.plan(previous, enable_vpn=True, download_network='vpn')
+        self.assertEqual((plan['vpn'], plan['download_network']), (True, 'vpn'))
+        with patch.object(install.Path, 'is_char_device', return_value=True):
+            plan = self.plan(previous, enable_vpn=True)
+        self.assertEqual(plan['download_network'], 'direct', 'adding the gateway alone keeps the current route')
 
     def test_duplicate_ports_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'distinct ports'):
@@ -186,6 +189,54 @@ class BazarrTests(unittest.TestCase):
             fields = self.fields(seed=True)
         self.assertNotIn('opensubtitlescom', [value for name, value in fields if name == 'settings-general-enabled_providers'])
         self.assertNotIn('settings-opensubtitlescom-username', dict(fields))
+
+
+class RouteChangeTests(unittest.TestCase):
+    """Moving the download apps behind the VPN, or back, repoints every saved connection."""
+
+    def setUp(self):
+        self.puts, self.deletes, self.posts = [], [], []
+
+    def api(self, records):
+        def request(route, payload=None, method=None):
+            if method == 'PUT':
+                self.puts.append((route, payload))
+            elif method == 'DELETE':
+                self.deletes.append(route)
+            elif payload is not None:
+                self.posts.append((route, payload))
+            else:
+                return records.get(route, [])
+        return SimpleNamespace(name='App', request=request)
+
+    def test_transmission_connection_and_mapping_follow_the_route(self):
+        api = self.api({
+            'downloadclient': [{'id': 3, 'name': 'MartinFlix Transmission', 'implementation': 'Transmission', 'fields': [
+                {'name': 'host', 'value': 'transmission'}, {'name': 'username', 'value': 'admin'},
+                {'name': 'password', 'value': '********'}]}],
+            'remotepathmapping': [{'id': 5, 'host': 'transmission', 'remotePath': '/downloads/', 'localPath': '/data/downloads/'},
+                                  {'id': 6, 'host': 'nas', 'remotePath': '/downloads/', 'localPath': '/elsewhere/'}],
+        })
+        configure.sync_transmission_client(api, 'gluetun', 'shared')
+        configure.ensure_download_path(api, 'gluetun')
+        route, payload = self.puts[0]
+        self.assertEqual(route, 'downloadclient/3?forceSave=true')
+        self.assertEqual({field['name']: field['value'] for field in payload['fields']},
+                         {'host': 'gluetun', 'username': 'admin', 'password': 'shared'})
+        self.assertEqual(self.deletes, ['remotepathmapping/5'], 'only the old route\'s mapping goes')
+        self.assertEqual(self.posts, [('remotepathmapping', {'host': 'gluetun', 'remotePath': '/downloads/', 'localPath': '/data/downloads/'})])
+
+    def test_prowlarr_urls_and_flaresolverr_proxy_follow_the_route(self):
+        prowlarr = self.api({
+            'applications': [{'id': 1, 'implementation': 'Sonarr', 'fields': [{'name': 'prowlarrUrl', 'value': 'http://prowlarr:9696'}]},
+                             {'id': 2, 'implementation': 'Radarr', 'fields': [{'name': 'prowlarrUrl', 'value': 'http://gluetun:9696'}]},
+                             {'id': 3, 'implementation': 'Lidarr', 'fields': [{'name': 'prowlarrUrl', 'value': 'http://prowlarr:9696'}]}],
+            'indexerproxy': [{'id': 4, 'implementation': 'FlareSolverr', 'fields': [{'name': 'host', 'value': 'http://flaresolverr:8191/'}]},
+                             {'id': 5, 'implementation': 'FlareSolverr', 'fields': [{'name': 'host', 'value': 'http://custom:8191/'}]}],
+        })
+        configure.sync_prowlarr_routes(prowlarr, 'gluetun', True)
+        self.assertEqual([route for route, _ in self.puts], ['applications/1?forceSave=true', 'indexerproxy/4?forceSave=true'])
+        self.assertEqual(self.puts[1][1]['fields'][0]['value'], 'http://127.0.0.1:8191/')
 
 
 class SharedPasswordTests(unittest.TestCase):

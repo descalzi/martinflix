@@ -434,9 +434,6 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     previous_network = previous.get('download_network') or ('vpn' if previous.get('downloads') else None)
     default_network = 'vpn' if args.enable_downloads or args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') else 'direct'
     download_network = (args.download_network or previous_network or default_network) if downloads else None
-    if previous_network and download_network != previous_network:
-        raise ValueError('This download stack already has a network route. Changing it requires migrating its app connections. '
-                         'To choose a different route, start from scratch with --reset.')
     vpn = bool(args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') or download_network == 'vpn')
     vpn_country = args.vpn_country or ('' if args.vpn_city else previous.get('vpn_country') or '')
     vpn_city = args.vpn_city or ('' if args.vpn_country else previous.get('vpn_city'))
@@ -549,7 +546,7 @@ def install(args, overlay_file):
             print('Docker storage has less than 2 GiB free. Free up space if the image download or build fails.', flush=True)
     except OSError:
         pass
-    describe_plan(plan, state, args, current if args.reset else None)
+    describe_plan(plan, state, args, current if existing else None)
     if args.check:
         if args.reset:
             print('Preflight passed. Run the same command without --check. Setup will ask you to type RESET '
@@ -619,7 +616,7 @@ def describe_plan(plan, state, args, current=None):
             print('\nChanges from the current installation')
             for label, old, new in changes:
                 print(f'{label:<{width}}{old} → {new}')
-            flags = keep_flags(current)
+            flags = keep_flags(current) if args.reset else None
             if flags:
                 print('To keep the current settings instead, rerun with:')
                 print('  ' + shlex.join(flags))

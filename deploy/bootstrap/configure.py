@@ -331,28 +331,60 @@ def ensure_connection(api, route, name, implementation, match_field, values, **s
     api.request(route, entry)
 
 
+# Download apps are reached as "gluetun" when they share the VPN's network, otherwise by their own service names.
+# Every run points existing connections at the current route, so the route can change in either direction.
+ROUTE_HOSTS = {'transmission': ('transmission', 'gluetun'), 'prowlarr': ('prowlarr', 'gluetun')}
+FLARESOLVERR_URLS = {True: 'http://127.0.0.1:8191/', False: 'http://flaresolverr:8191/'}
+
+
+def put_if_changed(api, route, item, changes):
+    """Apply field changes to one saved record, writing only when something differs."""
+    changed = False
+    for field in item.get('fields') or []:
+        if field.get('name') in changes and field.get('value') != changes[field['name']]:
+            field['value'] = changes[field['name']]
+            changed = True
+    if changed:
+        api.request(f'{route}/{item["id"]}?forceSave=true', item, method='PUT')
+    return changed
+
+
 def sync_transmission_client(api, host, password):
-    """Point existing Transmission connections at the shared admin login."""
+    """Point MartinFlix's Transmission connection at the current route and the shared admin login."""
     for item in api.request('downloadclient'):
         if item['implementation'] != 'Transmission':
             continue
-        if item['name'] != 'MartinFlix Transmission' and field_value(item, 'host') != host:
+        if item['name'] != 'MartinFlix Transmission' and field_value(item, 'host') not in ROUTE_HOSTS['transmission']:
             continue
+        # Stored passwords come back masked, so set the password on every run.
         for field in item['fields']:
-            if field['name'] == 'username':
-                field['value'] = TRANSMISSION_USER
-            elif field['name'] == 'password':
-                field['value'] = password
-        api.request(f'downloadclient/{item["id"]}?forceSave=true', item, method='PUT')
+            if field['name'] == 'password':
+                field['value'] = None
+        put_if_changed(api, 'downloadclient', item, {'host': host, 'username': TRANSMISSION_USER, 'password': password})
 
 
 def ensure_download_path(api, host):
     mappings = api.request('remotepathmapping')
+    for item in mappings:
+        # A mapping for the other route would point imports at a host that no longer serves Transmission.
+        if item['host'] != host and item['host'] in ROUTE_HOSTS['transmission'] and item['remotePath'].rstrip('/') == '/downloads':
+            api.request(f'remotepathmapping/{item["id"]}', method='DELETE')
     if not any(item['host'] == host and item['remotePath'].rstrip('/') == '/downloads'
                for item in mappings):
         api.request('remotepathmapping', {
             'host': host, 'remotePath': '/downloads/', 'localPath': '/data/downloads/',
         })
+
+
+def sync_prowlarr_routes(prowlarr, prowlarr_host, behind_vpn):
+    """Keep Prowlarr's own address in Sonarr and Radarr, and any FlareSolverr proxy, on the current route."""
+    for item in prowlarr.request('applications'):
+        if item.get('implementation') in ARR_NAMES.values() and \
+                field_value(item, 'prowlarrUrl') in tuple(f'http://{host}:9696' for host in ROUTE_HOSTS['prowlarr']):
+            put_if_changed(prowlarr, 'applications', item, {'prowlarrUrl': f'http://{prowlarr_host}:9696'})
+    for item in prowlarr.request('indexerproxy'):
+        if item.get('implementation') == 'FlareSolverr' and field_value(item, 'host') in FLARESOLVERR_URLS.values():
+            put_if_changed(prowlarr, 'indexerproxy', item, {'host': FLARESOLVERR_URLS[behind_vpn]})
 
 
 def seed_radarr_indexer_defaults(api):
@@ -420,6 +452,8 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
                 'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': f'http://{prowlarr_host}:9696',
                 'apiKey': arr_keys[app],
             }, syncLevel='fullSync')
+    if prowlarr:
+        sync_prowlarr_routes(prowlarr, prowlarr_host, downloads_behind_vpn)
     if prowlarr and seed_prowlarr:
         seed_prowlarr_indexers(prowlarr)
     # Health warnings, such as a missing download folder, otherwise linger until the apps' next scheduled check.

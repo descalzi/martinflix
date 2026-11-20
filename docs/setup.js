@@ -13,12 +13,12 @@ const portOptions = [
 ];
 const STEPS = {
   new: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
-  update: ['task', 'location', 'review'],
+  update: ['task', 'location', 'changes', 'review'],
   reset: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
 };
 const STEP_LABELS = {
   task: 'Task', access: 'Access', media: 'Media', vpn: 'VPN', downloads: 'Downloads',
-  options: 'Ports & storage', location: 'Installation', review: 'Review',
+  options: 'Ports & storage', location: 'Installation', changes: 'Changes', review: 'Review',
 };
 
 function shellQuote(value) {
@@ -79,6 +79,32 @@ function validateStep(step, options) {
     checkPorts(options);
   }
   if (step === 'location') checkPath(options.state, 'State directory');
+  if (step === 'changes') {
+    const change = options.changes || {};
+    if (change.access === 'lan') checkAddress(change.address);
+    checkPath(change.media, 'Media directory');
+    if (change.flaresolverr && !change.prowlarr && change.prowlarrInstalled === false) {
+      throw new Error('FlareSolverr needs Prowlarr.');
+    }
+  }
+}
+
+/** Flags for the changes chosen on an update. Anything left as it is adds nothing. */
+function changeArguments(change) {
+  const args = [];
+  if (change.access === 'local') args.push('--dashboard-bind=127.0.0.1');
+  if (change.access === 'lan') args.push('--dashboard-bind=' + shellQuote(change.address));
+  if (change.media) args.push('--media-path=' + shellQuote(change.media));
+  if (change.vpn) {
+    args.push('--enable-vpn');
+    args.push((change.exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(change.exit));
+  }
+  if (change.transmission) args.push('--download-client=transmission');
+  if (change.prowlarr) args.push('--enable-prowlarr');
+  if (change.flaresolverr) args.push('--enable-flaresolverr');
+  if (change.bazarr) args.push('--enable-bazarr');
+  if (change.route && change.route !== 'keep') args.push('--download-network=' + change.route);
+  return args;
 }
 
 function installArguments(options) {
@@ -87,8 +113,9 @@ function installArguments(options) {
   if (mode === 'update') {
     args.push('--update');
     validateStep('location', options);
+    validateStep('changes', options);
     if (options.state) args.push('--state-dir=' + shellQuote(options.state));
-    return args;
+    return [...args, ...changeArguments(options.changes || {})];
   }
   for (const step of ['access', 'media', 'downloads', 'options']) validateStep(step, options);
   if (options.lan) args.push('--dashboard-bind=' + shellQuote(options.address));
@@ -126,7 +153,7 @@ function buildCommands(options) {
       : 'Changes nothing. Fix anything it reports and run it again.'};
   const run = {
     new: {title: 'Install', command: install, note: 'Safe to rerun with the same options to resume.'},
-    update: {title: 'Update', command: install, note: 'Containers may restart briefly. App data and passwords are kept.'},
+    update: {title: 'Update', command: install, note: 'Containers may restart briefly. App data, passwords and anything you didn’t change are kept.'},
     reset: {title: 'Reset and install', command: install, note: 'Type RESET when the installer asks.'},
   }[mode];
   return [fetch, check, run];
@@ -178,6 +205,18 @@ if (typeof document !== 'undefined') {
       behindVpn: byId('vpn').checked && preferVpnRoute,
       state: (update ? byId('state-update') : byId('state')).value.trim(),
       ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
+      changes: {
+        access: byId('u-access').value,
+        address: byId('u-address').value.trim(),
+        vpn: byId('u-vpn').checked,
+        exit: byId('u-vpn-exit').value,
+        route: byId('u-route').value,
+        transmission: byId('u-transmission').checked,
+        prowlarr: byId('u-prowlarr').checked,
+        flaresolverr: byId('u-flaresolverr').checked,
+        bazarr: byId('u-bazarr').checked,
+        media: byId('u-media').value.trim(),
+      },
     };
   }
 
@@ -272,8 +311,18 @@ if (typeof document !== 'undefined') {
   function renderReview(options) {
     const summary = [];
     if (options.mode === 'update') {
-      summary.push(['Task', 'Update the existing installation'], ['Installation', options.state || 'Default location'],
-        ['Settings', 'Kept from the last run']);
+      const change = options.changes;
+      summary.push(['Task', 'Update the existing installation'], ['Installation', options.state || 'Default location']);
+      if (change.access === 'local') summary.push(['Open apps from', 'The Linux host only']);
+      if (change.access === 'lan') summary.push(['Open apps from', change.address]);
+      if (change.vpn) summary.push(['Add', `VPN gateway · ${byId('u-vpn-exit').selectedOptions[0].textContent.replace(' (default)', '')}`]);
+      const added = [change.transmission && 'Transmission', change.prowlarr && 'Prowlarr', change.flaresolverr && 'FlareSolverr',
+        change.bazarr && 'Bazarr'].filter(Boolean);
+      if (added.length) summary.push(['Add apps', added.join(', ')]);
+      if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
+      if (change.media) summary.push(['Media directory', change.media]);
+      if (summary.length === 2) summary.push(['Changes', 'None · reapply the latest version with your current settings']);
+      else summary.push(['Everything else', 'Kept as it is']);
     } else {
       summary.push(['Task', options.mode === 'reset' ? 'Start from scratch' : 'New installation']);
       summary.push(['Open apps from', options.lan ? options.address : 'The Linux host only']);
@@ -311,6 +360,13 @@ if (typeof document !== 'undefined') {
     const mediaBase = (options.media || '/mnt/media').replace(/\/+$/, '');
     for (const path of document.querySelectorAll('[data-media-folder]')) path.textContent = mediaBase + '/' + path.dataset.mediaFolder;
     byId('lan-options').hidden = !options.lan;
+    byId('u-lan-options').hidden = options.changes.access !== 'lan';
+    byId('u-vpn-options').hidden = !options.changes.vpn;
+    // Adding the gateway usually means wanting downloads behind it, so suggest that route once.
+    if (event?.target?.id === 'u-vpn' && options.changes.vpn && byId('u-route').value === 'keep') {
+      byId('u-route').value = 'vpn';
+      options.changes.route = 'vpn';
+    }
     byId('vpn-options').hidden = !options.vpn;
     const hasDownloadApps = Boolean(options.downloader || options.prowlarr || options.bazarr);
     byId('bazarr').disabled = !options.media;

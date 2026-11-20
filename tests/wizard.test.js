@@ -32,6 +32,16 @@ test('an update keeps saved settings and only names a custom state directory', (
   assert.strictEqual(flat(check.command), 'python3 deploy/bootstrap/install.py --update --state-dir=/srv/martinflix --check');
 });
 
+test('an update passes only the changes that were made', () => {
+  const [, , plain] = commands({mode: 'update', changes: {access: 'keep', route: 'keep'}});
+  assert.strictEqual(flat(plain.command), 'python3 deploy/bootstrap/install.py --update');
+  const [, , changed] = commands({mode: 'update', changes: {access: 'lan', address: '192.168.4.166', vpn: true, exit: 'United Kingdom',
+    route: 'vpn', bazarr: true, media: '/mnt/media'}});
+  assert.strictEqual(flat(changed.command), "python3 deploy/bootstrap/install.py --update --dashboard-bind=192.168.4.166 " +
+    "--media-path=/mnt/media --enable-vpn --vpn-country='United Kingdom' --enable-bazarr --download-network=vpn");
+  assert.throws(() => commands({mode: 'update', changes: {access: 'lan', address: 'nope'}}), /LAN IPv4/);
+});
+
 test('a reset can be checked before anything is archived', () => {
   const [, check, run] = commands({mode: 'reset'});
   assert.match(flat(check.command), /--reset --check$/);

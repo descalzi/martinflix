@@ -94,6 +94,7 @@ main { width: min(1180px, calc(100% - 40px)); margin: 40px auto 64px; }
 .lede { margin-top: 6px; color: var(--fg-muted); }
 fieldset { border: 0; padding: 0; min-width: 0; }
 legend { padding: 0; margin-bottom: 8px; font-weight: 600; }
+legend small, .field label small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: .875rem; font-weight: 400; }
 .choices { display: grid; gap: 10px; margin-top: 20px; }
 .choice, .toggle {
   display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start;
