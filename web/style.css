@@ -259,10 +259,13 @@
   .discover-head { margin-bottom: var(--space-3); }
   .discover-head h2 { font-size: var(--text-lg); }
   .discover-head p { color: var(--fg-muted); font-size: var(--text-sm); }
-  .discover-rail { display: grid; grid-auto-flow: column; grid-auto-columns: clamp(132px, 15vw, 168px); gap: var(--space-4); overflow-x: auto; padding-bottom: var(--space-3); scroll-snap-type: x proximity; }
+  /* The padding, offset by the negative margin, leaves room for a hovered poster to grow without being clipped. */
+  .discover-rail { display: grid; grid-auto-flow: column; grid-auto-columns: clamp(132px, 15vw, 168px); gap: var(--space-4); overflow-x: auto; padding: 8px 8px var(--space-3); margin: -8px -8px 0; scroll-padding-inline: 8px; scroll-snap-type: x proximity; }
   .discover-card { display: grid; align-content: start; gap: var(--space-1); scroll-snap-align: start; min-width: 0; }
   .discover-card .poster-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .discover-card .poster-art { position: relative; overflow: hidden; cursor: default; }
+  .discover-card .poster-art { position: relative; overflow: hidden; cursor: default; transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out); }
+  /* 4% on a 168px poster is under 4px a side, well inside the 16px gap, so neighbours never move or get covered. */
+  .discover-card:hover .poster-art, .discover-card .poster-art:focus-within { transform: scale(1.04); box-shadow: var(--shadow); }
   .discover-hover {
     position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--space-3);
     padding: var(--space-3); color: #f3efe4; opacity: 0; transition: opacity 150ms var(--ease-out);
