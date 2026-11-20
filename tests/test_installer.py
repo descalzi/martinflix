@@ -277,11 +277,15 @@ class VpnDiagnosisTests(unittest.TestCase):
         _, output = self.diagnose('gluetun-1  | WARN [openvpn] TLS Error: TLS key negotiation failed to occur within 60 seconds')
         self.assertIn('--vpn-protocol tcp', output)
 
-    def test_rejected_login_clears_the_saved_credentials(self):
-        secrets, output = self.diagnose('gluetun-1  | 2026-11-20T13:30:01Z ERROR [openvpn] AUTH: Received control message: AUTH_FAILED')
-        self.assertIn('service credentials', output)
-        self.assertFalse((secrets / 'openvpn_user').exists())
-        self.assertFalse((secrets / 'openvpn_password').exists())
+    def test_rejected_login_keeps_the_credentials_and_names_the_servers(self):
+        secrets, output = self.diagnose(
+            'gluetun-1  | INFO [openvpn] [cz160.nordvpn.com] Peer Connection Initiated with [AF_INET]178.249.209.11:1194\n'
+            'gluetun-1  | ERROR [openvpn] AUTH: Received control message: AUTH_FAILED\n'
+            'gluetun-1  | INFO [openvpn] [cz170.nordvpn.com] Peer Connection Initiated with [AF_INET]178.249.209.21:1194\n'
+            'gluetun-1  | ERROR [openvpn] AUTH: Received control message: AUTH_FAILED')
+        self.assertIn('(cz160.nordvpn.com, cz170.nordvpn.com)', output)
+        self.assertIn('device limit', output)
+        self.assertTrue((secrets / 'openvpn_user').exists(), 'a rejection does not prove the credentials are wrong')
 
     def test_other_failures_keep_the_credentials(self):
         secrets, output = self.diagnose('gluetun-1  | INFO [healthcheck] program has been unhealthy for 6s: restarting VPN')

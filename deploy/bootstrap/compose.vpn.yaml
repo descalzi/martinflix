@@ -9,6 +9,9 @@ services:
       VPN_SERVICE_PROVIDER: "${MARTINFLIX_VPN_PROVIDER}"
       VPN_TYPE: openvpn
       OPENVPN_PROTOCOL: "${MARTINFLIX_VPN_PROTOCOL:-udp}"
+      # Gluetun tells OpenVPN to keep retrying a rejected login on the same server, so one server that refuses the
+      # login stalls the VPN for good. Exiting instead makes Gluetun reconnect to a newly picked server.
+      OPENVPN_FLAGS: "--auth-retry none"
       SERVER_CITIES: "${MARTINFLIX_VPN_CITY}"
       SERVER_COUNTRIES: "${MARTINFLIX_VPN_COUNTRY}"
       FIREWALL: "on"

@@ -396,10 +396,6 @@ def download_overlay(apps, ports, behind_vpn):
 
 
 VPN_PROBLEMS = (
-    ('AUTH_FAILED', 'NordVPN rejected the login, which almost always means the Nord Account email and password were '
-                    'used instead of the service credentials. Setup removed the saved credentials, so it asks for them '
-                    f'again when you rerun it. Find the service credentials at {NORDVPN_CREDENTIALS_PAGE} '
-                    '(Set up NordVPN manually → Service credentials).'),
     ('no server found', 'No NordVPN server matches the chosen exit location. Rerun with a different --vpn-country '
                         'or --vpn-city.'),
     ('TLS key negotiation failed', 'Gluetun reached no NordVPN server. If the server-list refresh above failed, the '
@@ -431,11 +427,21 @@ def diagnose_vpn(compose, environment, secrets_dir):
         return
     if log:
         print(f'Gluetun log\n{log}\n', file=sys.stderr)
+    rejected = sorted(set(re.findall(r'\[([a-z]{2}\d+\.nordvpn\.com)\][^\n]*\n(?:[^\n]*\n)*?[^\n]*AUTH_FAILED', log)))
+    if 'AUTH_FAILED' in log:
+        # A rejection does not prove the credentials are wrong: NordVPN also refuses logins over its device limit,
+        # and some servers refuse logins others accept. Keep the credentials and explain the options.
+        servers = f' ({", ".join(rejected)})' if rejected else ''
+        print(f'NordVPN rejected the login{servers}. Setup tried other servers too. Check that:\n'
+              f'  • these are the service credentials from {NORDVPN_CREDENTIALS_PAGE}\n'
+              '    (Set up NordVPN manually → Service credentials), not your Nord Account email and password;\n'
+              '  • the account is not at its device limit. Stop test containers and other VPN connections you no longer use.\n'
+              'To enter different credentials, run:\n'
+              f'  rm {shlex.quote(str(secrets_dir / "openvpn_user"))} {shlex.quote(str(secrets_dir / "openvpn_password"))}\n'
+              'then rerun setup. Otherwise rerun setup as it is to try again.\n', file=sys.stderr)
+        return
     for marker, advice in VPN_PROBLEMS:
         if marker.casefold() in log.casefold():
-            if marker == 'AUTH_FAILED':
-                for name in ('openvpn_user', 'openvpn_password'):
-                    (secrets_dir / name).unlink(missing_ok=True)
             print(advice + '\n', file=sys.stderr)
             return
     print('Gluetun did not report a connection within two minutes. Check the log above, and that this VM can '
