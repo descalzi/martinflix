@@ -321,10 +321,11 @@
   }
 
   /* Sign-in and password pages */
-  .setup-page { display: grid; place-items: center; padding: var(--space-5); background: var(--forest); }
+  .setup-page { display: grid; place-items: center; align-content: center; gap: var(--space-4); padding: var(--space-5); background: var(--forest); }
   .setup-panel { width: min(100%, 440px); padding: clamp(var(--space-5), 6vw, 40px); background: var(--surface); border-radius: var(--radius); box-shadow: 0 12px 32px rgb(0 0 0 / .25); }
-  .setup-masthead { width: min(100%, 560px); margin: 0 auto var(--space-4); }
-  .setup-page { align-content: center; }
+  /* height: auto keeps the artwork's proportions when it scales down from its 1600 × 533 attributes. */
+  .setup-masthead { width: min(100%, 560px); height: auto; }
+  .setup-masthead + .setup-panel .setup-brand { display: none; }
   .setup-brand { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-5); font: 700 1.25rem/1 var(--font-display); }
   .setup-brand img { border-radius: 9px; }
   .setup-panel h1 { font-size: var(--text-xl); }
