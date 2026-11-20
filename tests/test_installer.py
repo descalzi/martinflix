@@ -380,6 +380,21 @@ class InstallerFlowTests(unittest.TestCase):
         self.reset.assert_called_once()
         self.run.assert_called_once()
 
+    def test_resetting_an_old_style_folder_moves_to_the_new_default(self):
+        home = self.home / 'home'
+        legacy = home / '.local/state/martinflix-first-run'
+        legacy.mkdir(parents=True, mode=0o700)
+        (legacy / 'install-options.json').write_text('{}')
+        os.chmod(legacy / 'install-options.json', 0o600)
+        with patch.dict('os.environ', {'HOME': str(home)}):
+            self.call(reset=True, state_dir=None)
+            self.call(reset=True, state_dir=legacy)
+        (first_reset, _), (explicit_reset, _) = self.reset.call_args_list
+        self.assertEqual(first_reset[0], legacy.resolve(), 'the old folder is archived')
+        first_target = self.run.call_args_list[0].args[1]
+        self.assertEqual(first_target, (home / '.local/state/martinflix').resolve())
+        self.assertEqual(self.run.call_args_list[1].args[1], legacy.resolve(), 'an explicit --state-dir is respected')
+
     def test_update_requires_an_existing_installation(self):
         with self.assertRaisesRegex(ValueError, 'No installer-managed'):
             self.call(update=True, state_dir=self.home / 'missing')

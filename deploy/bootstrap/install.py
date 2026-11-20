@@ -63,12 +63,15 @@ def has_installation(path):
     return (path / 'install-options.json').exists() or (path / 'dashboard-secrets/admin-password').exists()
 
 
+def default_state_directories():
+    state_home = Path.home() / '.local/state'
+    return state_home / 'martinflix', state_home / 'martinflix-first-run'
+
+
 def resolve_state_directory(requested):
     if requested is not None:
         return requested.expanduser().resolve()
-    state_home = Path.home() / '.local/state'
-    current = state_home / 'martinflix'
-    legacy = state_home / 'martinflix-first-run'
+    current, legacy = default_state_directories()
     if has_installation(legacy):
         if has_installation(current):
             raise ValueError('Two MartinFlix installations were found. Choose one with --state-dir.')
@@ -599,7 +602,14 @@ def install(args, overlay_file):
                          f'Check --state-dir, or run setup without {flag} for a new installation.')
     saved = saved_options(state)
     old_project = compose_project(state, saved) if existing else None
-    project = compose_project(state, {} if args.reset else saved, fresh=args.reset)
+    # A reset of an install in the old default folder starts the fresh one under the current default name; the
+    # archive of the old installation stays behind in the old folder.
+    target = state
+    current_default, legacy_default = (path.resolve() for path in default_state_directories())
+    if args.reset and args.state_dir is None and state == legacy_default:
+        target = current_default
+        check_directory(target)
+    project = compose_project(target, {} if args.reset else saved, fresh=args.reset)
     published = published_ports({project, old_project} - {None})
     current = dict(saved)
     if existing and 'ports' not in current:
@@ -612,14 +622,16 @@ def install(args, overlay_file):
                   'If you open MartinFlix from another device, add --dashboard-bind with the VM’s LAN address.', flush=True)
     # A reset discards the saved options, so validate the new installation as if it were fresh.
     previous = {} if args.reset else current
-    plan = plan_installation(args, state, previous, project, overlay_file, fresh_arr=args.reset)
+    plan = plan_installation(args, target, previous, project, overlay_file, fresh_arr=args.reset)
     check_ports(plan['bindings'], published)
     try:
         if shutil.disk_usage(docker_root).free < 2 * 1024**3:
             print('Docker storage has less than 2 GiB free. Free up space if the image download or build fails.', flush=True)
     except OSError:
         pass
-    describe_plan(plan, state, args, current if existing else None)
+    describe_plan(plan, target, args, current if existing else None)
+    if target != state:
+        print(f'The fresh installation moves to {target}. The archive of the current one stays in {state}.\n', flush=True)
     if args.check:
         if args.reset:
             print('Preflight passed. Run the same command without --check. Setup will ask you to type RESET '
@@ -630,7 +642,7 @@ def install(args, overlay_file):
     if args.reset:
         reset_installation(state, old_project)
         previous = {}
-    run_installation(plan, state, previous, mode='reset' if args.reset else 'update' if existing else 'install')
+    run_installation(plan, target, previous, mode='reset' if args.reset else 'update' if existing else 'install')
 
 
 def current_settings(options):
@@ -669,6 +681,8 @@ def keep_flags(options):
         flags.append('--enable-prowlarr')
     if 'flaresolverr' in apps:
         flags.append('--enable-flaresolverr')
+    if 'bazarr' in apps:
+        flags.append('--enable-bazarr')
     if apps:
         flags += ['--download-network', options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')]
     for name, port in (options.get('ports') or {}).items():
