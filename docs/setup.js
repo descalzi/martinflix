@@ -88,6 +88,7 @@ function currentOptions() {
     address: byId('address').value.trim(),
     media: byId('media').value.trim(),
     state: byId('state').value.trim(),
+    reset: byId('reset').checked,
     ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value])),
   };
 }
@@ -111,13 +112,22 @@ function update(event) {
   byId('direct-route').hidden = !hasDownloadApps || route.checked;
   byId('prowlarr-port').parentElement.hidden = !options.prowlarr;
   byId('transmission-port').parentElement.hidden = !options.downloader;
+  byId('regular-setup').hidden = options.reset;
+  byId('prerequisite-command').hidden = options.reset;
+  byId('reset-instructions').hidden = !options.reset;
+  byId('install-label').textContent = options.reset ? 'Reset and install' : 'Install';
+  byId('copy-install').textContent = options.reset ? 'Copy reset' : 'Copy install';
+  byId('review-title').textContent = options.reset ? 'Ready to reset' : 'Ready to install';
+  byId('review-instructions').textContent = options.reset
+    ? 'Verify the state directory, then run the reset command on your Linux host.'
+    : 'Copy the prerequisite check, then run the install command once the check passes.';
   const error = byId('error');
   byId('copy-status').textContent = '';
   byId('step-error').hidden = true;
   try {
     const command = ['python3 deploy/bootstrap/install.py', ...installArguments(options)].join(' ');
     byId('check-command').value = command + ' --check';
-    byId('install-command').value = command;
+    byId('install-command').value = options.reset ? command + ' --reset' : command;
     error.hidden = true;
     for (const button of copyButtons) button.disabled = false;
   } catch (issue) {
@@ -149,7 +159,8 @@ function showStep(index) {
         options.flaresolverr && 'FlareSolverr'].filter(Boolean).join(', ') || 'Configure later'],
     ];
     if (options.downloader || options.prowlarr) summary.push(['Download network', options.behindVpn ? 'VPN' : 'Normal internet connection']);
-    if (options.state) summary.push(['Installation state', options.state]);
+    if (options.reset) summary.push(['Setup mode', 'Start from scratch']);
+    if (options.state || options.reset) summary.push(['Installation state', options.state || 'Default installer location']);
     for (const [name, label, fallback] of portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name === 'transmission' ? options.downloader : true)) {
       const port = options.ports[name];
       if (port && Number(port) !== fallback) summary.push([label + ' port', port]);

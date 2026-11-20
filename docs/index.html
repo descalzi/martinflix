@@ -8,7 +8,7 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="stylesheet" href="./setup.css?v=wizard-6">
-  <script src="./setup.js?v=wizard-6" defer></script>
+  <script src="./setup.js?v=wizard-7" defer></script>
 </head>
 <body>
   <header><span class="mark" aria-hidden="true">▶</span><span>MartinFlix</span></header>
@@ -86,6 +86,8 @@
         <section class="step" aria-labelledby="options-title" hidden>
           <h2 id="options-title" tabindex="-1">Installation options</h2>
           <p>Keep the defaults unless you need to change a port or store app data somewhere else.</p>
+          <label><input id="reset" type="checkbox" aria-describedby="reset-help"> Start from scratch with an existing installation</label>
+          <small id="reset-help">Setup archives the existing app settings, databases, and passwords and creates a fresh installation. Media files stay in place. Use the existing state directory and type <code>RESET</code> when the installer asks.</small>
           <details>
             <summary>Customize ports and storage</summary>
             <label for="state">Installation state directory</label>
@@ -97,7 +99,7 @@
         <section class="step" aria-labelledby="review-title" hidden>
           <h2 id="review-title" tabindex="-1">Ready to install</h2>
           <dl id="review"></dl>
-          <p>Copy the prerequisite check, then run the install command once the check passes.</p>
+          <p id="review-instructions">Copy the prerequisite check, then run the install command once the check passes.</p>
         </section>
         <p id="step-error" role="alert" hidden></p>
         <div class="step-nav">
@@ -107,14 +109,19 @@
       </form>
       <section class="commands" aria-labelledby="commands-title">
         <h2 id="commands-title">Command preview</h2>
-        <p>Clone MartinFlix once, then run both commands from the checkout. Run the check first and install after it passes.</p>
-        <p>Already installed with this script? Pull the latest version and rerun it with the same state directory and settings. Setup keeps your app data and may briefly restart containers.</p>
-        <pre>git clone --depth 1 https://github.com/descalzi/martinflix.git
+        <div id="regular-setup">
+          <p>Clone MartinFlix once, then run both commands from the checkout. Run the check first and install after it passes.</p>
+          <p>Already installed with this script? Pull the latest version and rerun it with the same state directory and settings. Setup keeps your app data and may briefly restart containers.</p>
+          <pre>git clone --depth 1 https://github.com/descalzi/martinflix.git
 cd martinflix</pre>
+        </div>
+        <p id="reset-instructions" hidden>Pull the latest version in your MartinFlix checkout, then run the reset command there. The installer checks Docker and asks you to type <code>RESET</code> before stopping the stack.</p>
         <p id="error" role="status" hidden></p>
-        <div class="command-head"><label for="check-command">Check prerequisites</label><button type="button" data-copy="check-command">Copy check</button></div>
-        <textarea id="check-command" rows="3" readonly spellcheck="false"></textarea>
-        <div class="command-head"><label for="install-command">Install</label><button type="button" data-copy="install-command">Copy install</button></div>
+        <div id="prerequisite-command">
+          <div class="command-head"><label for="check-command">Check prerequisites</label><button type="button" data-copy="check-command">Copy check</button></div>
+          <textarea id="check-command" rows="3" readonly spellcheck="false"></textarea>
+        </div>
+        <div class="command-head"><label id="install-label" for="install-command">Install</label><button id="copy-install" type="button" data-copy="install-command">Copy install</button></div>
         <textarea id="install-command" rows="3" readonly spellcheck="false"></textarea>
         <p id="copy-status" role="status"></p>
         <a href="https://github.com/descalzi/martinflix/blob/main/docs/first-run.md">Read the first-run guide</a>
