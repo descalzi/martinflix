@@ -389,7 +389,23 @@ VPN_PROBLEMS = (
                     '(Set up NordVPN manually → Service credentials).'),
     ('no server found', 'No NordVPN server matches the chosen exit location. Rerun with a different --vpn-country '
                         'or --vpn-city.'),
+    ('TLS key negotiation failed', 'Gluetun reached no NordVPN server. If the server-list refresh above failed, the '
+                                   'server may be out of service; rerun setup to try again. If it keeps failing, your '
+                                   'network may block VPN traffic over UDP: rerun with --vpn-protocol tcp.'),
 )
+
+
+def refresh_vpn_servers(compose, environment, data_dir):
+    """Fetch the provider's current server list, so Gluetun never picks a server its image only remembers."""
+    private_directory(data_dir)
+    print('   Refreshing the NordVPN server list…', flush=True)
+    try:
+        result = subprocess.run(compose + ['run', '--rm', '--no-deps', 'gluetun', 'update', '-enduser', '-providers',
+                                           'nordvpn'], env=environment, capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        result = None
+    if result is None or result.returncode:
+        print('   Could not refresh the server list. Gluetun will use the list built into its image.', flush=True)
 
 
 def diagnose_vpn(compose, environment, secrets_dir):
@@ -432,7 +448,7 @@ def reset_installation(state, project):
                         'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
         managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
-                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr')
+                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun')
         moved = []
         try:
             for name in managed:
@@ -479,6 +495,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     default_network = 'vpn' if args.enable_downloads or args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') else 'direct'
     download_network = (args.download_network or previous_network or default_network) if downloads else None
     vpn = bool(args.enable_vpn or args.vpn_country or args.vpn_city or previous.get('vpn') or download_network == 'vpn')
+    vpn_protocol = args.vpn_protocol or previous.get('vpn_protocol') or 'udp'
     vpn_country = args.vpn_country or ('' if args.vpn_city else previous.get('vpn_country') or '')
     vpn_city = args.vpn_city or ('' if args.vpn_country else previous.get('vpn_city'))
     if vpn_city is None:
@@ -504,7 +521,8 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
 
     options = {**previous, 'media_path': str(media) if media else None, 'downloads': bool(downloads),
                'download_apps': downloads, 'project': project, 'dashboard_bind': str(bind), 'ports': ports}
-    options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, download_network=download_network)
+    options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, vpn_protocol=vpn_protocol,
+                   download_network=download_network)
 
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
@@ -519,7 +537,8 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state),
                        MARTINFLIX_UID=str(os.getuid()), MARTINFLIX_GID=str(os.getgid()),
                        MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_MEDIA_PATH=str(media) if media else '')
-    environment.update(MARTINFLIX_VPN_PROVIDER=args.vpn_provider, MARTINFLIX_VPN_COUNTRY=vpn_country, MARTINFLIX_VPN_CITY=vpn_city)
+    environment.update(MARTINFLIX_VPN_PROVIDER=args.vpn_provider, MARTINFLIX_VPN_COUNTRY=vpn_country, MARTINFLIX_VPN_CITY=vpn_city,
+                       MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
     app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS))
 
@@ -631,6 +650,8 @@ def keep_flags(options):
             flags += ['--vpn-city', options['vpn_city']]
         elif options.get('vpn_country'):
             flags += ['--vpn-country', options['vpn_country']]
+        if options.get('vpn_protocol') == 'tcp':
+            flags += ['--vpn-protocol', 'tcp']
     apps = options.get('download_apps', LEGACY_DOWNLOADS if options.get('downloads') else ())
     if 'transmission' in apps:
         flags += ['--download-client', 'transmission']
@@ -669,7 +690,8 @@ def describe_plan(plan, state, args, current=None):
     print(f'Address           {plan["bind"]}')
     print(f'Media directory   {plan["media"] or "Not set"}')
     if plan['vpn']:
-        print(f'VPN               NordVPN · {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
+        print(f'VPN               NordVPN · {plan["vpn_city"] or plan["vpn_country"] or "Automatic"} · '
+              f'{plan["options"]["vpn_protocol"].upper()}')
     if plan['downloads']:
         route = 'VPN' if plan['download_network'] == 'vpn' else 'normal internet connection'
         print(f'Download apps     {", ".join(plan["downloads"])} via {route}')
@@ -781,6 +803,7 @@ def run_installation(plan, state, previous, mode='install'):
         download_address = '127.0.0.1' if bootstrapping_prowlarr else str(bind)
         environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
         if vpn:
+            refresh_vpn_servers(compose, environment, state / 'gluetun')
             compose_step(f'{step}. Connecting the VPN. This can take a minute or two…',
                          ['up', '-d', '--wait', '--wait-timeout', '180', 'gluetun'],
                          diagnose=lambda: diagnose_vpn(compose, environment, state / 'download-secrets'))
@@ -892,6 +915,8 @@ def build_parser():
     parser.add_argument('--vpn-provider', choices=['nordvpn'], default='nordvpn')
     parser.add_argument('--vpn-country', choices=['Czech Republic', 'United Kingdom', 'Netherlands', 'Germany', 'United States'])
     parser.add_argument('--vpn-city', choices=['Prague'])
+    parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
+                        help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
     parser.add_argument('--download-client', choices=['transmission'])
     parser.add_argument('--enable-prowlarr', action='store_true')

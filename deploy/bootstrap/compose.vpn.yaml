@@ -1,6 +1,6 @@
 services:
   gluetun:
-    image: qmcgaw/gluetun:v3.41.0
+    image: qmcgaw/gluetun:v3.41.3
     restart: unless-stopped
     cap_add: [NET_ADMIN]
     devices:
@@ -8,11 +8,19 @@ services:
     environment:
       VPN_SERVICE_PROVIDER: "${MARTINFLIX_VPN_PROVIDER}"
       VPN_TYPE: openvpn
+      OPENVPN_PROTOCOL: "${MARTINFLIX_VPN_PROTOCOL:-udp}"
       SERVER_CITIES: "${MARTINFLIX_VPN_CITY}"
       SERVER_COUNTRIES: "${MARTINFLIX_VPN_COUNTRY}"
       FIREWALL: "on"
       FIREWALL_INPUT_PORTS: "9091,9696,8191,6767,9999"
       HEALTH_SERVER_ADDRESS: 0.0.0.0:9999
+      # The server list built into an image ages; refresh it from the provider while running. Setup also
+      # refreshes it before connecting, and both keep it in /gluetun so it survives restarts.
+      UPDATER_PERIOD: 24h
+      PUID: "${MARTINFLIX_UID}"
+      PGID: "${MARTINFLIX_GID}"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/gluetun:/gluetun"
     secrets: [openvpn_user, openvpn_password]
     healthcheck:
       # Gluetun's built-in check calls it unhealthy after about 25 seconds, and Compose then gives up on

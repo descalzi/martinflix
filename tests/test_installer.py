@@ -252,6 +252,21 @@ class VpnDiagnosisTests(unittest.TestCase):
             install.diagnose_vpn(['docker', 'compose'], {}, secrets)
         return secrets, '\n'.join(printed)
 
+    def test_server_list_refresh_is_best_effort(self):
+        with tempfile.TemporaryDirectory() as folder:
+            calls, printed = [], []
+            with patch.object(install.subprocess, 'run', side_effect=lambda command, **kwargs: calls.append(command) or
+                              SimpleNamespace(returncode=1)), \
+                    patch('builtins.print', side_effect=lambda *args, **kwargs: printed.append(' '.join(map(str, args)))):
+                install.refresh_vpn_servers(['docker', 'compose'], {}, Path(folder) / 'gluetun')
+            self.assertEqual(calls[0][-6:], ['gluetun', 'update', '-enduser', '-providers', 'nordvpn'][-6:])
+            self.assertIn('list built into its image', printed[-1])
+            self.assertTrue((Path(folder) / 'gluetun').is_dir())
+
+    def test_unreachable_servers_suggest_tcp(self):
+        _, output = self.diagnose('gluetun-1  | WARN [openvpn] TLS Error: TLS key negotiation failed to occur within 60 seconds')
+        self.assertIn('--vpn-protocol tcp', output)
+
     def test_rejected_login_clears_the_saved_credentials(self):
         secrets, output = self.diagnose('gluetun-1  | 2026-11-20T13:30:01Z ERROR [openvpn] AUTH: Received control message: AUTH_FAILED')
         self.assertIn('service credentials', output)
