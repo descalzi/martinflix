@@ -8,6 +8,16 @@ ARR_NAMES = {'sonarr': 'Sonarr', 'radarr': 'Radarr'}
 ARR_PORTS = {'sonarr': 8989, 'radarr': 7878}
 ROOT_FOLDERS = {'sonarr': '/data/TV Shows', 'radarr': '/data/Movies'}
 TRANSMISSION_USER = 'martinflix'
+PROWLARR_INDEXERS = {
+    '1337x': ('1337x', 25),
+    'eztv': ('EZTV', 25),
+    'kickasstorrents-ws': ('kickasstorrents.ws', 25),
+    'limetorrents': ('LimeTorrents', 25),
+    'thepiratebay': ('The Pirate Bay', 25),
+    'torrentdownloads': ('Torrent Downloads', 25),
+    'world-torrent': ('World-torrent', 26),
+    'yts': ('YTS', 25),
+}
 RELEASE_PROFILES = {
     'sonarr': [('Bad Stuff', True, ['MeGusta', 'scr', 'exe', 'ETHEL'])],
     'radarr': [('No OPUS', False, ['Opus']), ('No HEVC', False, ['HEVC'])],
@@ -20,6 +30,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+class AppApiHttpError(ValueError):
+    def __init__(self, name, route, status):
+        super().__init__(f'{name}: {route} returned HTTP {status}. Check the app’s settings or logs and rerun.')
+        self.status = status
 
 
 class AppApi:
@@ -40,7 +56,8 @@ class AppApi:
                 data = response.read()
             return json.loads(data) if data else None
         except urllib.error.HTTPError as exc:
-            raise ValueError(f'{self.name}: {route} returned HTTP {exc.code}. Check the app’s settings or logs and rerun.') from None
+            exc.close()
+            raise AppApiHttpError(self.name, route, exc.code) from None
         except (OSError, ValueError):
             raise ValueError(f'{self.name}: could not read {route}. Check the app is running and rerun.') from None
 
@@ -154,8 +171,37 @@ def seed_radarr_indexer_defaults(api):
         api.request(f'config/indexer/{config["id"]}', {**config, **defaults}, method='PUT')
 
 
+def seed_prowlarr_indexers(api):
+    existing = api.request('indexer')
+    definitions = {item.get('definitionName') for item in existing}
+    names = {item['name'].casefold() for item in existing}
+    missing = {definition: (name, priority) for definition, (name, priority) in PROWLARR_INDEXERS.items()
+               if definition not in definitions and name.casefold() not in names}
+    if not missing:
+        return
+    templates = {item.get('definitionName'): item for item in api.request('indexer/schema')
+                 if item.get('privacy') == 'public' and item.get('implementation') == 'Cardigann'}
+    profile = next((item for item in api.request('appprofile') if item['name'] == 'Standard'), None)
+    for definition, (name, priority) in missing.items():
+        if definition not in templates or profile is None:
+            print(f'   Prowlarr: {name} skipped. Its built-in definition or the Standard sync profile is unavailable.', flush=True)
+            continue
+        entry = templates[definition].copy()
+        entry.pop('id', None)
+        entry.update(name=name, priority=priority, appProfileId=profile['id'], enable=True, tags=[])
+        try:
+            api.request('indexer', entry)
+        except AppApiHttpError as exc:
+            if exc.status not in (400, 422):
+                raise
+            api.request('indexer', {**entry, 'enable': False})
+            print(f'   Prowlarr: {name} was added disabled. Test it in Prowlarr before enabling it.', flush=True)
+        else:
+            print(f'   Prowlarr: {name} added and enabled.', flush=True)
+
+
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
-                   seed_indexers=False, seed_radarr_indexers=False, arr_address='127.0.0.1',
+                   seed_indexers=False, seed_radarr_indexers=False, seed_prowlarr=False, arr_address='127.0.0.1',
                    downloads_behind_vpn=True):
     transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
     prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
@@ -182,3 +228,5 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
                 'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': f'http://{prowlarr_host}:9696',
                 'apiKey': arr_keys[app],
             }, syncLevel='fullSync')
+    if prowlarr and seed_prowlarr:
+        seed_prowlarr_indexers(prowlarr)

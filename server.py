@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local, read-only MartinFlix control room. No third-party dependencies."""
+"""Local MartinFlix dashboard and installer-managed password setup."""
 import json
 import base64
 import binascii
@@ -34,6 +34,14 @@ ARR_HEALTH_ENDPOINTS = {
     'radarr': (7878, '/api/v3/health'),
     'prowlarr': (9696, '/api/v1/health'),
     'bazarr': (6767, '/api/system/health'),
+}
+SERVICE_WEB_PORTS = {
+    'portainer': 9443, 'plex': 32400, 'transmission-daemon': 9091, 'prowlarr': 9696,
+    'bazarr': 6767, 'sonarr': 8989, 'radarr': 7878, 'bookorbit-app': 3001,
+    'homepage': 3000, 'seerr': 5055, 'tautulli': 8181, 'bookshelf': 8787,
+}
+INSTALLER_WEB_APPS = {
+    'sonarr': 'SONARR', 'radarr': 'RADARR', 'prowlarr': 'PROWLARR', 'transmission-daemon': 'TRANSMISSION',
 }
 STACKS = {
     'Core': ['tailscale', 'portainer'],
@@ -146,10 +154,33 @@ def arr_connection(kind, *, prowlarr_via_vpn=False):
     return base.rstrip('/'), key
 
 
-def arr_open(connection, endpoint):
+def arr_open(connection, endpoint, *, payload=None, method=None):
     base, key = connection
-    request = urllib.request.Request(base + endpoint, headers={'X-Api-Key': key})
+    headers = {'X-Api-Key': key}
+    body = None
+    if payload is not None:
+        headers['Content-Type'] = 'application/json'
+        body = json.dumps(payload).encode()
+    request = urllib.request.Request(base + endpoint, data=body, headers=headers, method=method)
     return ARR_OPENER.open(request, timeout=5)
+
+
+def sync_arr_passwords(password):
+    updates = []
+    for kind in ARR_COMPOSE_ADDRESSES:
+        connection = arr_connection(kind)
+        if connection is None:
+            raise ValueError('Missing application API key')
+        with arr_open(connection, '/api/v3/config/host') as response:
+            config = json.load(response)
+        if (not isinstance(config, dict) or type(config.get('id')) is not int or config['id'] < 1
+                or not isinstance(config.get('username'), str) or not config['username'].strip()):
+            raise ValueError('Invalid application host settings')
+        config.update(password=password, passwordConfirmation=password)
+        updates.append((connection, config))
+    for connection, config in updates:
+        with arr_open(connection, f'/api/v3/config/host/{config["id"]}', payload=config, method='PUT'):
+            pass
 
 
 def arr_health(kind, *, prowlarr_via_vpn=False):
@@ -185,7 +216,20 @@ def arr_health(kind, *, prowlarr_via_vpn=False):
 
 def service_status():
     status = container_status()
-    services = [service for group in status['groups'] for service in group['services']
+    all_services = [service for group in status['groups'] for service in group['services']]
+    for service in all_services:
+        name = service['name']
+        port = SERVICE_WEB_PORTS.get(name)
+        if port is None or service['state'] == 'missing':
+            continue
+        local_only = False
+        if status.get('source') == 'app-probes':
+            app = INSTALLER_WEB_APPS[name]
+            port = int(os.environ.get(f'MARTINFLIX_{app}_WEB_PORT', port))
+            local_only = name in ('prowlarr', 'transmission-daemon')
+        service['web'] = {'port': port, 'scheme': 'https' if name == 'portainer' else 'http',
+                          'path': '/web/' if name == 'plex' else '/', 'localOnly': local_only}
+    services = [service for service in all_services
                 if service['name'] in ARR_HEALTH_ENDPOINTS and service['state'] in ('reachable', 'running')]
     if services:
         with ThreadPoolExecutor(max_workers=len(services)) as pool:
@@ -485,9 +529,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 verifier = PasswordVerifier.create(password)
+                if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1':
+                    try:
+                        sync_arr_passwords(password)
+                    except (OSError, ValueError) as exc:
+                        if isinstance(exc, urllib.error.HTTPError):
+                            exc.close()
+                        self.send_auth_page('setup-password.html',
+                                            'Could not finish updating Sonarr and Radarr. Check both apps are running '
+                                            'and submit the same new password again. The dashboard still uses its current password.',
+                                            502, changing=changing)
+                        return
                 save_admin_password(self.server.admin_state_file, verifier.encoded)
             except OSError:
-                self.send_auth_page('setup-password.html', 'Could not save the password. Check the dashboard’s storage and try again.', 500, changing=changing)
+                self.send_auth_page('setup-password.html', 'Could not save the dashboard password. Check its storage '
+                                    'and submit the same new password again.', 500, changing=changing)
                 return
             self.server.password_verifier = verifier
             self.server.admin_password = ''
@@ -526,11 +582,14 @@ class Handler(BaseHTTPRequestHandler):
                    '<input type="password" id="current" name="current" autocomplete="current-password" required>'
                    '<button type="button" class="password-toggle" aria-controls="current" aria-label="Show current password" '
                    'aria-pressed="false" hidden><span class="password-eye" aria-hidden="true"></span></button></div>')
+        synced = os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1'
+        scope = '<p class="setup-note">This password also applies to Sonarr and Radarr.</p>' if synced else ''
+        if changing:
+            scope += '<a href="/">Back to dashboard</a>'
         body = (template.replace('{{ACTION}}', '/change-password' if changing else '/setup-password')
                 .replace('{{HEADING}}', 'Change your dashboard password' if changing else 'Set your dashboard password')
                 .replace('{{CURRENT}}', current if changing else '')
-                .replace('{{PASSWORD_SCOPE}}', '<p class="setup-note">This changes only the MartinFlix dashboard password.</p>'
-                         '<a href="/">Back to dashboard</a>' if changing else '')
+                .replace('{{PASSWORD_SCOPE}}', scope)
                 .replace('{{TOKEN}}', html.escape(self.server.password_setup_token))
                 .replace('{{MIN_PASSWORD}}', str(MIN_PERSONAL_PASSWORD))
                 .replace('{{NOTICE}}', notice).replace('{{ERROR}}', error).encode())

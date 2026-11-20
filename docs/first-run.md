@@ -28,7 +28,15 @@ Radarr gets **No OPUS** and **No HEVC**, both disabled to match the reference se
 
 New Radarr installations start with a maximum release size of 4,500 MB, an availability delay of 1 day, and an RSS sync interval of 120 minutes. Rerunning setup preserves your Radarr indexer settings.
 
-The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. The dashboard asks you to choose a password of at least eight characters, then sign in again. The temporary password stops working after the change. The chosen password is stored as a salted hash in the private `dashboard-auth` directory. Upgrading an earlier first-run installation prompts for this change once, using its existing generated password. All three services publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to publish the dashboard, Sonarr, and Radarr on that address. Open the URLs printed by setup. For an unconfigured Sonarr or Radarr, the installer sets up Forms authentication with username `admin` and a separate generated password. It prints the commands to read those passwords from private files, and preserves existing app logins. VM dashboard users can choose **Change password** from the dashboard navigation. That changes the dashboard password only. Update Sonarr, Radarr, or Transmission credentials in the respective app or its configuration. HTTP sends credentials unencrypted across the network. Prowlarr and Transmission remain on loopback.
+The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. New Sonarr and Radarr instances use the same temporary password and the username `admin`. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates all three passwords. Both apps need to be running. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
+
+Existing Sonarr and Radarr logins are preserved when you rerun the installer. Use **Change password** in the rebuilt dashboard to bring their passwords into sync. Each app keeps its username. Transmission credentials are managed separately.
+
+The dashboard, Sonarr, and Radarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them from another machine. Prowlarr and Transmission remain on loopback.
+
+### Start from scratch
+
+Run your installer command again and add `--reset`. Include the state directory, LAN address, media path, and optional services you want for the new installation. Type `RESET` at the prompt. Setup stops the old stack, archives its app databases, configuration, and credentials in a private `reset-backup-*` directory inside the state directory, then creates a fresh installation. Your media files stay in place. Keep the archive private because it contains old credentials.
 
 To run an isolated trial alongside another stack, use a separate state directory and different host ports:
 
@@ -58,6 +66,8 @@ The VPN option requires `/dev/net/tun` and [manual OpenVPN service credentials f
 - Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. For indexers that need FlareSolverr, add its proxy in Prowlarr with the address printed by setup, then apply its tag to those indexers. Setup leaves indexer credentials and searches under your control.
 
 Select individual apps with `--download-client transmission`, `--enable-prowlarr`, and `--enable-flaresolverr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects all three.
+
+The first run with Prowlarr adds eight public indexers from the reference setup using Prowlarr’s built-in definitions. Setup reports any unavailable definitions and leaves indexers disabled if Prowlarr rejects them during validation. Existing indexers are preserved, and later reruns respect indexers you remove.
 
 The media path and enabled download services are remembered when you rerun setup. The installer fills in missing connections and preserves existing named records, including any edits you make in the apps. A different media root requires a separate installation or a planned storage migration.
 

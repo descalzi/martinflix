@@ -109,12 +109,6 @@ def arr_needs_login(path):
         return True
 
 
-def create_arr_password(path):
-    password = private_secret(path) or secrets.token_urlsafe(24)
-    write_secret(path, password)
-    return password
-
-
 def prepare_vpn_secrets(path):
     private_directory(path)
     credentials = {name: private_secret(path / name) for name in ('openvpn_user', 'openvpn_password')}
@@ -264,9 +258,48 @@ def download_overlay(apps, ports, behind_vpn):
                 'gluetun': {'condition': 'service_healthy', 'restart': True},
             })
         if app in DOWNLOAD_PORTS:
+            services['dashboard']['environment'][f'MARTINFLIX_{app.upper()}_WEB_PORT'] = str(ports[app])
             owner = services.setdefault('gluetun', {}) if behind_vpn else configuration
             owner.setdefault('ports', []).append(f'127.0.0.1:{ports[app]}:{DOWNLOAD_PORTS[app]}')
     return {'services': services}
+
+
+def reset_installation(state):
+    import fcntl
+
+    check_directory(state)
+    if not has_installation(state):
+        raise ValueError(f'No installer-managed MartinFlix installation was found at {state}. Run setup without --reset.')
+    print(f'Reset MartinFlix at {state}?')
+    print('Setup will stop this stack and archive its app databases, configuration, and credentials. Media files stay in place.')
+    if not sys.stdin.isatty() or input('Type RESET to continue: ') != 'RESET':
+        raise ValueError('Reset cancelled.')
+    with (state / 'install.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not has_installation(state):
+            raise ValueError('The installation has already been reset.')
+        project = compose_project(state, saved_options(state))
+        environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state), MARTINFLIX_UID=str(os.getuid()),
+                           MARTINFLIX_GID=str(os.getgid()), MARTINFLIX_DASHBOARD_BIND='127.0.0.1',
+                           MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878')
+        subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE),
+                        'down', '--remove-orphans'], env=environment, timeout=120, check=True)
+        archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
+        managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
+                   'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission')
+        moved = []
+        try:
+            for name in managed:
+                source = state / name
+                if source.exists() or source.is_symlink():
+                    source.rename(archive / name)
+                    moved.append(name)
+        except OSError:
+            for name in reversed(moved):
+                (archive / name).rename(state / name)
+            archive.rmdir()
+            raise
+    print(f'Previous app data and credentials archived at {archive}', flush=True)
 
 
 def install(args, overlay_file):
@@ -281,6 +314,8 @@ def install(args, overlay_file):
     state = resolve_state_directory(args.state_dir)
     if state.is_relative_to(COMPOSE_FILE.parents[2]):
         raise ValueError('Choose a state directory outside the repository for application data and secrets.')
+    if args.reset:
+        reset_installation(state)
     previous = saved_options(state)
     old_media = previous.get('media_path')
     media = media_root(args.media_path or old_media, state) if args.media_path or old_media else None
@@ -429,9 +464,8 @@ def install(args, overlay_file):
         arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
-            credentials = secret_dir / f'{app}-login-password'
             api = AppApi(app.capitalize(), ports[app], key, address=arr_address)
-            ensure_arr_login(api, lambda: create_arr_password(credentials))
+            ensure_arr_login(api, lambda: password.read_text().rstrip('\r\n'))
         if bootstrapping_arr and arr_address != str(bind):
             arr_address = str(bind)
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
@@ -450,10 +484,13 @@ def install(args, overlay_file):
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         seed_indexers = not options.get('sonarr_indexer_defaults_applied')
         seed_radarr_indexers = options['radarr_indexer_defaults_pending']
+        seed_prowlarr = bool(prowlarr_key) and not options.get('prowlarr_indexer_defaults_applied')
         configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers,
-                       seed_radarr_indexers=seed_radarr_indexers, arr_address=arr_address,
+                       seed_radarr_indexers=seed_radarr_indexers, seed_prowlarr=seed_prowlarr, arr_address=arr_address,
                        downloads_behind_vpn=download_network == 'vpn')
-        if seed_indexers or seed_radarr_indexers:
+        if seed_prowlarr:
+            options['prowlarr_indexer_defaults_applied'] = True
+        if seed_indexers or seed_radarr_indexers or seed_prowlarr:
             options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
         compose_step(f'{step + 1}. Building and starting your dashboard…',
@@ -479,7 +516,8 @@ for app in ('sonarr', 'radarr'):
         print(f'          cat {shlex.quote(str(password))}')
         print('          Sign in with it, then choose your own password on the setup screen.')
     print('\nApp setup')
-    print('Sonarr and Radarr use separate credentials. Change each password in its own app.')
+    print('New Sonarr and Radarr installations use admin and the same temporary password.')
+    print('Set or change your dashboard password to update both app passwords.')
     if vpn:
         print(f'NordVPN exit: {vpn_city or vpn_country or "Automatic"}')
     if downloads:
@@ -487,13 +525,11 @@ for app in ('sonarr', 'radarr'):
     for app in app_dirs:
         address = '127.0.0.1' if app in DOWNLOAD_APPS else bind
         print(f'{app.capitalize():13} http://{address}:{ports[app]}')
-        if app in APPS and (login_file := secret_dir / f'{app}-login-password').is_file():
-            print(f'              Initial admin password: cat {shlex.quote(str(login_file))}')
     if 'transmission' in enabled:
         password_path = shlex.quote(str(state / 'download-secrets/transmission_password'))
         print(f'\nTransmission username: martinflix. To show its password: cat {password_path}')
     if 'prowlarr' in enabled:
-        print('Add your indexers in Prowlarr. The installer connected both library apps.')
+        print('Manage indexers in Prowlarr. The installer connected both library apps.')
     if 'flaresolverr' in enabled:
         flare_host = '127.0.0.1' if download_network == 'vpn' else 'flaresolverr'
         print(f'FlareSolverr proxy address inside Prowlarr: http://{flare_host}:8191')
@@ -521,7 +557,10 @@ def main():
     parser.add_argument('--transmission-port', type=int, default=9091)
     parser.add_argument('--sonarr-port', type=int, default=8989)
     parser.add_argument('--radarr-port', type=int, default=7878)
-    parser.add_argument('--check', action='store_true', help='Check prerequisites without creating files or starting containers.')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--check', action='store_true', help='Check prerequisites without creating files or starting containers.')
+    mode.add_argument('--reset', action='store_true',
+                      help='Archive this installation’s app data and credentials, then start fresh. Requires confirmation.')
     args = parser.parse_args()
     if sys.platform != 'linux':
         parser.exit(1, 'Run this installer on a Linux VM.\n')

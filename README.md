@@ -42,7 +42,7 @@ python3 deploy/bootstrap/install.py --check --dashboard-bind "$VM_IP"
 python3 deploy/bootstrap/install.py --dashboard-bind "$VM_IP"
 ```
 
-Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default. The installer generates separate admin passwords for Sonarr and Radarr and tells you where to find them.
+Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default.
 
 The installer starts Sonarr and Radarr, connects the dashboard using their generated keys, and finishes with an **Open your dashboard** section containing the URL and sign-in steps. Rerun with the same options to resume setup.
 
@@ -56,7 +56,7 @@ Open the URL printed by the installer and sign in as **admin**. The default is *
 cat ~/.local/state/martinflix/dashboard-secrets/admin-password
 ```
 
-Sign in with it, choose a password of at least eight characters, then sign in again with your new password.
+Sign in with it, choose a password of at least eight characters, then sign in again with your new password. Setting or changing the dashboard password also updates the passwords used by installer-managed Sonarr and Radarr.
 
 | Service | Default address on the VM |
 | --- | --- |
@@ -64,7 +64,7 @@ Sign in with it, choose a password of at least eight characters, then sign in ag
 | Sonarr | `http://127.0.0.1:8989` |
 | Radarr | `http://127.0.0.1:7878` |
 
-See the [first-run guide](docs/first-run.md) for using different ports or storage.
+See the [first-run guide](docs/first-run.md) for using different ports or storage. To start fresh with the same state directory, see [Start from scratch](docs/first-run.md#start-from-scratch).
 
 ## What’s included
 

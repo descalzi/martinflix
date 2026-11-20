@@ -54,6 +54,8 @@ services:
       MARTINFLIX_ARR_COMPOSE_NETWORK: "1"
       MARTINFLIX_SONARR_URL: http://sonarr:8989
       MARTINFLIX_RADARR_URL: http://radarr:7878
+      MARTINFLIX_SONARR_WEB_PORT: "${MARTINFLIX_SONARR_PORT:-8989}"
+      MARTINFLIX_RADARR_WEB_PORT: "${MARTINFLIX_RADARR_PORT:-7878}"
     volumes:
       - "${MARTINFLIX_STATE_DIR}/dashboard-secrets:/run/dashboard-secrets:ro"
       - "${MARTINFLIX_STATE_DIR}/dashboard-auth:/run/dashboard-auth"

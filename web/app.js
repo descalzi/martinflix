@@ -66,6 +66,12 @@ function appHealth(service) {
 
 function serviceCard(service, groupServices, countLabel) {
   const [name, role, icon] = apps[service.name] ?? [service.name, 'Container'];
+  const host = window.location.hostname;
+  const web = service.web;
+  const localOnly = web?.localOnly && !['localhost', '127.0.0.1', '[::1]'].includes(host);
+  const href = web && !localOnly ? `${web.scheme}://${host}:${web.port}${web.path}` : '';
+  const title = href ? `<a class="service-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">
+    ${esc(name)} <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>` : esc(name);
   const unhealthy = service.status.toLowerCase().includes('unhealthy');
   const state = unhealthy ? 'unhealthy' : service.state;
   const label = state === 'exited' ? 'Stopped' : state === 'missing' ? 'Missing' :
@@ -89,13 +95,14 @@ function serviceCard(service, groupServices, countLabel) {
       <span class="service-icon" aria-hidden="true">${icon
         ? `<img src="/assets/${icon}.webp" width="32" height="32" alt="" loading="lazy">`
         : esc(name.slice(0, 2).toUpperCase())}</span>
-      <div><h4>${esc(name)}</h4><p>${esc(role)}</p></div>
+      <div><h4>${title}</h4><p>${esc(role)}</p></div>
     </div>
     <div class="service-status">
       <span class="service-badge ${tone}">${esc(label)}</span>
       <span class="service-detail">${esc(service.status || 'No status detail')}</span>
     </div>
     ${appHealth(service)}
+    ${localOnly ? '<p class="service-dependency">Web interface available on the VM only.</p>' : ''}
     ${dependencyNote}
     ${unavailable.length ? `<p class="dependency-warning">Check ${unavailable.map(name => esc(apps[name][0])).join(' and ')}</p>` : ''}
   </li>`;

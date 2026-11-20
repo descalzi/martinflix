@@ -41,6 +41,8 @@
 }
 .service-icon img { object-fit: contain; }
 .service-identity h4 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.service-link { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.service-link:hover { color: #396b57; }
 .service-identity p { margin: 4px 0 0; color: #526559; font-size: 12px; }
 .service-status { flex-wrap: wrap; margin-top: 11px; padding-top: 10px; border-top: 1px solid #e1e5da; }
 .service-badge {
