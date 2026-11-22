@@ -18,12 +18,15 @@ import socket
 import tarfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 
 NAME = re.compile(r'\d{4}-\d{2}-\d{2}_\d{6}')
 KEEP_DAILY = 14
 KEEP_WEEKLY = 8
 SCHEDULE_HOUR = 1
+# Bazarr writes its backup in the background; this is how long to wait for it.
+BAZARR_WAIT_SECONDS = 120
 # App backups through each app's own API, run inside its container so the controller needs no network to the apps.
 ARR_APPS = {'sonarr': (8989, 'v3'), 'radarr': (7878, 'v3'), 'prowlarr': (9696, 'v1')}
 PLEX_DATABASES = 'Library/Application Support/Plex Media Server/Plug-in Support/Databases'
@@ -50,6 +53,15 @@ def newest(folder, pattern, since):
     """The newest file matching the pattern under the folder, written after the given time."""
     found = [path for path in Path(folder).rglob(pattern) if path.is_file() and path.stat().st_mtime >= since - 2]
     return max(found, key=lambda path: path.stat().st_mtime) if found else None
+
+
+def complete_zip(path, last_member):
+    """True once a zip file is whole: readable, with the member its writer adds last."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return last_member in archive.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
 
 
 def add_tree(archive, source, name):
@@ -118,9 +130,17 @@ class Backups:
         started = self.clock()
         self.exec('bazarr', 'curl', '-fsS', '-X', 'POST', '-H', f'X-API-KEY: {self.key(state, "bazarr")}',
                   'http://127.0.0.1:6767/api/system/backups')
-        made = newest(state / 'bazarr', '*.zip', started)
+        # Bazarr answers straight away and writes the backup from its job queue, so wait for a complete zip:
+        # its settings file is the last thing it adds.
+        made = None
+        for _ in range(BAZARR_WAIT_SECONDS // 2):
+            made = newest(state / 'bazarr', '*.zip', started)
+            if made is not None and complete_zip(made, 'config.yaml'):
+                break
+            made = None
+            self.sleep(2)
         if made is None:
-            raise BackupError('its backup file could not be found')
+            raise BackupError(f'its backup file did not appear within {BAZARR_WAIT_SECONDS} seconds')
         destination = target / 'bazarr.zip'
         shutil.copy2(made, destination)
         return destination

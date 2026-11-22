@@ -6,6 +6,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,22 @@ class FakeStack:
         self.services = services
         self.calls = []
         self.fail = set()
+        self.never = set()
+
+    def tick(self):
+        """Time passes: Bazarr's queued backup gets written, first half-done, then whole."""
+        if not getattr(self, 'bazarr_pending', False) or 'bazarr' in self.never:
+            return
+        folder = self.state / 'bazarr' / 'backup'
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / 'bazarr_backup_v1.5.3_2026.11.22_20.10.05.zip'
+        if not path.exists():
+            path.write_bytes(b'PK\x03\x04 still writing')
+            return
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('bazarr.db', 'SQLite format 3')
+            archive.writestr('config.yaml', 'auth: {}')
+        self.bazarr_pending = False
 
     def config(self):
         return {'stateDir': str(self.state), 'backupDir': str(self.backup_dir), 'host': 'martinflix-test'}
@@ -42,9 +59,8 @@ class FakeStack:
         if command[0] == 'curl' and command[-1].endswith('/command/42'):
             return SimpleNamespace(returncode=0, stdout=json.dumps({'status': 'completed'}), stderr='')
         if command[0] == 'curl' and command[-1].endswith('/api/system/backups'):
-            folder = self.state / 'bazarr' / 'backup'
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / 'bazarr_backup.zip').write_bytes(b'PKbazarr')
+            # Like Bazarr, answer at once and write the zip a little later, from its job queue.
+            self.bazarr_pending = True
             return SimpleNamespace(returncode=0, stdout='', stderr='')
         if command[0] == 'mkdir':
             (self.state / 'plex' / command[-1].removeprefix('/config/')).mkdir(parents=True, exist_ok=True)
@@ -78,7 +94,7 @@ class BackupTests(unittest.TestCase):
 
     def make(self, services=('sonarr', 'radarr', 'prowlarr', 'bazarr', 'transmission', 'plex')):
         stack = FakeStack(self.state, self.backup_dir, services)
-        return stack, backups.Backups(stack, sleep=lambda _: None)
+        return stack, backups.Backups(stack, sleep=lambda _: stack.tick())
 
     def test_a_backup_holds_every_app_with_checksums(self):
         stack, engine = self.make()
@@ -157,6 +173,23 @@ class BackupTests(unittest.TestCase):
         with self.assertRaisesRegex(backups.BackupError, 'already running'):
             engine.run()
         engine.lock.release()
+
+
+class BazarrTests(unittest.TestCase):
+    setUp = BackupTests.setUp
+    make = BackupTests.make
+
+    def test_bazarr_is_collected_once_its_queued_backup_is_complete(self):
+        stack, engine = self.make(('bazarr',))
+        destination = engine.capture_bazarr(self.state, self.backup_dir)
+        with zipfile.ZipFile(destination) as archive:
+            self.assertEqual(sorted(archive.namelist()), ['bazarr.db', 'config.yaml'])
+
+    def test_a_bazarr_backup_that_never_appears_is_reported(self):
+        stack, engine = self.make(('bazarr',))
+        stack.never.add('bazarr')
+        with self.assertRaisesRegex(backups.BackupError, 'did not appear within 120 seconds'):
+            engine.capture_bazarr(self.state, self.backup_dir)
 
 
 if __name__ == '__main__':
