@@ -209,8 +209,9 @@ class UptimeTests(unittest.TestCase):
             seen.append((request.full_url, request.get_header('Authorization'), request.get_header('X-transmission-session-id')))
             if len(seen) == 1:
                 raise conflict
-            return self.respond({'arguments': {'current-stats': {'secondsActive': 7200}}})
+            return self.respond({'result': 'success', 'arguments': {'current-stats': {'secondsActive': 7200}}})
 
+        server.TRANSMISSION_SESSION['id'] = ''
         try:
             with patch.dict('os.environ', environment, clear=True), patch.object(server.ARR_OPENER, 'open', side_effect=fake):
                 self.assertEqual(server.transmission_seconds_active(False), 7200)
@@ -458,6 +459,88 @@ class DiscoverTests(unittest.TestCase):
                 patch.object(server, 'tmdb_cached', return_value={'tvdb_id': None}):
             with self.assertRaisesRegex(server.AddError, 'TheTVDB'):
                 server.search_titles('sonarr', 'tmdb:1396')
+
+
+class LiveTests(unittest.TestCase):
+    def setUp(self):
+        server.QUEUE_CACHE.update(at=0.0, value={})
+        server.PLEX_CACHE.clear()
+
+    def test_torrents_are_named_after_the_titles_they_belong_to(self):
+        torrents = [
+            {'hashString': 'AAA', 'name': 'Slow.Horses.S05E03.1080p', 'status': 4, 'percentDone': 0.624, 'rateDownload': 3120000,
+             'eta': 410, 'sizeWhenDone': 2400000000, 'error': 0},
+            {'hashString': 'bbb', 'name': 'Some.Season.Pack', 'status': 4, 'percentDone': 0.5, 'rateDownload': 900, 'eta': -1,
+             'sizeWhenDone': 10, 'error': 0},
+            {'hashString': 'ccc', 'name': 'linux.iso', 'status': 3, 'percentDone': 0, 'rateDownload': 0, 'eta': -1, 'sizeWhenDone': 4, 'error': 0},
+            {'hashString': 'ddd', 'name': 'Old.Film', 'status': 6, 'percentDone': 1, 'rateDownload': 0, 'eta': -1, 'sizeWhenDone': 9, 'error': 0},
+            {'hashString': 'eee', 'name': 'Stopped', 'status': 0, 'percentDone': 0.2, 'rateDownload': 0, 'eta': -1, 'sizeWhenDone': 9, 'error': 0}]
+        def rpc(method, arguments=None, behind_vpn=None):
+            if method == 'session-stats':
+                return {'downloadSpeed': 3121000, 'uploadSpeed': 50000,
+                        'cumulative-stats': {'downloadedBytes': 1000, 'uploadedBytes': 1840}}
+            return {'torrents': torrents}
+        queues = {
+            '/api/v3/queue?pageSize=200&includeSeries=true&includeEpisode=true': {'records': [
+                {'downloadId': 'AAA', 'seriesId': 7, 'series': {'title': 'Slow Horses'},
+                 'episode': {'seasonNumber': 5, 'episodeNumber': 3, 'title': 'Hello Goodbye'}},
+                *({'downloadId': 'BBB', 'seriesId': 8, 'series': {'title': 'The Traitors'},
+                   'episode': {'seasonNumber': 4, 'episodeNumber': number, 'title': 'x'}} for number in range(1, 10))]},
+            '/api/v3/queue?pageSize=200&includeMovie=true': {'records': []}}
+        with patch.object(server, 'transmission_url', return_value='http://transmission:9091/transmission/rpc'), \
+                patch.object(server, 'transmission_rpc', side_effect=rpc), \
+                patch.object(server, 'arr_connection', return_value=('http://arr', 'key')), \
+                patch.object(server, 'arr_json', side_effect=lambda connection, route: queues[route]):
+            data = server.live_transfer()
+        self.assertEqual((data['downloading'], data['queued'], data['seeding'], data['paused'], data['ratio']), (2, 1, 1, 1, 1.84))
+        first, second, third = data['downloads']
+        self.assertEqual((first['title'], first['detail'], first['percent'], first['poster']),
+                         ('Slow Horses', 'S05E03 · Hello Goodbye', 62.4, '/api/posters/sonarr/7'))
+        self.assertEqual((second['title'], second['detail'], second['eta']), ('The Traitors', 'Season 4 · 9 episodes', None))
+        self.assertEqual((third['title'], third['matched'], third['state']), ('linux.iso', False, 'queued'))
+
+    def test_without_transmission_live_says_so(self):
+        with patch.object(server, 'transmission_url', return_value=None):
+            self.assertEqual(server.live_transfer(), {'available': False})
+
+    def test_plex_sessions_become_titles_users_and_progress(self):
+        container = {'Metadata': [
+            {'type': 'episode', 'grandparentTitle': 'Severance', 'parentIndex': 2, 'index': 7, 'title': 'Chikhai Bardo',
+             'viewOffset': 1290000, 'duration': 3000000, 'grandparentThumb': '/library/metadata/55/thumb/1700000000',
+             'User': {'title': 'Martin'}, 'Player': {'title': 'Living room TV', 'state': 'playing', 'local': True}},
+            {'type': 'movie', 'title': 'Wicked', 'year': 2024, 'thumb': 'https://evil.example/x.jpg',
+             'User': {'title': 'Ana'}, 'Player': {'product': 'Plex for iOS', 'state': 'paused'},
+             'TranscodeSession': {'videoDecision': 'transcode'}}]}
+        with patch.object(server, 'plex_json', return_value=container):
+            first, second = server.plex_sessions()
+        self.assertEqual((first['title'], first['detail'], first['percent'], first['stream'], first['user']),
+                         ('Severance', 'S02E07 · Chikhai Bardo', 43, 'Direct play', 'Martin'))
+        self.assertEqual(first['poster'], '/api/plex-art?path=%2Flibrary%2Fmetadata%2F55%2Fthumb%2F1700000000')
+        self.assertEqual((second['detail'], second['state'], second['stream'], second['poster']), ('2024', 'paused', 'Transcoding', None))
+
+    def test_history_names_each_viewer(self):
+        def plex_json(path, params=None, cache_seconds=0):
+            if path == '/accounts':
+                return {'Account': [{'id': 1, 'name': 'Martin'}, {'id': 3, 'name': 'Ana'}]}
+            return {'Metadata': [{'type': 'movie', 'title': 'Dune: Part Two', 'year': 2024, 'accountID': 3, 'viewedAt': 1763800000},
+                                 {'type': 'movie', 'title': 'Unknown', 'accountID': 99}]}
+        with patch.object(server, 'plex_json', side_effect=plex_json):
+            history = server.plex_history()
+        self.assertEqual([(item['title'], item['user'], item['watchedAt']) for item in history],
+                         [('Dune: Part Two', 'Ana', 1763800000), ('Unknown', 'Someone', None)])
+
+    def test_only_plex_library_artwork_is_fetched(self):
+        with patch.object(server, 'plex_configured', return_value=True), patch.object(server, 'plex_open') as plex:
+            for path in ('/library/metadata/1/../../:/prefs', 'http://evil.example/x', '/library/metadata/1/thumb/2?x=1'):
+                self.assertIsNone(server.plex_art(path))
+            plex.assert_not_called()
+
+    def test_the_speed_sampler_records_gaps_when_transmission_is_unreachable(self):
+        server.SPEED_SAMPLES.clear()
+        with patch.object(server, 'transmission_rpc', side_effect=[{'downloadSpeed': 500, 'uploadSpeed': 20}, OSError('down')]):
+            server.sample_speeds_once()
+            server.sample_speeds_once()
+        self.assertEqual([sample[1:] for sample in server.SPEED_SAMPLES], [[500, 20], [None, None]])
 
 @unittest.skipUnless(shutil.which('node'), 'Node.js is needed to test the setup wizard')
 class WizardTests(unittest.TestCase):

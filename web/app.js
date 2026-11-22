@@ -4,7 +4,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;'
 const icon = (name, extra = '') => `<svg class="icon${extra}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 const page = document.body.dataset.page;
-const pageTitles = {overview: 'Overview', library: 'Library', discover: 'Discover', add: 'Add to library', services: 'Services', backups: 'Backups'};
+const pageTitles = {overview: 'Overview', live: 'Live', library: 'Library', discover: 'Discover', add: 'Add to library', services: 'Services', backups: 'Backups'};
 const legacyAnchors = {'#series': '/library#series', '#films': '/library#films', '#library': '/library', '#backups': '/backups', '#services': '/services'};
 if (page === 'overview' && legacyAnchors[window.location.hash]) window.location.replace(legacyAnchors[window.location.hash]);
 $('#page-title').textContent = pageTitles[page];
@@ -472,6 +472,218 @@ async function activity() {
   }
 }
 
+/** "4.2 MB/s": decimal units, as Transmission itself shows them. */
+function speedLabel(bytes) {
+  if (!bytes) return '0 B/s';
+  const units = ['B/s', 'kB/s', 'MB/s', 'GB/s'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit += 1; }
+  return `${new Intl.NumberFormat(undefined, {maximumFractionDigits: value < 10 && unit ? 1 : 0}).format(value)} ${units[unit]}`;
+}
+
+function bytesLabel(bytes) {
+  return bytes == null ? '' : sizeLabel(bytes).replace(/ free$/, '');
+}
+
+function etaLabel(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 60) return 'under a minute left';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours} h ${minutes % 60} min left` : `${Math.round(hours / 24)} days left`;
+}
+
+/** A round top for the speed axis: 1, 2 or 5 times a power of ten, at least 100 kB/s. */
+function niceMax(value) {
+  const floor = Math.max(value, 100000);
+  const power = 10 ** Math.floor(Math.log10(floor));
+  return [1, 2, 5, 10].map(step => step * power).find(step => step >= floor);
+}
+
+/** SVG paths for one series over the last hour. Gaps in sampling break the line instead of bridging them. */
+function speedPath(samples, index, max, width, height, area = false) {
+  const end = Date.now() / 1000;
+  const start = end - 3600;
+  const runs = [[]];
+  for (const sample of samples) {
+    if (sample[0] < start) continue;
+    if (sample[index] == null) { if (runs.at(-1).length) runs.push([]); continue; }
+    const x = ((sample[0] - start) / 3600) * width;
+    const y = height - Math.min(sample[index] / max, 1) * (height - 2) - 1;
+    runs.at(-1).push([x.toFixed(1), y.toFixed(1)]);
+  }
+  return runs.filter(run => run.length > 1).map(run => {
+    const line = 'M' + run.map(point => point.join(' ')).join('L');
+    return area ? `${line}L${run.at(-1)[0]} ${height}L${run[0][0]} ${height}Z` : line;
+  }).join('');
+}
+
+let chartSamples = [];
+function drawSpeedChart(samples) {
+  chartSamples = samples;
+  const recent = samples.filter(sample => sample[0] >= Date.now() / 1000 - 3600);
+  const peak = Math.max(0, ...recent.flatMap(sample => [sample[1] || 0, sample[2] || 0]));
+  const max = niceMax(peak);
+  $('#chart-max').textContent = speedLabel(max);
+  $('#chart-mid').textContent = speedLabel(max / 2);
+  $('#chart-down-area').setAttribute('d', speedPath(samples, 1, max, 600, 200, true));
+  $('#chart-down').setAttribute('d', speedPath(samples, 1, max, 600, 200));
+  $('#chart-up').setAttribute('d', speedPath(samples, 2, max, 600, 200));
+  const downPeak = Math.max(0, ...recent.map(sample => sample[1] || 0));
+  $('#chart-plot').setAttribute('aria-label',
+    `Download and upload speed over the last hour. Download peaked at ${speedLabel(downPeak)}.`);
+}
+
+/** Crosshair and tooltip: the sample nearest the pointer, or moved with the arrow keys. */
+function setupSpeedChart() {
+  const plot = $('#chart-plot');
+  const cursor = $('#chart-cursor');
+  const tip = $('#chart-tip');
+  let index = null;
+  const show = position => {
+    const start = Date.now() / 1000 - 3600;
+    const visible = chartSamples.filter(sample => sample[0] >= start);
+    if (!visible.length) return;
+    index = Math.max(0, Math.min(visible.length - 1, position));
+    const sample = visible[index];
+    const x = ((sample[0] - start) / 3600) * plot.clientWidth;
+    cursor.style.left = `${x}px`;
+    cursor.hidden = false;
+    const time = new Date(sample[0] * 1000).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+    tip.innerHTML = `<strong>${esc(time)}</strong>
+      <span><i class="legend-key key-down"></i>Download ${esc(sample[1] == null ? 'no data' : speedLabel(sample[1]))}</span>
+      <span><i class="legend-key key-up"></i>Upload ${esc(sample[2] == null ? 'no data' : speedLabel(sample[2]))}</span>`;
+    tip.hidden = false;
+    tip.style.left = `${Math.min(Math.max(x, 80), plot.clientWidth - 80)}px`;
+  };
+  const nearest = event => {
+    const start = Date.now() / 1000 - 3600;
+    const visible = chartSamples.filter(sample => sample[0] >= start);
+    const time = start + (event.offsetX / plot.clientWidth) * 3600;
+    let best = 0;
+    visible.forEach((sample, position) => { if (Math.abs(sample[0] - time) < Math.abs(visible[best][0] - time)) best = position; });
+    return best;
+  };
+  plot.addEventListener('pointermove', event => { if (event.target === plot || plot.contains(event.target)) show(nearest(event)); });
+  plot.addEventListener('pointerleave', () => { cursor.hidden = true; tip.hidden = true; index = null; });
+  plot.addEventListener('keydown', event => {
+    const step = {ArrowLeft: -1, ArrowRight: 1, Home: -1e6, End: 1e6}[event.key];
+    if (step == null) return;
+    event.preventDefault();
+    show((index ?? 1e6) + step);
+  });
+  plot.addEventListener('blur', () => { cursor.hidden = true; tip.hidden = true; index = null; });
+}
+
+function liveRow(item, extra) {
+  return `<li class="live-row">
+    <div class="live-thumb">${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async">` : ''}</div>
+    <div class="live-main">
+      <p class="live-title">${esc(item.title)}</p>
+      ${item.detail ? `<p class="live-detail">${esc(item.detail)}</p>` : ''}
+      ${extra}
+    </div>
+  </li>`;
+}
+
+function progressBar(percent, label) {
+  const value = Math.max(0, Math.min(100, percent ?? 0));
+  return `<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(value)}" aria-label="${esc(label)}"><span data-width="${value}"></span></div>`;
+}
+
+/** The page's security policy blocks inline style attributes, so bar widths are set from here. */
+function sizeProgress(root) {
+  for (const bar of root.querySelectorAll('.progress span[data-width]')) bar.style.width = `${bar.dataset.width}%`;
+}
+
+async function live() {
+  try {
+    const data = await get('/api/live');
+    const transfer = data.transfer;
+    const playing = data.playing;
+    $('#live-transfer-panel').hidden = !transfer.available;
+    $('#live-downloads-panel').hidden = !transfer.available;
+    $('#live-playing-panel').hidden = !playing.configured;
+    $('#live-empty').hidden = transfer.available || playing.configured;
+    if (playing.configured) {
+      const sessions = playing.sessions || [];
+      $('#live-playing-count').textContent = playing.error ? 'From Plex'
+        : sessions.length ? `${sessions.length} ${sessions.length === 1 ? 'stream' : 'streams'}` : 'From Plex';
+      $('#live-playing').innerHTML = playing.error ? `<p class="error error-inline">${esc(playing.error)}</p>`
+        : sessions.length ? `<ul class="live-list">${sessions.map(session => liveRow(session, `
+            ${progressBar(session.percent, `${session.title} progress`)}
+            <p class="live-meta">${esc([session.user, session.device, session.state === 'paused' ? 'Paused' : session.state === 'buffering' ? 'Buffering' : '', session.stream].filter(Boolean).join(' · '))}</p>`)).join('')}</ul>`
+        : '<p class="empty">Nothing playing right now.</p>';
+      sizeProgress($('#live-playing'));
+    }
+    if (transfer.available) {
+      if (transfer.error) {
+        $('#live-stats').innerHTML = `<p class="error error-inline">${esc(transfer.error)}</p>`;
+      } else {
+        const stats = [['Download', speedLabel(transfer.down)], ['Upload', speedLabel(transfer.up)],
+          ['Downloading', String(transfer.downloading + transfer.queued)], ['Seeding', String(transfer.seeding)],
+          ['Ratio', transfer.ratio == null ? '—' : transfer.ratio.toFixed(2)]];
+        $('#live-stats').innerHTML = stats.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('');
+        drawSpeedChart(transfer.samples || []);
+        const downloads = transfer.downloads || [];
+        $('#live-downloads-count').textContent = downloads.length
+          ? `${downloads.length} ${downloads.length === 1 ? 'download' : 'downloads'}${transfer.queued ? `, ${transfer.queued} waiting` : ''}` : '';
+        $('#live-downloads').innerHTML = downloads.length ? `<ul class="live-list">${downloads.map(item => liveRow(item, `
+            ${progressBar(item.percent, `${item.title} downloaded`)}
+            <p class="live-meta">${esc([`${Math.floor(item.percent)}%`, item.state === 'downloading' ? speedLabel(item.down) : item.state === 'queued' ? 'Waiting' : 'Checking',
+              item.state === 'downloading' ? etaLabel(item.eta) : '', bytesLabel(item.size)].filter(Boolean).join(' · '))}${item.problem ? ' · <span class="text-crit">Transmission reports a problem</span>' : ''}</p>`)).join('')}</ul>`
+          : '<p class="empty">Nothing downloading right now.</p>';
+        sizeProgress($('#live-downloads'));
+      }
+    }
+  } catch (error) {
+    $('#live-empty').hidden = false;
+    $('#live-empty').innerHTML = `<h3>Could not load live activity</h3><p>${esc(error.message)}</p>`;
+  }
+}
+
+async function watchHistory() {
+  try {
+    const data = await get('/api/watch-history');
+    $('#live-history-panel').hidden = !data.configured;
+    if (!data.configured) return;
+    const history = data.history || [];
+    $('#live-history').innerHTML = data.error ? `<p class="error error-inline">${esc(data.error)}</p>`
+      : history.length ? `<ul class="live-list">${history.map(item => liveRow(item,
+          `<p class="live-meta">${esc([item.user, item.watchedAt ? durationSince(new Date(item.watchedAt * 1000)) + ' ago' : ''].filter(Boolean).join(' · '))}</p>`)).join('')}</ul>`
+      : '<p class="empty">Nothing watched yet.</p>';
+  } catch {
+    $('#live-history').innerHTML = '<p class="error error-inline">Could not load the watch history.</p>';
+  }
+}
+
+/** The Overview's compact view: speeds and what's downloading, with the last hour faintly behind them. */
+async function transferSummary() {
+  try {
+    const data = await get('/api/live?summary=1');
+    const transfer = data.transfer;
+    $('#transfer-summary').hidden = !transfer.available;
+    if (!transfer.available) return;
+    if (transfer.error) {
+      $('#transfer-speed').textContent = '—';
+      $('#transfer-detail').textContent = transfer.error;
+      return;
+    }
+    $('#transfer-speed').textContent = `↓ ${speedLabel(transfer.down)}`;
+    const active = transfer.downloading + transfer.queued;
+    $('#transfer-detail').textContent = `${active ? `${active} downloading` : 'Nothing downloading'} · ↑ ${speedLabel(transfer.up)}`;
+    const samples = transfer.samples || [];
+    const recent = samples.filter(sample => sample[0] >= Date.now() / 1000 - 3600);
+    const max = niceMax(Math.max(0, ...recent.map(sample => sample[1] || 0)));
+    $('#transfer-summary .spark-area').setAttribute('d', speedPath(samples, 1, max, 300, 100, true));
+    $('#transfer-summary .spark-line').setAttribute('d', speedPath(samples, 1, max, 300, 100));
+  } catch {
+    $('#transfer-detail').textContent = 'Could not load transfer speeds';
+  }
+}
+
 function episodeCode(episode) {
   if (!episode || episode.season == null || episode.number == null) return '';
   return `S${String(episode.season).padStart(2, '0')}E${String(episode.number).padStart(2, '0')}`;
@@ -918,6 +1130,8 @@ async function refresh() {
   button.classList.add('is-busy');
   const jobs = [status()];
   if (page === 'discover') jobs.push(discover());
+  if (page === 'live') jobs.push(live(), watchHistory());
+  if (page === 'overview') jobs.push(transferSummary());
   if (page === 'overview' || page === 'library') {
     jobs.push(activity());
     for (const library of Object.values(libraries)) jobs.push(loadLibrary(library));
@@ -929,6 +1143,10 @@ async function refresh() {
 }
 
 if (page === 'services') setupControls();
+if (page === 'live') setupSpeedChart();
+// Live figures move faster than the rest: every five seconds on Live, ten on the Overview's summary.
+if (page === 'live') setInterval(() => { if (!document.hidden) live(); }, 5000);
+if (page === 'overview') setInterval(() => { if (!document.hidden) transferSummary(); }, 10000);
 $('#refresh').addEventListener('click', refresh);
 $('#refresh').hidden = page === 'add';
 if (page === 'add') {

@@ -2,6 +2,7 @@
 """Local MartinFlix dashboard and installer-managed password setup."""
 import json
 import base64
+import collections
 import binascii
 import calendar
 from concurrent.futures import ThreadPoolExecutor
@@ -37,7 +38,7 @@ ARR_HEALTH_ENDPOINTS = {
 }
 CATALOG = json.loads((WEB / 'catalog.json').read_text(encoding='utf-8'))
 STACKS = {group['name']: group['services'] for group in CATALOG['groups']}
-PAGES = ('overview', 'library', 'discover', 'add', 'services', 'backups')
+PAGES = ('overview', 'live', 'library', 'discover', 'add', 'services', 'backups')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -467,28 +468,185 @@ def app_started_at(name, behind_vpn):
     return None
 
 
-def transmission_seconds_active(behind_vpn):
-    """Transmission's session age, read with the shared login the installer gives it."""
-    secret = os.environ.get('MARTINFLIX_TRANSMISSION_PASSWORD_FILE')
-    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') != '1' or not secret:
+TRANSMISSION_SESSION = {'id': ''}
+
+
+def transmission_url(behind_vpn=None):
+    """Where Transmission's RPC answers: set directly, or found on the installer's Compose network."""
+    if url := os.environ.get('MARTINFLIX_TRANSMISSION_URL'):
+        return url
+    if os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') != '1' or not os.environ.get('MARTINFLIX_TRANSMISSION_PASSWORD_FILE'):
         return None
-    password = Path(secret).read_text(encoding='utf-8')
-    token = base64.b64encode(f'{ADMIN_APP_USER}:{password}'.encode()).decode()
-    url = f'http://{"gluetun" if behind_vpn else "transmission"}:9091/transmission/rpc'
-    headers = {'Authorization': f'Basic {token}', 'Content-Type': 'application/json'}
-    body = json.dumps({'method': 'session-stats'}).encode()
+    if behind_vpn is None:
+        downloads, behind_vpn, *_ = installer_downloads()
+        if 'transmission' not in downloads:
+            return None
+    return f'http://{"gluetun" if behind_vpn else "transmission"}:9091/transmission/rpc'
+
+
+def transmission_rpc(method, arguments=None, behind_vpn=None):
+    """One Transmission RPC call with the shared login, renewing Transmission's anti-forgery session ID once."""
+    url = transmission_url(behind_vpn)
+    if not url:
+        return None
+    headers = {'Content-Type': 'application/json'}
+    password = read_secret('MARTINFLIX_TRANSMISSION_PASSWORD')
+    if password:
+        user = os.environ.get('MARTINFLIX_TRANSMISSION_USER', ADMIN_APP_USER)
+        headers['Authorization'] = 'Basic ' + base64.b64encode(f'{user}:{password}'.encode()).decode()
+    body = json.dumps({'method': method, **({'arguments': arguments} if arguments else {})}).encode()
     for _ in range(2):
+        if TRANSMISSION_SESSION['id']:
+            headers['X-Transmission-Session-Id'] = TRANSMISSION_SESSION['id']
         try:
-            with ARR_OPENER.open(urllib.request.Request(url, data=body, headers=headers, method='POST'), timeout=3) as response:
-                seconds = json.load(response)['arguments']['current-stats']['secondsActive']
-            return seconds if type(seconds) is int and seconds >= 0 else None
+            with ARR_OPENER.open(urllib.request.Request(url, data=body, headers=headers, method='POST'), timeout=4) as response:
+                result = json.load(response)
+            if result.get('result') != 'success':
+                raise ValueError(result.get('result') or 'Transmission refused the request')
+            return result.get('arguments') or {}
         except urllib.error.HTTPError as exc:
             session = exc.headers.get('X-Transmission-Session-Id')
             exc.close()
             if exc.code != 409 or not session:
-                return None
-            headers['X-Transmission-Session-Id'] = session
-    return None
+                raise
+            TRANSMISSION_SESSION['id'] = session
+    raise ValueError('Transmission kept asking for a new session ID')
+
+
+def transmission_seconds_active(behind_vpn):
+    """Transmission's session age, read with the shared login the installer gives it."""
+    try:
+        stats = transmission_rpc('session-stats', behind_vpn=behind_vpn)
+        seconds = stats['current-stats']['secondsActive'] if stats else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return seconds if type(seconds) is int and seconds >= 0 else None
+
+
+# Live transfer speeds: one sample every five seconds, kept for an hour, so the chart has history when opened.
+SPEED_INTERVAL = 5
+SPEED_SAMPLES = collections.deque(maxlen=720)
+SPEED_LOCK = threading.Lock()
+
+
+def sample_speeds_once():
+    try:
+        stats = transmission_rpc('session-stats')
+    except (OSError, ValueError, TypeError):
+        stats = None
+    down = stats.get('downloadSpeed') if stats else None
+    up = stats.get('uploadSpeed') if stats else None
+    sample = [int(time.time()), down if type(down) is int else None, up if type(up) is int else None]
+    with SPEED_LOCK:
+        SPEED_SAMPLES.append(sample)
+    return stats
+
+
+def sample_speeds_forever():
+    while True:
+        if transmission_url():
+            sample_speeds_once()
+        time.sleep(SPEED_INTERVAL)
+
+
+# Transmission's torrent states, from its RPC specification.
+TORRENT_STATES = {0: 'paused', 1: 'checking', 2: 'checking', 3: 'queued', 4: 'downloading', 5: 'seeding', 6: 'seeding'}
+QUEUE_CACHE = {'at': 0.0, 'value': {}}
+
+
+def queued_titles():
+    """Which torrent belongs to which episode or film, from Sonarr's and Radarr's queues, keyed by torrent hash."""
+    if time.time() - QUEUE_CACHE['at'] < 15:
+        return QUEUE_CACHE['value']
+    titles = {}
+    for kind, route in (('sonarr', '/api/v3/queue?pageSize=200&includeSeries=true&includeEpisode=true'),
+                        ('radarr', '/api/v3/queue?pageSize=200&includeMovie=true')):
+        connection = arr_connection(kind)
+        if connection is None:
+            continue
+        try:
+            records = (arr_json(connection, route) or {}).get('records') or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get('downloadId'), str):
+                continue
+            key = record['downloadId'].lower()
+            if kind == 'sonarr':
+                series = record.get('series') or {}
+                episode = record.get('episode') or {}
+                entry = titles.setdefault(key, {'kind': kind, 'title': series.get('title'), 'mediaId': record.get('seriesId'),
+                                                'episodes': []})
+                season, number = episode.get('seasonNumber'), episode.get('episodeNumber')
+                if type(season) is int and type(number) is int:
+                    entry['episodes'].append((season, number, episode.get('title')))
+            else:
+                movie = record.get('movie') or {}
+                titles[key] = {'kind': kind, 'title': movie.get('title'), 'year': movie.get('year'),
+                               'mediaId': record.get('movieId'), 'episodes': []}
+    QUEUE_CACHE.update(at=time.time(), value=titles)
+    return titles
+
+
+def episode_label(episodes):
+    if not episodes:
+        return ''
+    episodes = sorted(set(episodes))
+    if len(episodes) == 1:
+        season, number, name = episodes[0]
+        return f'S{season:02d}E{number:02d}' + (f' · {short_text(name, 60)}' if name else '')
+    seasons = sorted({season for season, _, _ in episodes})
+    span = f'Season {seasons[0]}' if len(seasons) == 1 else f'Seasons {seasons[0]}–{seasons[-1]}'
+    return f'{span} · {len(episodes)} episodes'
+
+
+def live_transfer():
+    """Speeds, counts and the torrents still downloading, named after the titles they belong to."""
+    if not transmission_url():
+        return {'available': False}
+    try:
+        stats = transmission_rpc('session-stats') or {}
+        torrents = (transmission_rpc('torrent-get', {'fields': [
+            'hashString', 'name', 'status', 'percentDone', 'rateDownload', 'rateUpload', 'eta', 'sizeWhenDone', 'error']})
+            or {}).get('torrents') or []
+    except (OSError, ValueError, TypeError):
+        return {'available': True, 'error': 'Transmission is not answering right now.'}
+    counts = collections.Counter(TORRENT_STATES.get(item.get('status'), 'paused') for item in torrents if isinstance(item, dict))
+    total = stats.get('cumulative-stats') or {}
+    downloaded, uploaded = total.get('downloadedBytes'), total.get('uploadedBytes')
+    titles = queued_titles()
+    downloads = []
+    for item in torrents:
+        if not isinstance(item, dict) or TORRENT_STATES.get(item.get('status')) not in ('downloading', 'queued', 'checking'):
+            continue
+        match = titles.get(str(item.get('hashString', '')).lower())
+        media = match.get('mediaId') if match else None
+        detail = (episode_label(match['episodes']) if match and match['kind'] == 'sonarr'
+                  else str(match.get('year') or '') if match else '')
+        percent = item.get('percentDone')
+        eta = item.get('eta')
+        downloads.append({
+            'title': short_text((match or {}).get('title') or item.get('name') or 'Unnamed download', 120),
+            'detail': detail, 'matched': bool(match), 'state': TORRENT_STATES.get(item.get('status')),
+            'percent': round(percent * 100, 1) if isinstance(percent, (int, float)) else 0,
+            'down': item.get('rateDownload') if type(item.get('rateDownload')) is int else 0,
+            'eta': eta if type(eta) is int and eta >= 0 else None,
+            'size': item.get('sizeWhenDone') if type(item.get('sizeWhenDone')) is int else None,
+            'poster': f'/api/posters/{match["kind"]}/{media}' if match and type(media) is int and media > 0 else None,
+            'problem': bool(item.get('error')),
+        })
+    downloads.sort(key=lambda entry: (entry['state'] != 'downloading', -entry['down'], entry['title']))
+    with SPEED_LOCK:
+        samples = list(SPEED_SAMPLES)
+    return {
+        'available': True,
+        'down': stats.get('downloadSpeed') if type(stats.get('downloadSpeed')) is int else 0,
+        'up': stats.get('uploadSpeed') if type(stats.get('uploadSpeed')) is int else 0,
+        'downloading': counts['downloading'], 'queued': counts['queued'] + counts['checking'],
+        'seeding': counts['seeding'], 'paused': counts['paused'],
+        'ratio': round(uploaded / downloaded, 2) if type(downloaded) is int and downloaded > 0 and type(uploaded) is int else None,
+        'samples': samples, 'interval': SPEED_INTERVAL, 'downloads': downloads[:30],
+    }
 
 
 def next_airing(value):
@@ -631,7 +789,135 @@ def arr_poster(kind, media_id):
     return None
 
 
+# Plex, read directly with an X-Plex-Token: what is playing now and the recent watch history.
+PLEX_CACHE = {}
+PLEX_ART = re.compile(r'/library/metadata/[0-9]{1,10}/(?:thumb|art)/[0-9]{1,12}')
+
+
+def plex_configured():
+    return bool(os.environ.get('MARTINFLIX_PLEX_URL') and read_secret('MARTINFLIX_PLEX_TOKEN'))
+
+
+def plex_open(path, params=None, accept='application/json', timeout=5):
+    base = os.environ.get('MARTINFLIX_PLEX_URL', '').rstrip('/')
+    query = f'?{urllib.parse.urlencode(params)}' if params else ''
+    request = urllib.request.Request(base + path + query, headers={
+        'Accept': accept, 'X-Plex-Token': read_secret('MARTINFLIX_PLEX_TOKEN'),
+        'X-Plex-Client-Identifier': 'martinflix-dashboard', 'X-Plex-Product': 'MartinFlix'})
+    return ARR_OPENER.open(request, timeout=timeout)
+
+
+def plex_json(path, params=None, cache_seconds=0):
+    key = (path, tuple(sorted((params or {}).items())))
+    hit = PLEX_CACHE.get(key)
+    if cache_seconds and hit and time.time() - hit[0] < cache_seconds:
+        return hit[1]
+    with plex_open(path, params) as response:
+        data = json.load(response).get('MediaContainer') or {}
+    if cache_seconds:
+        PLEX_CACHE[key] = (time.time(), data)
+    return data
+
+
+def plex_art(path):
+    """A poster through the dashboard, so the browser never sees the Plex token. Only library artwork paths pass."""
+    if not plex_configured() or not PLEX_ART.fullmatch(path):
+        return None
+    params = {'width': 240, 'height': 360, 'minSize': 1, 'upscale': 1, 'url': path}
+    try:
+        with plex_open('/photo/:/transcode', params, accept='image/jpeg', timeout=8) as response:
+            kind = response.headers.get_content_type()
+            if kind not in ('image/jpeg', 'image/png', 'image/webp'):
+                return None
+            body = response.read(1024 * 1024 + 1)
+    except (OSError, ValueError):
+        return None
+    return (body, kind) if len(body) <= 1024 * 1024 else None
+
+
+def plex_title(item):
+    """Series name and "S02E05 · Episode" for episodes; the title and year for films."""
+    if item.get('type') == 'episode':
+        season, number = item.get('parentIndex'), item.get('index')
+        code = f'S{season:02d}E{number:02d}' if type(season) is int and type(number) is int else ''
+        name = short_text(item.get('title'), 80)
+        return short_text(item.get('grandparentTitle'), 120) or 'Untitled', ' · '.join(part for part in (code, name) if part)
+    year = item.get('year')
+    return short_text(item.get('title'), 120) or 'Untitled', str(year) if type(year) is int else ''
+
+
+def plex_poster(item):
+    art = item.get('grandparentThumb') if item.get('type') == 'episode' else item.get('thumb')
+    art = art or item.get('thumb')
+    return f'/api/plex-art?{urllib.parse.urlencode({"path": art})}' if isinstance(art, str) and PLEX_ART.fullmatch(art) else None
+
+
+def plex_sessions():
+    data = plex_json('/status/sessions')
+    sessions = []
+    for item in data.get('Metadata') or []:
+        if not isinstance(item, dict):
+            continue
+        title, detail = plex_title(item)
+        player = item.get('Player') or {}
+        transcode = item.get('TranscodeSession') or {}
+        decision = transcode.get('videoDecision') or transcode.get('audioDecision')
+        offset, duration = item.get('viewOffset'), item.get('duration')
+        sessions.append({
+            'title': title, 'detail': detail, 'poster': plex_poster(item),
+            'user': short_text((item.get('User') or {}).get('title'), 60) or 'Someone',
+            'device': short_text(player.get('title') or player.get('product'), 60),
+            'state': player.get('state') if player.get('state') in ('playing', 'paused', 'buffering') else 'playing',
+            'percent': round(offset / duration * 100) if type(offset) is int and type(duration) is int and duration > 0 else None,
+            'stream': {'transcode': 'Transcoding', 'copy': 'Direct stream'}.get(decision, 'Direct play'),
+            'local': player.get('local') is True,
+        })
+    return sessions
+
+
+def plex_accounts():
+    accounts = plex_json('/accounts', cache_seconds=3600)
+    return {item.get('id'): short_text(item.get('name'), 60) for item in accounts.get('Account') or []
+            if isinstance(item, dict) and type(item.get('id')) is int}
+
+
+def plex_history(limit=24):
+    data = plex_json('/status/sessions/history/all', {'sort': 'viewedAt:desc', 'X-Plex-Container-Start': 0,
+                                                      'X-Plex-Container-Size': limit}, cache_seconds=60)
+    try:
+        names = plex_accounts()
+    except (OSError, ValueError):
+        names = {}
+    history = []
+    for item in data.get('Metadata') or []:
+        if not isinstance(item, dict):
+            continue
+        title, detail = plex_title(item)
+        viewed = item.get('viewedAt')
+        history.append({'title': title, 'detail': detail, 'poster': plex_poster(item),
+                        'user': names.get(item.get('accountID')) or 'Someone',
+                        'watchedAt': viewed if type(viewed) is int else None})
+    return history
+
+
+def live_playing():
+    if not plex_configured():
+        return {'configured': False}
+    try:
+        sessions = plex_sessions()
+    except (OSError, ValueError, AttributeError):
+        return {'configured': True, 'error': 'Plex is not answering right now.'}
+    return {'configured': True, 'sessions': sessions}
+
+
 def plex_activity():
+    if plex_configured():
+        playing = live_playing()
+        if playing.get('error'):
+            return {'configured': True, 'error': 'Plex activity is unavailable.'}
+        return {'configured': True, 'streams': len(playing['sessions']),
+                'sessions': [{'title': ' · '.join(filter(None, (item['title'], item['detail']))), 'state': item['state']}
+                             for item in playing['sessions']]}
     try:
         key = read_secret('MARTINFLIX_TAUTULLI_KEY')
         if not key:
@@ -1044,6 +1330,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'Discover is turned off. Rerun setup with --discover on.'}, 404)
             else:
                 self.send_json(discover_rows())
+        elif path == '/api/live':
+            if urllib.parse.parse_qs(url.query).get('summary') == ['1']:
+                transfer = live_transfer()
+                transfer.pop('downloads', None)
+                playing = live_playing()
+                self.send_json({'transfer': transfer, 'playing': {
+                    'configured': playing['configured'], 'count': len(playing.get('sessions') or []),
+                    'error': bool(playing.get('error'))}})
+            else:
+                self.send_json({'transfer': live_transfer(), 'playing': live_playing()})
+        elif path == '/api/watch-history':
+            if not plex_configured():
+                self.send_json({'configured': False})
+            else:
+                try:
+                    self.send_json({'configured': True, 'history': plex_history()})
+                except (OSError, ValueError, AttributeError):
+                    self.send_json({'configured': True, 'error': 'Plex is not answering right now.'})
+        elif path == '/api/plex-art':
+            art = plex_art((urllib.parse.parse_qs(url.query).get('path') or [''])[0])
+            if art is None:
+                self.send_error(404)
+            else:
+                body, kind = art
+                self.send_response(200)
+                self.send_header('Content-Type', kind)
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'private, max-age=86400')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.end_headers()
+                self.wfile.write(body)
         elif path == '/api/activity':
             self.send_json(dashboard_activity())
         elif path in ('/api/sonarr', '/api/radarr'):
@@ -1486,5 +1803,6 @@ if __name__ == '__main__':
     server.password_setup_token = secrets.token_urlsafe(32)
     server.password_setup_lock = threading.Lock()
     server.session_key = secrets.token_bytes(32)
+    threading.Thread(target=sample_speeds_forever, daemon=True, name='speed-samples').start()
     print('MartinFlix listening on %s:%d' % (host, port), flush=True)
     server.serve_forever()

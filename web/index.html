@@ -21,6 +21,7 @@
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14 9l2 2"/></symbol>
     <symbol id="i-keypad" viewBox="0 0 24 24"><circle cx="6" cy="6" r="1.4"/><circle cx="12" cy="6" r="1.4"/><circle cx="18" cy="6" r="1.4"/><circle cx="6" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18" cy="12" r="1.4"/><circle cx="6" cy="18" r="1.4"/><circle cx="12" cy="18" r="1.4"/><circle cx="18" cy="18" r="1.4"/></symbol>
     <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4v4.5H15"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5 11 13M17.5 14v4.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1H10"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
@@ -38,6 +39,7 @@
       <a href="/" class="brand"><img class="brand-mark" src="/assets/martinflix-mark.webp" width="36" height="36" alt=""><span>MartinFlix</span></a>
       <nav class="nav" aria-label="Main">
         <a href="/" data-nav="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
+        <a href="/live" data-nav="live"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg><span>Live</span></a>
         <a href="/library" data-nav="library"><svg class="icon" aria-hidden="true"><use href="#i-library"/></svg><span>Library</span></a>
         <a href="/discover" data-nav="discover" id="nav-discover" hidden><svg class="icon" aria-hidden="true"><use href="#i-compass"/></svg><span>Discover</span></a>
         <a href="/services" data-nav="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span><span class="nav-flag" id="nav-flag" hidden></span></a>
@@ -65,11 +67,17 @@
             <strong class="status-value" id="running">—</strong>
             <span class="status-detail" id="services-summary-detail">Checking service status</span>
           </a>
-          <div class="status-item" id="plex-summary">
+          <a class="status-item" id="plex-summary" href="/live">
             <span class="status-label">Playing now</span>
             <strong class="status-value" id="plex-streams">—</strong>
             <span class="status-detail" id="plex-detail">Checking playback activity</span>
-          </div>
+          </a>
+          <a class="status-item has-spark" id="transfer-summary" href="/live" hidden>
+            <svg class="status-spark" viewBox="0 0 300 100" preserveAspectRatio="none" aria-hidden="true"><path class="spark-area"/><path class="spark-line"/></svg>
+            <span class="status-label">Downloads</span>
+            <strong class="status-value" id="transfer-speed">—</strong>
+            <span class="status-detail" id="transfer-detail">Checking Transmission</span>
+          </a>
           <a class="status-item" id="backup-summary" href="/backups">
             <span class="status-label">Latest backup</span>
             <strong class="status-value" id="latest-backup">—</strong>
@@ -92,6 +100,48 @@
           </div>
           <div id="next-films" class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
         </section>
+      </div>
+
+      <div class="page" data-for="live">
+        <section class="panel" id="live-playing-panel" aria-labelledby="live-playing-title" hidden>
+          <div class="panel-head"><div><h2 id="live-playing-title">Playing now</h2><p id="live-playing-count">From Plex</p></div></div>
+          <div id="live-playing" aria-live="polite"><p class="empty">Checking Plex…</p></div>
+        </section>
+
+        <section class="panel" id="live-transfer-panel" aria-labelledby="live-transfer-title" hidden>
+          <div class="panel-head"><div><h2 id="live-transfer-title">Transfers</h2><p>Transmission, updated every five seconds</p></div></div>
+          <dl class="live-stats" id="live-stats"></dl>
+          <figure class="speed-chart" id="speed-chart">
+            <figcaption class="chart-head">
+              <span>Last hour</span>
+              <span class="chart-legend"><span class="legend-key key-down" aria-hidden="true"></span>Download<span class="legend-key key-up" aria-hidden="true"></span>Upload</span>
+            </figcaption>
+            <div class="chart-body">
+              <div class="chart-y" aria-hidden="true"><span id="chart-max"></span><span id="chart-mid"></span><span>0</span></div>
+              <div class="chart-plot" id="chart-plot" tabindex="0" role="img" aria-label="Download and upload speed over the last hour">
+                <svg viewBox="0 0 600 200" preserveAspectRatio="none" aria-hidden="true">
+                  <path class="chart-grid" d="M0 0.5H600M0 100H600M0 199.5H600"/>
+                  <path class="chart-area" id="chart-down-area"/><path class="chart-line line-down" id="chart-down"/><path class="chart-line line-up" id="chart-up"/>
+                </svg>
+                <div class="chart-cursor" id="chart-cursor" hidden></div>
+                <div class="chart-tip" id="chart-tip" hidden></div>
+              </div>
+            </div>
+            <div class="chart-x" aria-hidden="true"><span>60 min ago</span><span>30 min ago</span><span>Now</span></div>
+          </figure>
+        </section>
+
+        <section class="panel" id="live-downloads-panel" aria-labelledby="live-downloads-title" hidden>
+          <div class="panel-head"><div><h2 id="live-downloads-title">Downloading</h2><p id="live-downloads-count"></p></div></div>
+          <div id="live-downloads" aria-live="polite"></div>
+        </section>
+
+        <section class="panel" id="live-history-panel" aria-labelledby="live-history-title" hidden>
+          <div class="panel-head"><div><h2 id="live-history-title">Recently watched</h2><p>Plex watch history, newest first</p></div></div>
+          <div id="live-history"><p class="empty">Loading…</p></div>
+        </section>
+
+        <div class="empty-state" id="live-empty" hidden><h3>Nothing to show yet</h3><p>Live needs Transmission or a Plex connection. Rerun setup with <code>--plex-url</code> and <code>--set-plex-token</code> to connect Plex.</p></div>
       </div>
 
       <div class="page" data-for="discover">

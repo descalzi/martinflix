@@ -77,3 +77,9 @@ test('Discover is on by default; switching it off or using your own key become f
   const update = wizard.installArguments({mode: 'update', changes: {route: 'keep', page: 'on', discover: true, region: 'US'}});
   assert.deepStrictEqual(update, ['--update', '--discover=on', '--set-tmdb-key', '--discover-region=US']);
 });
+
+test('a Plex address connects Plex and asks setup for its token', () => {
+  const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, discover: true, plexUrl: 'http://192.168.5.204:32400'});
+  assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--plex-url=http://192.168.5.204:32400', '--set-plex-token']);
+  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexToken: true}}), ['--update', '--set-plex-token']);
+});

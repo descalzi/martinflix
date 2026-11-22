@@ -32,6 +32,19 @@ New Radarr installations start with a maximum release size of 4,500 MB, an avail
 
 The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
 
+### Live
+
+The **Live** page shows what's happening now, updating every five seconds:
+
+- **Playing now:** who is watching what in Plex, how far through, on which device, and whether Plex plays it directly or transcodes it.
+- **Transfers:** Transmission's download and upload speed, what's downloading and seeding, the overall ratio, and a chart of the last hour. The dashboard samples Transmission every five seconds in the background, so the chart has history as soon as you open the page; it starts empty after the dashboard restarts.
+- **Downloading:** each active download named after its series episode or film, using Sonarr's and Radarr's queues, with progress, speed and time left. Downloads that Sonarr and Radarr didn't request keep their torrent name.
+- **Recently watched:** Plex's watch history, newest first, with who watched it.
+
+The Overview shows a compact version: current speeds and downloads, with the last hour's download speed drawn faintly behind them.
+
+Plex is optional and doesn't need Tautulli. Rerun setup with `--plex-url` (for example `--plex-url http://192.168.5.204:32400`) and `--set-plex-token`, then paste your Plex token when asked. To find the token, open Plex Web, choose any film or episode, open **⋯ → Get Info → View XML**, and copy the value after `X-Plex-Token=` in the address bar. The token stays private on the VM. Plex keeps its own watch history, but older entries may be pruned over time; Tautulli keeps a permanent record, so check how far back Live's history goes before retiring Tautulli.
+
 ### Discover
 
 The **Discover** page shows trending films and series, what's coming to cinemas, and what's new on streaming in your region, whether or not it's in your library. Titles you already have say **In library**; **Add** opens the Add page on that exact title with its options ready.

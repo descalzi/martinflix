@@ -17,6 +17,14 @@ services:
       MARTINFLIX_ADMIN_PASSWORD_FILE: /run/dashboard-secrets/admin-password
       MARTINFLIX_SONARR_KEY_FILE: /run/dashboard-secrets/sonarr-key
       MARTINFLIX_TAUTULLI_KEY_FILE: /run/dashboard-secrets/tautulli-key
+      # Plex directly, for Live's now playing and watch history. Without a plex-token file the dashboard keeps
+      # using Tautulli for the Overview's stream count.
+      MARTINFLIX_PLEX_URL: "${MARTINFLIX_PLEX_URL:-http://127.0.0.1:32400}"
+      MARTINFLIX_PLEX_TOKEN_FILE: /run/dashboard-secrets/plex-token
+      # Transmission's RPC for Live's speeds and downloads. Add a transmission-password file if it needs a login.
+      MARTINFLIX_TRANSMISSION_URL: "${MARTINFLIX_TRANSMISSION_URL:-http://127.0.0.1:9091/transmission/rpc}"
+      MARTINFLIX_TRANSMISSION_USER: "${MARTINFLIX_TRANSMISSION_USER:-admin}"
+      MARTINFLIX_TRANSMISSION_PASSWORD_FILE: /run/dashboard-secrets/transmission-password
       MARTINFLIX_RADARR_KEY_FILE: /run/dashboard-secrets/radarr-key
       MARTINFLIX_PROWLARR_KEY_FILE: /run/dashboard-secrets/prowlarr-key
       MARTINFLIX_BAZARR_KEY_FILE: /run/dashboard-secrets/bazarr-key

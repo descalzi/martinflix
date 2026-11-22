@@ -85,6 +85,15 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(self.plan(discover='off')['options']['discover'], 'off')
         self.assertEqual(self.plan({'discover': 'off'})['environment']['MARTINFLIX_DISCOVER'], 'off', 'the choice is kept')
 
+    def test_plex_address_is_checked_and_remembered(self):
+        self.assertEqual(self.plan()['environment']['MARTINFLIX_PLEX_URL'], '')
+        plan = self.plan(plex_url='http://192.168.5.204:32400/')
+        self.assertEqual(plan['options']['plex_url'], 'http://192.168.5.204:32400')
+        self.assertEqual(self.plan({'plex_url': 'http://plex.lan:32400'})['environment']['MARTINFLIX_PLEX_URL'], 'http://plex.lan:32400')
+        self.assertEqual(self.plan({'plex_url': 'http://plex.lan:32400'}, plex_url='')['options']['plex_url'], '', 'empty disconnects')
+        with self.assertRaisesRegex(ValueError, 'Plex'):
+            self.plan(plex_url='192.168.5.204; rm -rf /')
+
     def test_the_tmdb_key_is_stored_privately_and_blank_removes_it(self):
         path = self.state / 'tmdb-key'
         self.state.mkdir(parents=True, exist_ok=True)

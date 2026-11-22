@@ -214,6 +214,26 @@ def prepare_tmdb_key(path):
     print('Discover will use your TMDB key.' if key else 'Discover will use MartinFlix’s TMDB key.', flush=True)
 
 
+PLEX_TOKEN_HELP = """
+Live reads what's playing and the watch history straight from Plex, with a Plex token. To find yours, open Plex Web,
+choose any film or episode, open ⋯ → Get Info → View XML, and copy the value after "X-Plex-Token=" in the address
+bar. Leave it blank to disconnect Plex."""
+
+
+def prepare_plex_token(path):
+    if not sys.stdin.isatty():
+        raise ValueError('Run setup in a terminal to enter the Plex token.')
+    print(PLEX_TOKEN_HELP, flush=True)
+    token = getpass.getpass('Plex token (hidden as you type or paste): ').strip()
+    if token and not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', token):
+        raise ValueError('That doesn’t look like a Plex token. Copy it again from the X-Plex-Token part of the address.')
+    if token:
+        write_secret(path, token)
+    else:
+        path.unlink(missing_ok=True)
+    print('Plex is connected.' if token else 'Plex is disconnected.', flush=True)
+
+
 def docker_socket():
     """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH."""
     host = os.environ.get('DOCKER_HOST', '')
@@ -637,6 +657,11 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     environment['MARTINFLIX_DISCOVER_REGION'] = region
     options['discover'] = args.discover or previous.get('discover') or 'on'
     environment['MARTINFLIX_DISCOVER'] = options['discover']
+    plex_url = args.plex_url if args.plex_url is not None else previous.get('plex_url', '')
+    if plex_url and not re.fullmatch(r'https?://[A-Za-z0-9.\[\]:-]+(:[0-9]{1,5})?/?', plex_url):
+        raise ValueError('Use the Plex server’s address for --plex-url, such as http://192.168.1.10:32400.')
+    options['plex_url'] = plex_url.rstrip('/')
+    environment['MARTINFLIX_PLEX_URL'] = options['plex_url']
     control_socket = docker_socket()
     if control_socket:
         compose += ['--profile', 'control']
@@ -669,6 +694,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'bootstrapping_arr': bootstrapping_arr, 'bootstrapping_prowlarr': bootstrapping_prowlarr, 'bindings': bindings,
         'control': bool(control_socket), 'change_pin': bool(getattr(args, 'change_pin', False)),
         'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
+        'set_plex_token': bool(getattr(args, 'set_plex_token', False)),
     }
 
 
@@ -766,6 +792,8 @@ def keep_flags(options):
         flags += ['--discover-region', options['discover_region']]
     if options.get('discover') == 'off':
         flags += ['--discover', 'off']
+    if options.get('plex_url'):
+        flags += ['--plex-url', options['plex_url']]
     if options.get('vpn'):
         flags.append('--enable-vpn')
         if options.get('vpn_city'):
@@ -877,6 +905,8 @@ def run_installation(plan, state, previous, mode='install'):
         vpn_credentials_changed = prepare_vpn_secrets(state / 'download-secrets') if vpn else False
         if plan['set_tmdb_key']:
             prepare_tmdb_key(secret_dir / 'tmdb-key')
+        if plan['set_plex_token']:
+            prepare_plex_token(secret_dir / 'plex-token')
         if plan['control']:
             prepare_control_pin(state / 'controller', change=plan['change_pin'])
             if not (secret_dir / 'controller-token').is_file():
@@ -1073,6 +1103,11 @@ def build_parser():
     parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
                         help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--plex-url',
+                        help='Address of your Plex server, such as http://192.168.1.10:32400, for Live’s now playing '
+                             'and watch history. An empty value disconnects it.')
+    parser.add_argument('--set-plex-token', action='store_true',
+                        help='Enter or replace the Plex token that lets the dashboard read Plex.')
     parser.add_argument('--discover', choices=['on', 'off'],
                         help='Show or hide the dashboard’s Discover page of trending and upcoming titles. On by default.')
     parser.add_argument('--set-tmdb-key', action='store_true',

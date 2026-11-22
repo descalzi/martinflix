@@ -107,6 +107,8 @@ function changeArguments(change) {
   if (change.flaresolverr) args.push('--enable-flaresolverr');
   if (change.bazarr) args.push('--enable-bazarr');
   if (change.route && change.route !== 'keep') args.push('--download-network=' + change.route);
+  if (change.plexUrl) args.push('--plex-url=' + shellQuote(change.plexUrl));
+  if (change.plexToken || change.plexUrl) args.push('--set-plex-token');
   if (change.page && change.page !== 'keep') args.push('--discover=' + change.page);
   if (change.discover) args.push('--set-tmdb-key');
   if (change.region && change.region !== 'keep') args.push('--discover-region=' + change.region);
@@ -140,6 +142,7 @@ function installArguments(options) {
     const raw = options.ports[name] ?? '';
     if (raw !== '' && Number(raw) !== fallback) args.push('--' + name + '-port=' + Number(raw));
   }
+  if (options.plexUrl) args.push('--plex-url=' + shellQuote(options.plexUrl), '--set-plex-token');
   if (options.discover === false) args.push('--discover=off');
   if (options.discover !== false && options.ownKey) args.push('--set-tmdb-key');
   if (options.discover !== false && options.region && options.region !== 'GB') args.push('--discover-region=' + options.region);
@@ -215,6 +218,7 @@ if (typeof document !== 'undefined') {
       behindVpn: byId('vpn').checked && preferVpnRoute,
       discover: byId('discover').checked,
       ownKey: byId('tmdb-own').checked,
+      plexUrl: byId('plex-url').value.trim().replace(/\/+$/, ''),
       region: byId('discover-region').value,
       state: (update ? byId('state-update') : byId('state')).value.trim(),
       ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
@@ -230,6 +234,8 @@ if (typeof document !== 'undefined') {
         bazarr: byId('u-bazarr').checked,
         discover: byId('u-discover').checked,
         page: byId('u-discover-page').value,
+        plexUrl: byId('u-plex-url').value.trim().replace(/\/+$/, ''),
+        plexToken: byId('u-plex-token').checked,
         region: byId('u-discover-region').value,
         media: byId('u-media').value.trim(),
       },
@@ -337,6 +343,8 @@ if (typeof document !== 'undefined') {
       if (added.length) summary.push(['Add apps', added.join(', ')]);
       if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
       if (change.media) summary.push(['Media directory', change.media]);
+      if (change.plexUrl) summary.push(['Plex server', change.plexUrl]);
+      if (change.plexToken || change.plexUrl) summary.push(['Plex token', 'Enter it when setup asks']);
       if (change.page !== 'keep') summary.push(['Discover page', change.page === 'on' ? 'Show it' : 'Hide it']);
       if (change.discover) summary.push(['TMDB key', 'Use my own']);
       if (change.region !== 'keep') summary.push(['Discover region', byId('u-discover-region').selectedOptions[0].textContent]);
@@ -352,6 +360,7 @@ if (typeof document !== 'undefined') {
       summary.push(['Download apps', apps.join(', ') || 'None yet']);
       if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
       summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
+      summary.push(['Plex', options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not connected']);
       summary.push(['State directory', options.state || 'Default location']);
       for (const [name, label, fallback] of enabledPorts(options)) {
         const port = options.ports[name];

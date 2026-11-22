@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-16">
-  <script src="./setup.js?v=wizard-16" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-17">
+  <script src="./setup.js?v=wizard-17" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -140,6 +140,11 @@
               <label class="toggle"><input id="tmdb-own" type="checkbox"><span><strong>Use my own TMDB key</strong><span>Setup asks for it. Get a free key in your TMDB account under Settings → API.</span></span></label>
             </fieldset>
             <div class="field">
+              <label for="plex-url">Plex server <small>Optional</small></label>
+              <input id="plex-url" type="url" placeholder="http://192.168.1.10:32400" spellcheck="false" aria-describedby="plex-url-help">
+              <small id="plex-url-help">Shows what’s playing and the watch history on the Live page. Setup then asks for your Plex token.</small>
+            </div>
+            <div class="field">
               <label for="discover-region">Discover region</label>
               <select id="discover-region"><option value="GB">United Kingdom (default)</option><option value="US">United States</option><option value="IE">Ireland</option><option value="CA">Canada</option><option value="AU">Australia</option><option value="NZ">New Zealand</option><option value="DE">Germany</option><option value="FR">France</option><option value="ES">Spain</option><option value="IT">Italy</option><option value="NL">Netherlands</option><option value="PT">Portugal</option><option value="BR">Brazil</option></select>
             </div>
@@ -212,6 +217,14 @@
               <legend>Discover</legend>
               <label class="toggle"><input id="u-discover" type="checkbox"><span><strong>Use my own TMDB key</strong><span>Setup asks for it. Leave the answer blank to go back to MartinFlix’s key.</span></span></label>
             </fieldset>
+            <fieldset class="toggles">
+              <legend>Plex</legend>
+              <label class="toggle"><input id="u-plex-token" type="checkbox"><span><strong>Enter or replace the Plex token</strong><span>Setup asks for it. Leave the answer blank to disconnect Plex.</span></span></label>
+            </fieldset>
+            <div class="field">
+              <label for="u-plex-url">Plex server <small>Only to connect or change it</small></label>
+              <input id="u-plex-url" type="url" placeholder="Keep the current one" spellcheck="false">
+            </div>
             <div class="field">
               <label for="u-discover-page">Discover page</label>
               <select id="u-discover-page"><option value="keep">Keep it as it is</option><option value="on">Show it</option><option value="off">Hide it</option></select>
