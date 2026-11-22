@@ -350,6 +350,44 @@ class RouteChangeTests(unittest.TestCase):
         self.assertEqual([(route, entry['enable'], entry['tags']) for route, entry in self.puts],
                          [('indexer/1?forceSave=true', True, [9])], 'your own indexers are left alone')
 
+
+class PullTests(unittest.TestCase):
+    def run_pull(self, outcomes, present=()):
+        calls, pauses = [], []
+        replies = iter(outcomes)
+        def fake(command, **kwargs):
+            calls.append(command)
+            if command[:3] == ['docker', 'image', 'inspect']:
+                return SimpleNamespace(returncode=0 if command[3] in present else 1)
+            if 'config' in command:
+                return SimpleNamespace(returncode=0, stdout='lscr.io/linuxserver/sonarr:latest\nqmcgaw/gluetun:v3.41.3\n', stderr='')
+            code, text = next(replies)
+            return SimpleNamespace(returncode=code, stdout='', stderr=text)
+        with patch.object(install.subprocess, 'run', side_effect=fake), redirect_stdout(io.StringIO()) as output:
+            result = install.pull_images(['docker', 'compose'], {}, ['sonarr', 'gluetun'], sleep=pauses.append)
+        return result, pauses, output.getvalue(), calls
+
+    def test_a_busy_registry_is_retried(self):
+        busy = 'toomanyrequests: retry-after: 1.133859ms, allowed: 44000/minute'
+        result, pauses, output, _ = self.run_pull([(1, busy), (1, busy), (0, '')])
+        self.assertIsNone(result)
+        self.assertEqual(pauses, [10, 30])
+        self.assertIn('registry is busy', output)
+
+    def test_other_failures_are_not_retried(self):
+        result, pauses, _, _ = self.run_pull([(1, 'manifest unknown')])
+        self.assertEqual((result, pauses), ('manifest unknown', []))
+
+    def test_an_update_carries_on_with_images_already_here(self):
+        busy = 'toomanyrequests: retry-after: 1ms'
+        everything = ('lscr.io/linuxserver/sonarr:latest', 'qmcgaw/gluetun:v3.41.3')
+        result, pauses, output, _ = self.run_pull([(1, busy)] * 4, present=everything)
+        self.assertIsNone(result)
+        self.assertEqual(pauses, [10, 30, 60])
+        self.assertIn('already on this VM', output)
+        result, _, _, _ = self.run_pull([(1, busy)] * 4, present=everything[:1])
+        self.assertIn('toomanyrequests', result, 'a missing image still stops setup')
+
 class VpnDiagnosisTests(unittest.TestCase):
     def diagnose(self, log):
         folder = tempfile.TemporaryDirectory()

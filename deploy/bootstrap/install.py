@@ -234,6 +234,37 @@ def prepare_plex_token(path):
     print('Plex is connected.' if token else 'Plex is disconnected.', flush=True)
 
 
+# Registry answers that mean "try again shortly", including GitHub's shared limit for every LinuxServer image.
+TRANSIENT_PULL = re.compile(r'toomanyrequests|too many requests|i/o timeout|TLS handshake timeout|connection reset|'
+                            r'unexpected EOF|context deadline exceeded|50[234] (?:Bad Gateway|Service Unavailable|Gateway)',
+                            re.IGNORECASE)
+PULL_PAUSES = (10, 30, 60)
+
+
+def pull_images(compose, environment, services, sleep=time.sleep):
+    """Download the newest images, retrying when the registry is busy. If it stays busy and every image is already
+    on this VM, carry on with those. Returns None when done, or the Docker output to show when setup must stop."""
+    details = ''
+    for pause in (*PULL_PAUSES, None):
+        result = subprocess.run(compose + ['pull', '--quiet', *services], env=environment, capture_output=True, text=True)
+        if result.returncode == 0:
+            return None
+        details = ((result.stdout or '') + (result.stderr or '')).strip()[-12000:]
+        if pause is None or not TRANSIENT_PULL.search(details):
+            break
+        print(f'   The image registry is busy. Trying again in {pause} seconds…', flush=True)
+        sleep(pause)
+    listed = subprocess.run(compose + ['config', '--images', *services], env=environment, capture_output=True, text=True)
+    names = listed.stdout.split() if listed.returncode == 0 else []
+    missing = [name for name in names
+               if subprocess.run(['docker', 'image', 'inspect', name], capture_output=True).returncode != 0]
+    if names and not missing:
+        print('   Some newer images could not be downloaded, so setup is using the ones already on this VM. '
+              'Rerun setup later to update them.', flush=True)
+        return None
+    return details
+
+
 def docker_socket():
     """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH."""
     host = os.environ.get('DOCKER_HOST', '')
@@ -943,8 +974,13 @@ def run_installation(plan, state, previous, mode='install'):
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
         sidecars = ['transmission-auth'] if 'transmission' in downloads and not plan['control'] else []
         images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *sidecars]
-        compose_step('2. Downloading the latest app images. The first download may take a few minutes…',
-                     ['pull', '--quiet', *images])
+        print('2. Downloading the latest app images. The first download may take a few minutes…', flush=True)
+        if (details := pull_images(compose, environment, images)) is not None:
+            if details:
+                print(f'\nDocker details\n{details}\n', file=sys.stderr)
+            raise ValueError('Setup could not download the app images. If the details mention "toomanyrequests", the '
+                             'image registry is busy: wait a few minutes, then rerun setup with the same options. '
+                             'Otherwise check this VM’s internet connection and Docker storage.')
         compose_step('3. Starting Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
         for app, key in arr_keys.items():
