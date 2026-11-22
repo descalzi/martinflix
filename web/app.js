@@ -1142,7 +1142,7 @@ function changeList(changes, available) {
   }
   if (changes.older) return '<p class="muted">This is an earlier version than the one running now, because the release channel changed.</p>';
   const more = changes.total > changes.commits.length ? `<li class="muted">and ${changes.total - changes.commits.length} more</li>` : '';
-  return `<ul class="change-list">${changes.commits.map(commit => `<li><span>${esc(commit.title)}</span><span class="muted">${esc(when(commit.date, {day: 'numeric', month: 'short'}))}</span></li>`).join('')}${more}</ul>
+  return `<ul class="change-list" tabindex="0" aria-label="Changes in this version">${changes.commits.map(commit => `<li><span>${esc(commit.title)}</span><span class="muted">${esc(when(commit.date, {day: 'numeric', month: 'short'}))}</span></li>`).join('')}${more}</ul>
     ${changes.url ? `<a class="text-link" href="${esc(changes.url)}" target="_blank" rel="noopener noreferrer">Compare on GitHub${icon('external')}</a>` : ''}`;
 }
 
