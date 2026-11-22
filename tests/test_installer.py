@@ -500,10 +500,23 @@ class PlexTests(unittest.TestCase):
             install.seed_plex_libraries('token', 'en-GB', opener=open_)
         posts = [url for method, url, _ in requests if method == 'POST']
         self.assertEqual(len(posts), 2)
-        self.assertIn('location=%2Fdata%2FTV+Shows', posts[0])
-        self.assertIn('agent=tv.plex.agents.movie', posts[1])
-        self.assertTrue(any(method == 'PUT' and 'FSEventLibraryUpdatesEnabled=1' in url for method, url, _ in requests))
+        self.assertIn('name=Films', posts[0])
+        self.assertIn('location=%2Fdata%2FMovies', posts[0])
+        self.assertIn('prefs%5Bcountry%5D=GB', posts[0])
+        self.assertIn('name=TV+programmes', posts[1])
+        self.assertIn('prefs%5BshowOrdering%5D=aired', posts[1])
         self.assertTrue(all(token == 'token' for _, _, token in requests))
+
+    def test_server_settings_never_include_identity_or_account(self):
+        open_, requests = self.opener([])
+        with redirect_stdout(io.StringIO()):
+            install.apply_plex_settings('token', opener=open_)
+        (method, url, _), = requests
+        self.assertEqual(method, 'PUT')
+        self.assertIn('ButlerStartHour=2', url)
+        self.assertIn('DlnaEnabled=0', url)
+        for private in ('FriendlyName', 'PlexOnline', 'MachineIdentifier', 'ManualPortMappingPort'):
+            self.assertNotIn(private, url)
 
     def test_existing_libraries_are_left_alone(self):
         open_, requests = self.opener([{'key': '1', 'title': 'Films'}])

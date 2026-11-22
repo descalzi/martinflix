@@ -38,7 +38,8 @@ Add `--enable-plex` (on by default in the wizard) to install Plex Media Server f
 
 Just before Plex starts for the first time, setup asks for a **claim code**, which links the new server to your Plex account. Sign in at [plex.tv/claim](https://plex.tv/claim) and paste the code it shows; it lasts four minutes, so get it when setup asks. Once the server is claimed, setup:
 
-- adds **TV Shows** and **Movies** libraries over the media folders, and tells Plex to pick up new files as soon as Sonarr and Radarr move them in (only on a server with no libraries yet);
+- applies MartinFlix's default server settings once: maintenance between 02:00 and 09:00, scanning when files change plus a daily low-priority scan, intro and credits markers during maintenance, cinema trailers, and DLNA, push notifications, crash reports and debug logging off;
+- adds **Films** and **TV programmes** libraries over the media folders, with their advanced settings (only on a server with no libraries yet);
 - connects the dashboard's Live page to Plex, with no token to copy.
 
 If you skip the claim code, open Plex Web (`http://<VM address>:32400/web`) from a device on the same network to claim the server, then rerun setup with `--update` to add the libraries and connect Live. If the VM has a GPU (`/dev/dri`), setup gives Plex access to it for hardware transcoding, which Plex uses with a Plex Pass.

@@ -27,7 +27,8 @@ from xml.etree import ElementTree
 
 CONTAINER_PREFERENCES = '/config/Library/Application Support/Plex Media Server/Preferences.xml'
 # Preferences that identify this server or account, or that Plex keeps as its own state.
-PRIVATE = re.compile(r'Token|Identifier|UUID|Mail|Username|PlexOnline|PubSub|Certificate|Epoch|Version|^Last|'
+# PublishServerOnPlexOnlineKey is kept: it is the Enable Remote Access switch, not an account detail.
+PRIVATE = re.compile(r'Token|Identifier|UUID|Mail|Username|PlexOnline(?!Key)|PubSub|Certificate|Epoch|Version|^Last|'
                      r'^FirstRun|^OldestPreviousVersion|^AcceptedEULA|^LanguageInCloud|^MetricsEpoch|^Pms|Secret|Password',
                      re.IGNORECASE)
 
@@ -70,8 +71,14 @@ def main():
     left_out = sorted(key for key in root.attrib if PRIVATE.search(key))
 
     libraries = []
+    try:
+        sections = plex_get(args.url, token, '/library/sections').get('Directory') or [] if token else []
+    except OSError as exc:
+        sections = []
+        print(f'Could not reach Plex at {args.url} ({exc}), so libraries were not read. Use --url if it listens elsewhere.',
+              file=sys.stderr)
     if token:
-        for section in plex_get(args.url, token, '/library/sections').get('Directory') or []:
+        for section in sections:
             changed = {}
             for setting in plex_get(args.url, token, f'/library/sections/{section["key"]}/prefs').get('Setting') or []:
                 if str(setting.get('value')) != str(setting.get('default')):

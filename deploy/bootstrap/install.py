@@ -403,10 +403,30 @@ PLEX_CLAIM_HELP = """
 Link the new Plex server to your Plex account with a claim code: sign in at https://plex.tv/claim and copy the
 code it shows. It only lasts four minutes, so get it now. Leave it blank to claim the server later in Plex Web."""
 PLEX_PREFERENCES = Path('Library/Application Support/Plex Media Server/Preferences.xml')
-# Agents and scanners of Plex's current film and TV libraries.
+# A new Plex server's settings, taken from the reference server. Its identity, account and remote-access port are
+# deliberately absent: each server has its own.
+PLEX_SETTINGS = {
+    # Maintenance runs overnight: local media, periodic metadata and TV guide refreshes.
+    'ButlerStartHour': '2', 'ButlerEndHour': '9', 'ButlerTaskRefreshLocalMedia': '1',
+    'ButlerTaskRefreshPeriodicMetadata': '1', 'ButlerTaskRefreshEpgGuides': '1',
+    # New files appear as soon as Sonarr and Radarr move them in; a low-priority full scan runs once a day too.
+    'FSEventLibraryUpdatesEnabled': '1', 'FSEventLibraryPartialScanEnabled': '1', 'ScannerLowPriority': '1',
+    'ScheduledLibraryUpdatesEnabled': '1', 'ScheduledLibraryUpdateInterval': '86400',
+    # Intro, credits and voice-activity markers are found during maintenance, not on import.
+    'GenerateIntroMarkerBehavior': 'scheduled', 'GenerateCreditsMarkerBehavior': 'scheduled',
+    'GenerateVADBehavior': 'scheduled',
+    'LibraryVideoPlayedAtBehaviour': '2', 'autoEmptyTrash': '1',
+    # Cinema trailers before films (a Plex Pass feature).
+    'CinemaTrailersFromLibrary': '1', 'CinemaTrailersFromTheater': '1', 'CinemaTrailersFromBluRay': '1',
+    'CinemaTrailersType': '0',
+    'DlnaEnabled': '0', 'PushNotificationsEnabled': '0', 'sendCrashReports': '0', 'logDebug': '0', 'LogVerbose': '0',
+}
+# Libraries: name, type, agent, scanner, folder, and the advanced settings that differ from Plex's defaults.
 PLEX_LIBRARIES = (
-    ('TV Shows', 'show', 'tv.plex.agents.series', 'Plex TV Series', '/data/TV Shows'),
-    ('Movies', 'movie', 'tv.plex.agents.movie', 'Plex Movie', '/data/Movies'),
+    ('Films', 'movie', 'tv.plex.agents.movie', 'Plex Movie', '/data/Movies',
+     {'country': 'GB', 'useLocalAssets': 'false', 'includeAdultContent': 'true', 'autoCollectionThreshold': '2'}),
+    ('TV programmes', 'show', 'tv.plex.agents.series', 'Plex TV Series', '/data/TV Shows',
+     {'showOrdering': 'aired', 'useLocalAssets': 'false', 'includeExtrasWithLocalizedSubtitles': 'true'}),
 )
 
 
@@ -449,20 +469,22 @@ def plex_request(token, method, path, params=None, opener=LOCAL_OPENER.open):
     return json.loads(body) if body.strip().startswith(b'{') else {}
 
 
-def seed_plex_libraries(token, language, opener=LOCAL_OPENER.open):
-    """Add the TV Shows and Movies libraries over the media folders, unless Plex already has libraries."""
+def apply_plex_settings(token, opener=LOCAL_OPENER.open):
+    plex_request(token, 'PUT', '/:/prefs', PLEX_SETTINGS, opener=opener)
+    print(f'   Plex: {len(PLEX_SETTINGS)} server settings applied.', flush=True)
+
+
+def seed_plex_libraries(token, language='en-US', opener=LOCAL_OPENER.open):
+    """Add the Films and TV programmes libraries over the media folders, unless Plex already has libraries."""
     sections = plex_request(token, 'GET', '/library/sections', opener=opener).get('MediaContainer', {}).get('Directory') or []
     if sections:
         print('   Plex: libraries already exist; left as they are.', flush=True)
         return
-    for name, kind, agent, scanner, location in PLEX_LIBRARIES:
-        plex_request(token, 'POST', '/library/sections', {'name': name, 'type': kind, 'agent': agent,
-                                                          'scanner': scanner, 'language': language,
-                                                          'location': location}, opener=opener)
+    for name, kind, agent, scanner, location, settings in PLEX_LIBRARIES:
+        plex_request(token, 'POST', '/library/sections', {
+            'name': name, 'type': kind, 'agent': agent, 'scanner': scanner, 'language': language, 'location': location,
+            **{f'prefs[{key}]': value for key, value in settings.items()}}, opener=opener)
         print(f'   Plex: {name} library added.', flush=True)
-    # New files appear in Plex as soon as Sonarr and Radarr move them in, without waiting for a scheduled scan.
-    plex_request(token, 'PUT', '/:/prefs', {'FSEventLibraryUpdatesEnabled': 1, 'FSEventLibraryPartialScanEnabled': 1},
-                 opener=opener)
 
 
 def docker_socket():
@@ -1308,17 +1330,21 @@ def run_installation(plan, state, previous, mode='install'):
             if token:
                 # Live reads now playing and watch history with the server owner's token.
                 write_secret(secret_dir / 'plex-token', token)
-                if not options.get('plex_libraries_applied'):
+                # Once each, so changes made in Plex afterwards are kept.
+                for flag, apply, problem in (
+                        ('plex_settings_applied', lambda: apply_plex_settings(token), 'apply the default settings'),
+                        ('plex_libraries_applied', lambda: seed_plex_libraries(token), 'add the libraries')):
+                    if options.get(flag):
+                        continue
                     try:
-                        seed_plex_libraries(token, 'en-GB' if options.get('discover_region', 'GB') == 'GB' else 'en-US')
-                        options['plex_libraries_applied'] = True
+                        apply()
+                        options[flag] = True
                         write_secret(state / 'install-options.json', json.dumps(options))
                     except (OSError, ValueError) as exc:
-                        print(f'   Plex: could not add the TV Shows and Movies libraries ({exc}). Add them in Plex Web.',
-                              flush=True)
+                        print(f'   Plex: could not {problem} ({exc}). Rerun setup with --update to try again.', flush=True)
             else:
                 print('   Plex isn’t linked to a Plex account yet. Open Plex Web to claim it, then rerun setup with '
-                      '--update to connect Live and add the TV Shows and Movies libraries.', flush=True)
+                      '--update to connect Live, apply the default settings and add the libraries.', flush=True)
         web = ['dashboard']
         if plan['control']:
             # The controller runs Compose exactly as setup does, with the final addresses and ports.
