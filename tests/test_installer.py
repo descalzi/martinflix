@@ -769,6 +769,61 @@ class InstallerFlowTests(unittest.TestCase):
         self.run.assert_not_called()
 
 
+class StepProgressTests(unittest.TestCase):
+    def progress(self, tty, states):
+        output = io.StringIO()
+        output.isatty = lambda: tty
+        lines = iter(states)
+        run = lambda command, **kwargs: SimpleNamespace(returncode=0, stdout=next(lines))
+        clock = iter([0, 1, 75, 80, 90]).__next__
+        return install.StepProgress('martinflix-test', ['transmission', 'prowlarr'], {}, follows='gluetun',
+                                    output=output, run=run, clock=clock), output
+
+    def test_without_a_terminal_each_change_is_a_line(self):
+        progress, output = self.progress(False, ['transmission\tcreated\tCreated\nprowlarr\tcreated\tCreated\n',
+                                                 'transmission\tcreated\tCreated\nprowlarr\trunning\tUp 4 seconds (health: starting)\n',
+                                                 'transmission\trunning\tUp 9 seconds (healthy)\nprowlarr\trunning\tUp 9 seconds (healthy)\n'])
+        progress.update()
+        self.assertEqual(output.getvalue(), '', 'nothing in the first seconds')
+        for _ in range(3):
+            progress.update()
+        self.assertEqual(output.getvalue().splitlines(), [
+            '   Prowlarr             waiting for Gluetun (VPN)', '   Transmission         waiting for Gluetun (VPN)',
+            '   Prowlarr             starting…',
+            '   Prowlarr             ready', '   Transmission         ready'])
+
+    def test_on_a_terminal_the_lines_update_in_place_with_the_time_waited(self):
+        progress, output = self.progress(True, ['prowlarr\trunning\tUp 4 seconds (health: starting)\n',
+                                                'prowlarr\trunning\tUp 9 seconds (healthy)\n'])
+        progress.update()
+        progress.update()
+        self.assertIn('Prowlarr             starting… 1:15', output.getvalue())
+        self.assertIn('Transmission         waiting to be created 1:15', output.getvalue())
+        progress.update()
+        self.assertIn('\x1b[2F\x1b[0J', output.getvalue())
+        progress.clear()
+        self.assertEqual(progress.shown, 0)
+
+
+class SummaryTests(unittest.TestCase):
+    def test_a_finished_run_says_done_and_lists_every_app(self):
+        plan = {'enabled': {'transmission', 'prowlarr'}, 'downloads': ['transmission', 'prowlarr'], 'plex': True, 'vpn': True,
+                'vpn_city': 'Prague', 'vpn_country': '', 'download_network': 'vpn', 'bind': '192.168.4.166',
+                'ports': {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, 'prowlarr': 9696, 'transmission': 9091},
+                'app_dirs': ('sonarr', 'radarr', 'transmission', 'prowlarr')}
+        output = io.StringIO()
+        install.print_summary('update', plan, Path('/home/m/state/dashboard-secrets/admin-password'), True, True, output)
+        text = output.getvalue()
+        self.assertIn('|____/', text)
+        self.assertIn('is running, with Sonarr, Radarr, Prowlarr, Transmission, Plex and Gluetun (VPN) connected.', text)
+        self.assertIn('Plex          http://192.168.4.166:32400/web', text)
+        self.assertIn('NordVPN exit   Prague', text)
+        self.assertNotIn('cat ', text)
+        output = io.StringIO()
+        install.print_summary('install', plan, Path('/home/m/admin-password'), False, False, output)
+        self.assertIn('cat /home/m/admin-password', output.getvalue())
+
+
 class ImageSetupTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()

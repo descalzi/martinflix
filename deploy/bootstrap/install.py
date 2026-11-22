@@ -446,6 +446,90 @@ def container_states(project, environment, run=subprocess.run):
             (item.get('Id'), bool(item['State'].get('Running')), item['State'].get('StartedAt')) for item in items}
 
 
+HEALTH = re.compile(r'\((healthy|unhealthy|health: starting)\)')
+
+
+def live_states(project, names, environment, run=subprocess.run):
+    """Each named service's container state and Docker's status line, such as "Up 9 seconds (health: starting)"."""
+    try:
+        listed = run(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={project}', '--format',
+                      '{{.Label "com.docker.compose.service"}}\t{{.State}}\t{{.Status}}'],
+                     env=environment, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    states = {}
+    for line in listed.stdout.splitlines() if listed.returncode == 0 else []:
+        service, _, rest = line.partition('\t')
+        state, _, status = rest.partition('\t')
+        if service in names:
+            states[service] = (state, status)
+    return states
+
+
+def describe_state(found, follows=None):
+    """What an app is doing while Compose waits for it, in words. Returns (text, finished)."""
+    if found is None:
+        return 'waiting to be created', False
+    state, status = found
+    if state == 'created':
+        return (f'waiting for {app_label(follows)}' if follows else 'waiting to start'), False
+    if state == 'restarting':
+        return 'restarting after a problem…', False
+    if state in ('exited', 'dead'):
+        code = re.search(r'Exited \((\d+)\)', status)
+        return f'stopped{f" (exit code {code.group(1)})" if code else ""}', True
+    health = HEALTH.search(status)
+    if not health:
+        return 'running', True
+    return {'healthy': ('ready', True), 'unhealthy': ('running, but its health check is failing', False),
+            'health: starting': ('starting…', False)}[health.group(1)]
+
+
+class StepProgress:
+    """Each app's progress while a step waits for it to be healthy, so a long wait never looks frozen. On a
+    terminal the lines update in place with the time waited; otherwise, as in the dashboard's updates, a line is
+    printed each time an app's state changes."""
+
+    def __init__(self, project, names, environment, follows=None, output=None, run=subprocess.run,
+                 clock=time.monotonic):
+        self.project, self.names, self.environment = project, sorted(names, key=lambda item: app_label(item).casefold()), environment
+        self.follows, self.output, self.run, self.clock = follows, output or sys.stdout, run, clock
+        self.live = self.output.isatty()
+        self.started = clock()
+        self.shown = 0
+        self.reported = {}
+
+    def update(self):
+        waited = int(self.clock() - self.started)
+        # A container being replaced still looks ready for a moment, so the first few seconds show nothing.
+        if waited < 3 and not self.shown and not self.reported:
+            return
+        states = live_states(self.project, self.names, self.environment, self.run)
+        lines = []
+        for name in self.names:
+            text, finished = describe_state(states.get(name), self.follows if name != self.follows else None)
+            if self.live:
+                lines.append(f'   {app_label(name):<20} {text}' + ('' if finished else f' {waited // 60}:{waited % 60:02d}'))
+            elif self.reported.get(name) != text:
+                self.reported[name] = text
+                lines.append(f'   {app_label(name):<20} {text}')
+        if self.live:
+            self.clear()
+            width = shutil.get_terminal_size((80, 20)).columns - 1
+            self.output.write(''.join('\x1b[2K' + line[:width] + '\n' for line in lines))
+            self.shown = len(lines)
+        else:
+            self.output.write(''.join(line + '\n' for line in lines))
+        self.output.flush()
+
+    def clear(self):
+        """Remove the live lines, so the step's outcome for each app is printed in their place."""
+        if self.live and self.shown:
+            self.output.write(f'\x1b[{self.shown}F\x1b[0J')
+            self.output.flush()
+            self.shown = 0
+
+
 def restart_outcome(before, after, new_image):
     """What a step did to one app, in words, from its container before and after."""
     if after is None:
@@ -1291,7 +1375,7 @@ def run_installation(plan, state, previous, mode='install'):
         """A step that starts apps, followed by what it did to each: started, restarted (and why), or unchanged.
         Apps that follow another, like the download apps on Gluetun's network, say so when that is why."""
         before = container_states(project, environment) if before is None else before
-        compose_step(label, command, diagnose)
+        compose_step(label, command, diagnose, watch=names, follows=follows)
         after = container_states(project, environment)
         changed = getattr(pull_images, 'changed', set())
         leader_restarted = bool(follows) and before.get(follows) is not None and before.get(follows) != after.get(follows)
@@ -1302,16 +1386,31 @@ def run_installation(plan, state, previous, mode='install'):
             if outcome:
                 print(f'   {app_label(name):<20} {outcome}', flush=True)
 
-    def compose_step(label, command, diagnose=None):
+    def compose_step(label, command, diagnose=None, watch=(), follows=None):
         print(label, flush=True)
         with tempfile.TemporaryFile() as log:
-            result = subprocess.run(compose + command, env=environment, stdout=log, stderr=subprocess.STDOUT)
-            if result.returncode == 0:
+            process = subprocess.Popen(compose + command, env=environment, stdout=log, stderr=subprocess.STDOUT)
+            progress = StepProgress(project, watch, environment, follows=follows) if watch else None
+            # Quick steps finish without a progress line; slower ones show each app's state every second.
+            while True:
+                try:
+                    process.wait(timeout=1)
+                    break
+                except subprocess.TimeoutExpired:
+                    if progress:
+                        progress.update()
+            if progress:
+                progress.clear()
+            if process.returncode == 0:
                 return
             log.seek(max(0, log.tell() - 12000))
             details = log.read().decode(errors='replace').strip()
         if details:
             print(f'\nDocker details\n{details}\n', file=sys.stderr)
+        if watch:
+            # Where each app had got to when the step gave up.
+            for name, found in live_states(project, watch, environment).items():
+                print(f'   {app_label(name):<20} {describe_state(found)[0]}', file=sys.stderr)
         if diagnose:
             diagnose()
         list_command = shlex.join(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={project}'])
@@ -1408,7 +1507,7 @@ def run_installation(plan, state, previous, mode='install'):
             arr_address = str(bind)
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
             compose_step('   Opening the protected Sonarr and Radarr logins on your LAN…',
-                         ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
+                         ['up', '-d', '--wait', '--wait-timeout', '120', *APPS], watch=APPS)
         step = 4
         prowlarr_key = None
         services = (['gluetun'] if vpn else []) + downloads
@@ -1448,7 +1547,8 @@ def run_installation(plan, state, previous, mode='install'):
             download_address = str(bind)
             environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
             compose_step('   Opening the protected download app logins on your LAN…',
-                         ['up', '-d', '--wait', '--wait-timeout', '210', *services])
+                         ['up', '-d', '--wait', '--wait-timeout', '210', *services], watch=services,
+                         follows='gluetun' if vpn and download_network == 'vpn' else None)
             if bazarr:
                 bazarr = BazarrApi(download_address, ports['bazarr'], bazarr.key)
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
@@ -1547,7 +1647,7 @@ def run_installation(plan, state, previous, mode='install'):
                        capture_output=True, timeout=60)
         before_build = container_states(project, environment)
         compose_step(f'{step + 1}. MartinFlix {VERSION}: dashboard and controller…',
-                     ['up', '-d', '--wait', '--wait-timeout', '90', *web])
+                     ['up', '-d', '--wait', '--wait-timeout', '90', *web], watch=web)
         after_build = container_states(project, environment)
         # Images that older installs built from a copy of the repo.
         subprocess.run(['docker', 'image', 'rm', f'{project}-dashboard', f'{project}-controller'], env=environment,
@@ -1567,43 +1667,67 @@ for app in ('sonarr', 'radarr'):
     print(f'{app} monitoring connected', flush=True)
 '''
         compose_step(f'{step + 2}. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
-    done = {'update': 'Update complete', 'reset': 'Fresh installation complete'}.get(mode, 'Setup complete')
-    print(f'\n{done} · Sonarr and Radarr are connected.\n')
-    print('Open your dashboard')
-    print('───────────────────')
-    print(f'Address   http://{bind}:{ports["dashboard"]}')
-    print('Username  admin')
-    if (auth_dir / 'password-hash').is_file():
-        print('Password  Your dashboard password. To change it, use Change password in the dashboard.')
-    else:
-        print('Password  Run this on the VM to show your temporary password:')
-        print(f'          cat {shlex.quote(str(password))}')
-        print('          Sign in with it, then choose your own password on the setup screen.')
-    names = ['Sonarr', 'Radarr', *(name for app, name in (('prowlarr', 'Prowlarr'), ('transmission', 'Transmission'),
-                                                          ('bazarr', 'Bazarr')) if app in enabled)]
+    print_summary(mode, plan, password, (auth_dir / 'password-hash').is_file(), personal_password_set)
+
+
+DONE = r"""
+   ____
+  |  _ \  ___  _ __   ___
+  | | | |/ _ \| '_ \ / _ \
+  | |_| | (_) | | | |  __/
+  |____/ \___/|_| |_|\___|
+"""
+
+
+def heading(title, output):
+    output.write(f'\n{title}\n{"─" * len(title)}\n')
+
+
+def print_summary(mode, plan, password, password_set, apps_use_it, output=None):
+    """The end of a successful run: a clear Done, then where everything is and how to sign in."""
+    output = output or sys.stdout
+    enabled, ports, bind = plan['enabled'], plan['ports'], plan['bind']
+    green = output.isatty() and os.environ.get('TERM') != 'dumb'
+    output.write(f'\x1b[32m{DONE}\x1b[0m' if green else DONE)
+    apps = [('sonarr', 'Sonarr'), ('radarr', 'Radarr'), ('prowlarr', 'Prowlarr'), ('transmission', 'Transmission'),
+            ('bazarr', 'Bazarr'), ('flaresolverr', 'FlareSolverr')]
+    names = [name for app, name in apps if app in ('sonarr', 'radarr') or app in plan['downloads']]
+    names += ['Plex'] if plan['plex'] else []
+    names += ['Gluetun (VPN)'] if plan['vpn'] else []
     listed = ', '.join(names[:-1]) + ' and ' + names[-1]
-    print('\nApp sign-in')
-    if personal_password_set:
-        print(f'{listed} use admin and your dashboard password. Changing it in the dashboard updates every app.')
+    done = {'update': 'Updated', 'reset': 'Installed from scratch'}.get(mode, 'Installed')
+    output.write(f'\n{done}: MartinFlix {VERSION} is running, with {listed} connected.\n')
+
+    heading('Dashboard', output)
+    output.write(f'Address   http://{bind}:{ports["dashboard"]}\nUsername  admin\n')
+    if password_set:
+        output.write('Password  Your dashboard password\n')
     else:
-        print(f'{listed} use admin and the same temporary password. Setting your own password updates every app.')
-    print('\nRestart and update apps from the dashboard’s Services page with your PIN. Update MartinFlix itself and '
-          'change its settings under Settings. Change the PIN under Change PIN in the dashboard; if you forget it, '
-          'run the update with --change-pin.')
-    if vpn:
-        print(f'NordVPN exit: {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
-    if downloads:
-        print(f'Download network: {"VPN" if download_network == "vpn" else "normal internet connection"}')
-    for app in app_dirs:
-        address = bind
-        print(f'{app.capitalize():13} http://{address}:{ports[app]}')
+        output.write('Password  A temporary one, shown by this command on the VM:\n'
+                     f'            cat {shlex.quote(str(password))}\n'
+                     '          Sign in with it, then choose your own.\n')
+
+    heading('Apps', output)
+    output.write(('Each signs in with admin and your dashboard password.\n' if apps_use_it else
+                  'Each signs in with admin and the temporary password, until you choose your own in the dashboard.\n'))
+    for app in plan['app_dirs']:
+        output.write(f'{app.capitalize():13} http://{bind}:{ports[app]}\n')
     if plan['plex']:
         lan = bind if str(bind) != '127.0.0.1' else 'this-vm-address'
-        print(f'{"Plex":13} http://{lan}:{PLEX_PORT}/web  (Plex listens on every address of this VM)')
-    if 'prowlarr' in enabled:
-        print('Manage indexers in Prowlarr. The installer connected both library apps.')
+        output.write(f'{"Plex":13} http://{lan}:{PLEX_PORT}/web\n')
     if 'flaresolverr' in enabled:
-        print('FlareSolverr is Prowlarr\'s proxy. Add the "flaresolverr" tag to any indexer that needs it.')
+        output.write('FlareSolverr  no web page; tag an indexer "flaresolverr" in Prowlarr to use it\n')
+    if plan['vpn'] or plan['downloads']:
+        heading('Network', output)
+        if plan['vpn']:
+            output.write(f'NordVPN exit   {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}\n')
+        if plan['downloads']:
+            output.write(f'Downloads      {"through the VPN" if plan["download_network"] == "vpn" else "normal internet connection"}\n')
+
+    heading('From now on', output)
+    output.write('Everything else happens in the dashboard: restart and update apps on Services, and update MartinFlix\n'
+                 'or change its settings under Settings, with your PIN. Forgot the PIN? Run the update with --change-pin.\n')
+    output.flush()
 
 
 def build_parser():
