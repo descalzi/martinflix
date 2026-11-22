@@ -1185,8 +1185,20 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'control': True, 'change_pin': bool(getattr(args, 'change_pin', False)),
         'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
         'set_plex_token': bool(getattr(args, 'set_plex_token', False)),
-        'plex': plex,
+        'plex': plex, 'overlay_dir': overlay_file.parent,
     }
+
+
+def keep_overlays(compose, state, temporary):
+    """Move the Compose files setup generated (downloads, Plex's GPU) from its temporary folder into the state
+    folder, and point the command at them there. The controller runs the same command long after setup ends."""
+    names = {'downloads.json': 'downloads-compose.json', 'plex-gpu-compose.json': 'plex-gpu-compose.json'}
+    for index, item in enumerate(compose):
+        path = Path(item)
+        if index and compose[index - 1] == '-f' and path.parent == temporary:
+            kept = state / names.get(path.name, path.name)
+            write_secret(kept, path.read_text())
+            compose[index] = str(kept)
 
 
 def refuse_root():
@@ -1469,11 +1481,7 @@ def run_installation(plan, state, previous, mode='install'):
             if 'transmission' in downloads:
                 for folder in DOWNLOAD_FOLDERS:
                     (media / folder).mkdir(mode=0o700, exist_ok=True)
-        if downloads:
-            runtime_overlay = state / 'downloads-compose.json'
-            overlay_index = next(index for index, item in enumerate(compose) if item.endswith('downloads.json'))
-            write_secret(runtime_overlay, Path(compose[overlay_index]).read_text())
-            compose[overlay_index] = str(runtime_overlay)
+        keep_overlays(compose, state, plan['overlay_dir'])
         options.setdefault('radarr_indexer_defaults_pending', not (state / 'radarr/config.xml').exists())
         for app in app_dirs:
             private_directory(state / app)

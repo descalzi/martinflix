@@ -805,6 +805,25 @@ class StepProgressTests(unittest.TestCase):
         self.assertEqual(progress.shown, 0)
 
 
+class OverlayTests(unittest.TestCase):
+    def test_generated_compose_files_outlive_setup(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        temporary, state = root / 'tmp', root / 'state'
+        temporary.mkdir()
+        state.mkdir(mode=0o700)
+        (temporary / 'downloads.json').write_text('{"services": {}}')
+        (temporary / 'plex-gpu-compose.json').write_text('{"services": {"plex": {}}}')
+        compose = ['docker', 'compose', '-f', '/app/compose.yaml', '-f', str(temporary / 'downloads.json'),
+                   '-f', str(temporary / 'plex-gpu-compose.json'), '--profile', 'plex']
+        install.keep_overlays(compose, state, temporary)
+        self.assertEqual(compose[5], str(state / 'downloads-compose.json'))
+        self.assertEqual(compose[7], str(state / 'plex-gpu-compose.json'))
+        self.assertEqual(json.loads((state / 'plex-gpu-compose.json').read_text()), {'services': {'plex': {}}})
+        self.assertFalse(any(str(temporary) in item for item in compose))
+
+
 class SummaryTests(unittest.TestCase):
     def test_a_finished_run_says_done_and_lists_every_app(self):
         plan = {'enabled': {'transmission', 'prowlarr'}, 'downloads': ['transmission', 'prowlarr'], 'plex': True, 'vpn': True,
