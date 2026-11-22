@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-18">
-  <script src="./setup.js?v=wizard-18" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-19">
+  <script src="./setup.js?v=wizard-19" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -134,6 +134,10 @@
               <legend>Media server</legend>
               <label class="toggle"><input id="plex" type="checkbox" checked aria-describedby="plex-help"><span><strong>Plex <span class="tag">Default</span></strong><span id="plex-help">Streams your library to TVs, phones and browsers. Setup asks for a claim code from plex.tv/claim to link it to your account. Needs the media directory.</span></span></label>
             </fieldset>
+            <div class="field" id="plex-name-field">
+              <label for="plex-name">Plex server name <small>Optional</small></label>
+              <input id="plex-name" type="text" placeholder="martinflix" maxlength="50" spellcheck="false">
+            </div>
             <fieldset class="toggles">
               <legend>Subtitles</legend>
               <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
@@ -226,6 +230,10 @@
               <legend>Plex</legend>
               <label class="toggle"><input id="u-plex-token" type="checkbox"><span><strong>Enter or replace the Plex token</strong><span>Setup asks for it. Leave the answer blank to disconnect Plex.</span></span></label>
             </fieldset>
+            <div class="field">
+              <label for="u-plex-name">Plex server name <small>Only to change it</small></label>
+              <input id="u-plex-name" type="text" placeholder="Keep the current one" maxlength="50" spellcheck="false">
+            </div>
             <div class="field">
               <label for="u-plex-url">Plex server <small>Only to connect or change it</small></label>
               <input id="u-plex-url" type="url" placeholder="Keep the current one" spellcheck="false">

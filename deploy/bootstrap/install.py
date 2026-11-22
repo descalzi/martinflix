@@ -420,7 +420,21 @@ PLEX_SETTINGS = {
     'CinemaTrailersFromLibrary': '1', 'CinemaTrailersFromTheater': '1', 'CinemaTrailersFromBluRay': '1',
     'CinemaTrailersType': '0',
     'DlnaEnabled': '0', 'PushNotificationsEnabled': '0', 'sendCrashReports': '0', 'logDebug': '0', 'LogVerbose': '0',
+    # Remote access with automatic port mapping (UPnP on the router), over IPv4 and IPv6 where the network has it.
+    'PublishServerOnPlexOnlineKey': '1', 'ManualPortMappingMode': '0', 'IPNetworkType': 'dualstack',
 }
+PLEX_DEFAULT_NAME = 'martinflix'
+PREROLL_DIR = REPO_DIR / 'assets' / 'preroll'
+
+
+def preroll_list(folder=PREROLL_DIR):
+    """Plex's pre-roll setting: every clip in the folder, as Plex sees it. ';' plays one at random per film."""
+    return ';'.join(f'/preroll/{clip.name}' for clip in sorted(folder.glob('*.mp4')))
+
+
+def plex_tracked_settings(name, folder=PREROLL_DIR):
+    """Settings setup keeps in step on every run: the server's name and the pre-roll clips."""
+    return {'FriendlyName': name, 'CinemaTrailersPrerollID': preroll_list(folder)}
 # Libraries: name, type, agent, scanner, folder, and the advanced settings that differ from Plex's defaults.
 PLEX_LIBRARIES = (
     ('Films', 'movie', 'tv.plex.agents.movie', 'Plex Movie', '/data/Movies',
@@ -852,6 +866,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     if 'bazarr' in enabled and not media:
         raise ValueError('Bazarr saves subtitles beside your videos. Specify your media directory with --media-path.')
     plex = bool(args.enable_plex or previous.get('plex'))
+    plex_name = (args.plex_name if args.plex_name is not None else previous.get('plex_name') or PLEX_DEFAULT_NAME).strip()
+    if not re.fullmatch(r'[\w][\w .()\'-]{0,49}', plex_name):
+        raise ValueError('Use up to 50 letters, numbers, spaces, dots, dashes or brackets for --plex-name.')
     if plex and not media:
         raise ValueError('Plex shows your media directory. Specify it with --media-path.')
     if args.download_network and not downloads:
@@ -887,7 +904,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     options = {**previous, 'media_path': str(media) if media else None, 'downloads': bool(downloads),
                'download_apps': downloads, 'project': project, 'dashboard_bind': str(bind), 'ports': ports}
     options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, vpn_protocol=vpn_protocol,
-                   download_network=download_network, plex=plex)
+                   download_network=download_network, plex=plex, plex_name=plex_name)
 
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
@@ -1082,6 +1099,8 @@ def keep_flags(options):
         flags.append('--enable-bazarr')
     if options.get('plex'):
         flags.append('--enable-plex')
+        if options.get('plex_name', PLEX_DEFAULT_NAME) != PLEX_DEFAULT_NAME:
+            flags += ['--plex-name', options['plex_name']]
     if apps:
         flags += ['--download-network', options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')]
     for name, port in (options.get('ports') or {}).items():
@@ -1330,6 +1349,18 @@ def run_installation(plan, state, previous, mode='install'):
             if token:
                 # Live reads now playing and watch history with the server owner's token.
                 write_secret(secret_dir / 'plex-token', token)
+                # The name and pre-rolls follow setup's options and the clips in the repo, whenever they change.
+                tracked = plex_tracked_settings(options.get('plex_name') or PLEX_DEFAULT_NAME)
+                if options.get('plex_tracked_settings') != tracked:
+                    try:
+                        plex_request(token, 'PUT', '/:/prefs', tracked)
+                        clips = tracked['CinemaTrailersPrerollID'].count('/preroll/')
+                        print(f'   Plex: named {tracked["FriendlyName"]}, with {clips} pre-roll clip{"s" if clips != 1 else ""}.',
+                              flush=True)
+                        options['plex_tracked_settings'] = tracked
+                        write_secret(state / 'install-options.json', json.dumps(options))
+                    except (OSError, ValueError) as exc:
+                        print(f'   Plex: could not set the name and pre-rolls ({exc}). Rerun setup with --update.', flush=True)
                 # Once each, so changes made in Plex afterwards are kept.
                 for flag, apply, problem in (
                         ('plex_settings_applied', lambda: apply_plex_settings(token), 'apply the default settings'),
@@ -1439,6 +1470,8 @@ def build_parser():
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
     parser.add_argument('--enable-plex', action='store_true',
                         help='Install Plex Media Server for your media directory. Requires --media-path.')
+    parser.add_argument('--plex-name',
+                        help=f'Name of the Plex server this installation runs. Defaults to {PLEX_DEFAULT_NAME}.')
     parser.add_argument('--plex-url',
                         help='Address of your Plex server, such as http://192.168.1.10:32400, for Live’s now playing '
                              'and watch history. An empty value disconnects it.')

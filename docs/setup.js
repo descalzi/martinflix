@@ -107,6 +107,7 @@ function changeArguments(change) {
   if (change.flaresolverr) args.push('--enable-flaresolverr');
   if (change.bazarr) args.push('--enable-bazarr');
   if (change.plex) args.push('--enable-plex');
+  if (change.plexName) args.push('--plex-name=' + shellQuote(change.plexName));
   if (change.route && change.route !== 'keep') args.push('--download-network=' + change.route);
   if (change.plexUrl) args.push('--plex-url=' + shellQuote(change.plexUrl));
   if (change.plexToken || change.plexUrl) args.push('--set-plex-token');
@@ -139,6 +140,7 @@ function installArguments(options) {
   if (options.prowlarr && options.flaresolverr) args.push('--enable-flaresolverr');
   if (options.bazarr) args.push('--enable-bazarr');
   if (options.plex) args.push('--enable-plex');
+  if (options.plex && options.plexName && options.plexName !== 'martinflix') args.push('--plex-name=' + shellQuote(options.plexName));
   if (options.downloader || options.prowlarr || options.bazarr) args.push('--download-network=' + (options.behindVpn ? 'vpn' : 'direct'));
   for (const [name, , fallback] of enabledPorts(options)) {
     const raw = options.ports[name] ?? '';
@@ -219,6 +221,7 @@ if (typeof document !== 'undefined') {
       bazarr: byId('bazarr').checked && Boolean(byId('media').value.trim()),
       // Plex shows the media directory, so like Bazarr it only counts once one is set.
       plex: byId('plex').checked && Boolean(byId('media').value.trim()),
+      plexName: byId('plex-name').value.trim(),
       behindVpn: byId('vpn').checked && preferVpnRoute,
       discover: byId('discover').checked,
       ownKey: byId('tmdb-own').checked,
@@ -237,6 +240,7 @@ if (typeof document !== 'undefined') {
         flaresolverr: byId('u-flaresolverr').checked,
         bazarr: byId('u-bazarr').checked,
         plex: byId('u-plex').checked,
+        plexName: byId('u-plex-name').value.trim(),
         discover: byId('u-discover').checked,
         page: byId('u-discover-page').value,
         plexUrl: byId('u-plex-url').value.trim().replace(/\/+$/, ''),
@@ -348,6 +352,7 @@ if (typeof document !== 'undefined') {
       if (added.length) summary.push(['Add apps', added.join(', ')]);
       if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
       if (change.media) summary.push(['Media directory', change.media]);
+      if (change.plexName) summary.push(['Plex server name', change.plexName]);
       if (change.plexUrl) summary.push(['Plex server', change.plexUrl]);
       if (change.plexToken || change.plexUrl) summary.push(['Plex token', 'Enter it when setup asks']);
       if (change.page !== 'keep') summary.push(['Discover page', change.page === 'on' ? 'Show it' : 'Hide it']);
@@ -365,7 +370,7 @@ if (typeof document !== 'undefined') {
       summary.push(['Download apps', apps.join(', ') || 'None yet']);
       if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
       summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
-      summary.push(['Plex', options.plex ? 'Installed here · setup asks for a claim code'
+      summary.push(['Plex', options.plex ? `Installed here as ${options.plexName || 'martinflix'} · setup asks for a claim code`
         : options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not installed']);
       summary.push(['State directory', options.state || 'Default location']);
       for (const [name, label, fallback] of enabledPorts(options)) {
@@ -413,6 +418,7 @@ if (typeof document !== 'undefined') {
       ? 'Streams your library to TVs, phones and browsers. Setup asks for a claim code from plex.tv/claim to link it to your account.'
       : 'Needs the media directory from the Media step.';
     byId('plex-url').closest('.field').hidden = options.plex;
+    byId('plex-name-field').hidden = !options.plex;
     byId('flaresolverr').disabled = !options.prowlarr;
     byId('download-client').disabled = !options.media;
     byId('client-help').textContent = options.media

@@ -97,6 +97,11 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertTrue(self.plan({'plex': True, 'media_path': str(media)})['plex'], 'an update keeps Plex')
         with self.assertRaisesRegex(ValueError, 'its own Plex'):
             self.plan(enable_plex=True, media_path=str(media), plex_url='http://elsewhere:32400')
+        self.assertEqual(plan['options']['plex_name'], 'martinflix')
+        self.assertEqual(self.plan(enable_plex=True, media_path=str(media), plex_name='martinflix-test')['options']['plex_name'],
+                         'martinflix-test')
+        with self.assertRaisesRegex(ValueError, 'plex-name'):
+            self.plan(enable_plex=True, media_path=str(media), plex_name='<script>')
 
     def test_plex_address_is_checked_and_remembered(self):
         self.assertEqual(self.plan()['environment']['MARTINFLIX_PLEX_URL'], '')
@@ -515,8 +520,16 @@ class PlexTests(unittest.TestCase):
         self.assertEqual(method, 'PUT')
         self.assertIn('ButlerStartHour=2', url)
         self.assertIn('DlnaEnabled=0', url)
-        for private in ('FriendlyName', 'PlexOnline', 'MachineIdentifier', 'ManualPortMappingPort'):
+        self.assertIn('PublishServerOnPlexOnlineKey=1', url)
+        for private in ('FriendlyName', 'PlexOnlineToken', 'PlexOnlineMail', 'MachineIdentifier', 'ManualPortMappingPort'):
             self.assertNotIn(private, url)
+
+    def test_pre_rolls_are_every_clip_in_the_folder(self):
+        for name in ('pre-roll-yarn-city.mp4', 'pre-roll-darcy-rain.mp4', 'README.md'):
+            (self.config / name).write_text('x')
+        self.assertEqual(install.preroll_list(self.config), '/preroll/pre-roll-darcy-rain.mp4;/preroll/pre-roll-yarn-city.mp4')
+        self.assertEqual(install.plex_tracked_settings('martinflix-test', self.config)['FriendlyName'], 'martinflix-test')
+        self.assertEqual(install.preroll_list(self.config / 'missing'), '')
 
     def test_existing_libraries_are_left_alone(self):
         open_, requests = self.opener([{'key': '1', 'title': 'Films'}])

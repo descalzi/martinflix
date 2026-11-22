@@ -89,3 +89,11 @@ test('Plex is installed with the media directory, and then no outside Plex addre
   assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--enable-plex']);
   assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plex: true}}), ['--update', '--enable-plex']);
 });
+
+test('a Plex name is passed only when it differs from martinflix', () => {
+  const base = {...defaults, prowlarr: false, flaresolverr: false, plex: true};
+  assert.deepStrictEqual(wizard.installArguments({...base, plexName: 'martinflix'}), ['--media-path=/mnt/media', '--enable-plex']);
+  assert.ok(wizard.installArguments({...base, plexName: 'martinflix test'}).includes("--plex-name='martinflix test'"));
+  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexName: 'martinflix-test'}}),
+    ['--update', '--plex-name=martinflix-test']);
+});

@@ -38,6 +38,8 @@ Add `--enable-plex` (on by default in the wizard) to install Plex Media Server f
 
 Just before Plex starts for the first time, setup asks for a **claim code**, which links the new server to your Plex account. Sign in at [plex.tv/claim](https://plex.tv/claim) and paste the code it shows; it lasts four minutes, so get it when setup asks. Once the server is claimed, setup:
 
+- names the server **martinflix** (change it with `--plex-name`, for example on a test machine) and sets its pre-roll clips to every video in the repository's `assets/preroll` folder, played at random before films; both follow setup's options and the folder whenever they change;
+- turns on **remote access** with automatic port mapping, so the router needs UPnP (eero has it on by default), and lets Plex use IPv6 where the network has it;
 - applies MartinFlix's default server settings once: maintenance between 02:00 and 09:00, scanning when files change plus a daily low-priority scan, intro and credits markers during maintenance, cinema trailers, and DLNA, push notifications, crash reports and debug logging off;
 - adds **Films** and **TV programmes** libraries over the media folders, with their advanced settings (only on a server with no libraries yet);
 - connects the dashboard's Live page to Plex, with no token to copy.
