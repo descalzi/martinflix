@@ -306,19 +306,23 @@
               <fieldset class="field">
                 <legend>Connection</legend>
                 <div class="segmented">
-                  <label><input type="radio" name="vpnProtocol" value="udp"><span>UDP · faster</span></label>
-                  <label><input type="radio" name="vpnProtocol" value="tcp"><span>TCP · gets through more networks</span></label>
+                  <label><input type="radio" name="vpnProtocol" value="udp"><span>UDP</span></label>
+                  <label><input type="radio" name="vpnProtocol" value="tcp"><span>TCP</span></label>
                 </div>
+                <p class="option-help">UDP is faster. TCP gets through networks that block VPN traffic over UDP.</p>
               </fieldset>
-              <div class="field">
-                <label for="setting-vpn-user">New service username <span class="optional">optional</span></label>
-                <input id="setting-vpn-user" name="vpnUser" type="text" autocomplete="off" spellcheck="false" maxlength="200">
-              </div>
-              <div class="field">
-                <label for="setting-vpn-password">New service password</label>
-                <input id="setting-vpn-password" name="vpnPassword" type="password" autocomplete="off" maxlength="200">
-                <p class="option-help">Only to replace the credentials. Use the service credentials from Nord Account → NordVPN → Set up NordVPN manually, not your Nord Account login.</p>
-              </div>
+              <fieldset class="settings-pair">
+                <legend>Replace the service credentials <span class="optional">optional</span></legend>
+                <div class="field">
+                  <label for="setting-vpn-user">Username</label>
+                  <input id="setting-vpn-user" name="vpnUser" type="text" autocomplete="off" spellcheck="false" maxlength="200">
+                </div>
+                <div class="field">
+                  <label for="setting-vpn-password">Password</label>
+                  <input id="setting-vpn-password" name="vpnPassword" type="password" autocomplete="off" maxlength="200">
+                </div>
+                <p class="option-help">Leave both empty to keep the current ones. Use the service credentials from Nord Account → NordVPN → Set up NordVPN manually, not your Nord Account login.</p>
+              </fieldset>
             </div>
           </section>
 
