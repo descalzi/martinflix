@@ -90,7 +90,8 @@ def folders(args, home):
         saved = {}
     result = [home]
     for flag, value in (('--state-dir', state), ('--media-path', parsed.media_path or saved.get('media_path')),
-                        ('--backup-dir', parsed.backup_dir or saved.get('backup_dir'))):
+                        ('--backup-dir', parsed.backup_dir or saved.get('backup_dir')),
+                        ('--restore', parsed.restore)):
         if not value:
             continue
         path = Path(value)

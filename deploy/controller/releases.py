@@ -151,12 +151,19 @@ class Releases:
 
     # The updater
 
+    def last_run_file(self):
+        return Path(self.stack.config()['stateDir']) / 'controller' / 'last-run.json'
+
     def updater(self):
-        """The last update or settings change: its state, and the end of setup's output. None if there was none."""
+        """The last update, settings change or restore: its state, and the end of setup's output. None if there was
+        none. Once it has finished, its result is saved and its container removed, so nothing is left behind."""
         name = self.updater_name()
         inspected = self.stack.run(['inspect', name], timeout=30)
         if inspected.returncode:
-            return None
+            try:
+                return json.loads(self.last_run_file().read_text())
+            except (OSError, ValueError):
+                return None
         try:
             item = json.loads(inspected.stdout)[0]
         except (ValueError, IndexError):
@@ -166,17 +173,39 @@ class Releases:
         logs = self.stack.run(['logs', '--tail', str(LOG_LINES), name], timeout=30)
         text = ANSI.sub('', (logs.stdout or '') + (logs.stderr or '')).replace('\r', '')
         running = bool(state.get('Running'))
-        return {'state': 'running' if running else 'succeeded' if state.get('ExitCode') == 0 else 'failed',
-                'kind': labels.get('io.martinflix.kind', 'update'), 'version': labels.get('io.martinflix.version'),
-                'startedAt': state.get('StartedAt'), 'finishedAt': None if running else state.get('FinishedAt'),
-                'log': text.strip()[-30000:]}
+        result = {'state': 'running' if running else 'succeeded' if state.get('ExitCode') == 0 else 'failed',
+                  'kind': labels.get('io.martinflix.kind', 'update'), 'version': labels.get('io.martinflix.version'),
+                  'detail': labels.get('io.martinflix.detail') or None,
+                  'startedAt': state.get('StartedAt'), 'finishedAt': None if running else state.get('FinishedAt'),
+                  'log': text.strip()[-30000:]}
+        if not running and state.get('Status') in ('exited', 'dead'):
+            try:
+                path = self.last_run_file()
+                temporary = path.with_name(f'.last-run.{secrets.token_hex(4)}')
+                temporary.write_text(json.dumps(result))
+                temporary.chmod(0o600)
+                temporary.replace(path)
+                self.stack.run(['rm', name], timeout=60)
+            except OSError:
+                pass
+        return result
+
+    def tidy_forever(self):
+        """Remove a finished updater soon after it ends, whether or not anyone is looking at the dashboard."""
+        while True:
+            self.sleep(15)
+            try:
+                self.updater()
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                pass
 
     def running(self):
         current = self.updater()
         return bool(current and current['state'] == 'running')
 
-    def start(self, kind, arguments=(), secrets_given=None):
-        """Run setup in the updater: from the newer image for an update, from this one to apply settings."""
+    def start(self, kind, arguments=(), secrets_given=None, detail=''):
+        """Run setup in the updater: from the newer image for an update, from this one to apply settings or restore
+        a backup."""
         if self.running():
             raise UpdateError(409, 'MartinFlix is already updating. Wait for it to finish.')
         config = self.stack.config()
@@ -208,7 +237,7 @@ class Releases:
             extra = ['--settings-file', str(secrets_file)]
         command = ['run', '--detach', '--name', name,
                    '--label', f'io.martinflix.updater={config["project"]}', '--label', f'io.martinflix.kind={kind}',
-                   '--label', f'io.martinflix.version={version}',
+                   '--label', f'io.martinflix.version={version}', '--label', f'io.martinflix.detail={detail}',
                    '-e', f'HOME={setup["home"]}', '-e', f'MARTINFLIX_RUN_AS={setup["runAs"]}',
                    '-e', f'MARTINFLIX_DOCKER_SOCKET={setup["socket"]}',
                    '-v', f'{setup["socket"]}:/var/run/docker.sock',

@@ -90,21 +90,28 @@ class CoreTests(unittest.TestCase):
         ]
         self.assertEqual([item['title'] for item in server.arr_items('radarr', raw, now)], ['Missing'])
 
-    def test_radarr_sorts_by_release_with_unknown_dates_last(self):
+    def test_films_follow_radarrs_missing_list_by_their_minimum_availability(self):
         now = datetime(2026, 11, 18, tzinfo=timezone.utc)
         missing = {'monitored': True, 'hasFile': False}
         raw = [
             dict(missing, title='Unknown'),
-            dict(missing, title='Theatrical', inCinemas='2026-08-02T00:00:00Z',
-                 digitalRelease='2026-10-01T00:00:00Z'),
-            dict(missing, title='Digital', digitalRelease='2026-07-03T00:00:00Z'),
-            dict(missing, title='Physical', inCinemas='invalid', physicalRelease='2026-09-01'),
+            # In cinemas now, but Radarr waits for the digital release.
+            dict(missing, title='Cinema run', minimumAvailability='released', inCinemas='2026-11-01T00:00:00Z',
+                 digitalRelease='2026-12-20T00:00:00Z', physicalRelease='2027-01-10T00:00:00Z'),
+            dict(missing, title='Out now', minimumAvailability='released', digitalRelease='2026-07-03T00:00:00Z'),
+            dict(missing, title='Cinema wanted', minimumAvailability='inCinemas', inCinemas='2026-12-05T00:00:00Z',
+                 digitalRelease='2027-02-01T00:00:00Z'),
+            dict(missing, title='No home date', minimumAvailability='released', inCinemas='2026-10-01T00:00:00Z'),
+            dict(missing, title='Radarr says so', minimumAvailability='released', physicalRelease='2027-03-01', isAvailable=True),
         ]
-        items = server.arr_items('radarr', raw, now)
-        self.assertEqual([(item['title'], item['releaseDate']) for item in items], [
-            ('Digital', '2026-07-03'), ('Theatrical', '2026-08-02'),
-            ('Physical', '2026-09-01'), ('Unknown', None),
-        ])
+        items = {item['title']: item['availability'] for item in server.arr_items('radarr', raw, now)}
+        self.assertEqual(items['Cinema run'], {'type': 'Digital', 'date': '2026-12-20', 'available': False})
+        self.assertEqual(items['Out now'], {'type': 'Digital', 'date': '2026-07-03', 'available': True})
+        self.assertEqual(items['Cinema wanted'], {'type': 'In cinemas', 'date': '2026-12-05', 'available': False})
+        self.assertEqual(items['No home date'], {'type': 'Expected release', 'date': '2026-12-30', 'available': False})
+        self.assertTrue(items['Radarr says so']['available'])
+        order = [item['title'] for item in server.arr_items('radarr', raw, now)]
+        self.assertEqual(order, ['Out now', 'Radarr says so', 'Cinema wanted', 'Cinema run', 'No home date', 'Unknown'])
 
     def test_plex_activity_projects_only_title_and_playback_state(self):
         payload = {'response': {'result': 'success', 'data': {'stream_count': '1', 'sessions': [

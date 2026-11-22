@@ -773,7 +773,7 @@ class StepProgressTests(unittest.TestCase):
     def progress(self, tty, states):
         output = io.StringIO()
         output.isatty = lambda: tty
-        lines = iter(states)
+        lines = iter(['', *states])  # first, the containers before the step: none
         run = lambda command, **kwargs: SimpleNamespace(returncode=0, stdout=next(lines))
         clock = iter([0, 1, 75, 80, 90]).__next__
         return install.StepProgress('martinflix-test', ['transmission', 'prowlarr'], {}, follows='gluetun',
@@ -822,6 +822,34 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(compose[7], str(state / 'plex-gpu-compose.json'))
         self.assertEqual(json.loads((state / 'plex-gpu-compose.json').read_text()), {'services': {'plex': {}}})
         self.assertFalse(any(str(temporary) in item for item in compose))
+
+
+class ProjectNameTests(unittest.TestCase):
+    def test_the_old_project_name_only_when_its_containers_exist(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        state = Path(folder.name)
+        (state / 'dashboard-secrets').mkdir()
+        (state / 'dashboard-secrets/admin-password').write_text('x' * 20)
+        with patch.object(install, 'project_exists', return_value=True):
+            self.assertTrue(install.compose_project(state, {}).startswith('martinflix-first-run-'))
+        with patch.object(install, 'project_exists', return_value=False):
+            self.assertFalse(install.compose_project(state, {}).startswith('martinflix-first-run-'),
+                             'a first run that stopped part-way keeps the current name')
+
+
+class ReplacedContainerTests(unittest.TestCase):
+    def test_a_container_about_to_be_replaced_is_running_not_ready(self):
+        output = io.StringIO()
+        output.isatty = lambda: False
+        lines = iter(['sonarr\trunning\tUp 2 hours (healthy)\told1\n',
+                      'sonarr\trunning\tUp 2 hours (healthy)\told1\n',
+                      'sonarr\trunning\tUp 9 seconds (healthy)\tnew2\n'])
+        progress = install.StepProgress('p', ['sonarr'], {}, output=output, clock=iter([0, 5, 9]).__next__,
+                                        run=lambda command, **kwargs: SimpleNamespace(returncode=0, stdout=next(lines)))
+        progress.update()
+        progress.update()
+        self.assertEqual(output.getvalue().splitlines(), ['   Sonarr               running', '   Sonarr               ready'])
 
 
 class SummaryTests(unittest.TestCase):

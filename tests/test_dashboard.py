@@ -124,7 +124,7 @@ class AddTitleTests(unittest.TestCase):
     def add(self, kind, request, lookup):
         posted = {}
 
-        def fake_json(connection, endpoint, payload=None, method=None):
+        def fake_json(connection, endpoint, payload=None, method=None, timeout=5):
             if method == 'POST':
                 posted.update(payload)
                 return payload
@@ -137,6 +137,25 @@ class AddTitleTests(unittest.TestCase):
 
     def monitored(self, posted):
         return [season['seasonNumber'] for season in posted['seasons'] if season['monitored']]
+
+    def test_a_slow_answer_still_counts_when_the_title_was_added(self):
+        choices = (('base', 'key'), self.profiles, self.folders, self.profiles[1], self.folders[0])
+        calls = []
+
+        def slow(connection, endpoint, payload=None, method=None, timeout=5):
+            calls.append((endpoint, method, timeout))
+            if method == 'POST':
+                raise TimeoutError('timed out')
+            if endpoint.startswith('/api/v3/series?tvdbId='):
+                return [{'title': 'Slow Horses', 'tvdbId': 1234}] if added else []
+            return [dict(self.series)]
+        with patch.object(server, 'add_choices', return_value=choices), patch.object(server, 'arr_json', side_effect=slow):
+            added = True
+            self.assertTrue(server.add_title('sonarr', {'id': 1234})['added'])
+            self.assertIn(('/api/v3/series', 'POST', 60), calls)
+            added = False
+            with self.assertRaises(TimeoutError):
+                server.add_title('sonarr', {'id': 1234})
 
     def test_defaults_match_the_old_behaviour(self):
         _, posted = self.add('sonarr', {'id': 1234}, [dict(self.series)])
@@ -416,6 +435,15 @@ class SystemTests(unittest.TestCase):
             controller.assert_not_called()
         with patch.object(server, 'controller_request', side_effect=server.ControllerError(409, 'MartinFlix is already updating.')):
             self.assertEqual(self.post('/api/system/update', {'pin': '2468'}), (409, {'error': 'MartinFlix is already updating.'}))
+
+    def test_a_restore_names_one_backup_and_needs_the_pin(self):
+        with patch.object(server, 'controller_request', return_value={'ok': True, 'started': True}) as controller:
+            self.assertEqual(self.post('/api/restore', {'pin': '2468', 'backup': '2026-11-22_010000'})[0], 200)
+            controller.assert_called_with('/restore', {'pin': '2468', 'backup': '2026-11-22_010000'}, timeout=60)
+        with patch.object(server, 'controller_request') as controller:
+            self.assertEqual(self.post('/api/restore', {'pin': '2468', 'backup': '../../etc'})[0], 400)
+            self.assertEqual(self.post('/api/restore', {'pin': '24', 'backup': '2026-11-22_010000'})[0], 400)
+            controller.assert_not_called()
 
     def test_the_version_page_lists_what_changed_from_github(self):
         release = {'current': {'version': '1', 'revision': 'a' * 40, 'channel': 'edge'},

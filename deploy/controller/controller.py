@@ -18,7 +18,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from backups import BackupError, Backups
+from backups import NAME, BackupError, Backups
 from releases import Releases, UpdateError, secret_values, setup_arguments
 
 # Restarting these ends the request that asked for it, so the controller answers first and restarts them after.
@@ -319,7 +319,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'ok': True, 'checking': True}, 202)
             return
         action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin', '/backup': 'backup',
-                  '/release/update': 'release', '/settings': 'settings'}.get(self.path)
+                  '/release/update': 'release', '/settings': 'settings', '/restore': 'restore'}.get(self.path)
         if action is None:
             self.send_json({'error': 'Not found.'}, 404)
             return
@@ -339,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
         if problem := self.server.pins.check(pin):
             self.send_json({'error': problem[1]}, problem[0])
             return
-        if action in ('release', 'settings'):
+        if action in ('release', 'settings', 'restore'):
             self.start_setup(action, request)
             return
         if updating(self.server):
@@ -372,7 +372,20 @@ class Handler(BaseHTTPRequestHandler):
     def start_setup(self, action, request):
         """Update MartinFlix, or apply settings, by running setup in the updater container."""
         try:
-            if action == 'settings':
+            if action == 'restore':
+                name = request.get('backup')
+                if not isinstance(name, str) or not NAME.fullmatch(name):
+                    self.send_json({'error': 'Choose a backup to restore.'}, 400)
+                    return
+                folder = self.server.backups.root() / name
+                if not (folder / 'manifest.json').is_file():
+                    self.send_json({'error': 'That backup is no longer in the backup folder.'}, 404)
+                    return
+                if self.server.backups.running:
+                    self.send_json({'error': 'A backup is running. Restore once it has finished.'}, 409)
+                    return
+                result = self.server.releases.start('restore', ['--restore', str(folder)], detail=name)
+            elif action == 'settings':
                 arguments = setup_arguments(request.get('settings') or {})
                 given = secret_values(request.get('secrets'))
                 if not arguments and not given:
@@ -430,6 +443,7 @@ def serve():
     server.backups = Backups(server.stack)
     server.releases = Releases(server.stack)
     threading.Thread(target=server.releases.check_forever, daemon=True).start()
+    threading.Thread(target=server.releases.tidy_forever, daemon=True).start()
     if server.stack.config().get('backupDir'):
         threading.Thread(target=schedule_backups, args=(server,), daemon=True).start()
     print('MartinFlix controller listening on port %d' % server.server_address[1], flush=True)

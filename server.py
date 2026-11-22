@@ -293,7 +293,7 @@ def arr_connection(kind, *, prowlarr_via_vpn=False):
     return base.rstrip('/'), key
 
 
-def arr_open(connection, endpoint, *, payload=None, method=None):
+def arr_open(connection, endpoint, *, payload=None, method=None, timeout=5):
     base, key = connection
     headers = {'X-Api-Key': key}
     body = None
@@ -301,7 +301,7 @@ def arr_open(connection, endpoint, *, payload=None, method=None):
         headers['Content-Type'] = 'application/json'
         body = json.dumps(payload).encode()
     request = urllib.request.Request(base + endpoint, data=body, headers=headers, method=method)
-    return ARR_OPENER.open(request, timeout=5)
+    return ARR_OPENER.open(request, timeout=timeout)
 
 
 ADMIN_APP_USER = 'admin'
@@ -735,6 +735,37 @@ def next_release(item, today):
     return {'type': label, 'date': when.isoformat()}
 
 
+RELEASE_LABELS = dict(RELEASE_EVENTS)
+
+
+def film_availability(item, today):
+    """When Radarr can download a film, which follows the film's minimum availability, as Radarr's Missing list
+    does: announced (straight away), in cinemas, or released (the digital or physical release, whichever comes first;
+    without either, 90 days after the cinema release, as Radarr assumes). Radarr's own isAvailable has the last say."""
+    dates = {}
+    for field, _ in RELEASE_EVENTS:
+        value = item.get(field)
+        if isinstance(value, str):
+            try:
+                dates[field] = date.fromisoformat(value[:10])
+            except ValueError:
+                continue
+    minimum = item.get('minimumAvailability')
+    if minimum == 'announced':
+        candidates = []
+    elif minimum == 'inCinemas':
+        candidates = [(dates['inCinemas'], 'In cinemas')] if 'inCinemas' in dates else []
+    else:
+        candidates = [(dates[field], RELEASE_LABELS[field]) for field in ('digitalRelease', 'physicalRelease') if field in dates]
+        if not candidates and 'inCinemas' in dates:
+            candidates = [(dates['inCinemas'] + timedelta(days=90), 'Expected release')]
+    when, label = min(candidates) if candidates else (None, None)
+    available = item.get('isAvailable')
+    if type(available) is not bool:
+        available = minimum == 'announced' or (when is not None and when <= today)
+    return {'type': label, 'date': when.isoformat() if when else None, 'available': available}
+
+
 def next_episodes(episodes, now):
     """The first monitored episode still to air for each series, keyed by series ID."""
     result = {}
@@ -785,9 +816,13 @@ def arr_items(kind, raw, now, episodes=None):
             entry['nextEpisode'] = episodes[media_id]
         if kind == 'radarr':
             entry['nextRelease'] = next_release(item, now.date())
+            entry['availability'] = film_availability(item, now.date())
         items.append(entry)
-    sort_field = 'nextAiring' if kind == 'sonarr' else 'releaseDate'
-    return sorted(items, key=lambda item: (item[sort_field] is None, item[sort_field] or '', item['title'].casefold()))
+    if kind == 'radarr':
+        # As Radarr's Missing list: films it can download now first, then the rest by when it can.
+        return sorted(items, key=lambda item: (not item['availability']['available'], item['availability']['date'] is None,
+                                               item['availability']['date'] or '', item['title'].casefold()))
+    return sorted(items, key=lambda item: (item['nextAiring'] is None, item['nextAiring'] or '', item['title'].casefold()))
 
 
 def arr_data(kind):
@@ -1058,8 +1093,8 @@ def short_text(value, limit=320):
     return value if len(value) <= limit else value[:limit].rsplit(' ', 1)[0] + '…'
 
 
-def arr_json(connection, endpoint, payload=None, method=None):
-    with arr_open(connection, endpoint, payload=payload, method=method) as response:
+def arr_json(connection, endpoint, payload=None, method=None, timeout=5):
+    with arr_open(connection, endpoint, payload=payload, method=method, timeout=timeout) as response:
         body = response.read()
     return json.loads(body) if body else None
 
@@ -1327,13 +1362,23 @@ def add_title(kind, request):
             item['seasons'] = [dict(season, monitored=season.get('seasonNumber') in chosen)
                                for season in item.get('seasons') or [] if isinstance(season, dict)]
         item.update(seasonFolder=True, addOptions=options)
-        added = arr_json(connection, '/api/v3/series', payload=item, method='POST')
     else:
         availability = request.get('availability', 'released')
         if availability not in FILM_AVAILABILITY:
             raise AddError('Choose when the film counts as available.')
         item.update(minimumAvailability=availability, addOptions={'searchForMovie': search})
-        added = arr_json(connection, '/api/v3/movie', payload=item, method='POST')
+    collection, field = ('/api/v3/series', 'tvdbId') if kind == 'sonarr' else ('/api/v3/movie', 'tmdbId')
+    try:
+        # Adding fetches the title's details and artwork first, which can take Sonarr or Radarr a while.
+        added = arr_json(connection, collection, payload=item, method='POST', timeout=60)
+    except (TimeoutError, urllib.error.URLError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            raise
+        # A slow answer can still mean it was added; the app's own list says for certain.
+        found = arr_json(connection, f'{collection}?{urllib.parse.urlencode({field: identifier})}', timeout=15)
+        if not any(isinstance(entry, dict) and entry.get(field) == identifier for entry in found or []):
+            raise
+        added = None
     return {'added': True, 'title': (added or item).get('title') or item.get('title'), 'searching': search}
 
 
@@ -1489,7 +1534,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/backup':
             self.backup_request()
             return
-        if path in ('/api/system/check', '/api/system/update', '/api/settings'):
+        if path in ('/api/system/check', '/api/system/update', '/api/settings', '/api/restore'):
             self.system_request(path)
             return
         if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password', '/change-pin'):
@@ -1589,12 +1634,18 @@ class Handler(BaseHTTPRequestHandler):
             payload['pin'] = pin
         if path == '/api/settings':
             payload.update(settings=request.get('settings') or {}, secrets=request.get('secrets') or {})
+        if path == '/api/restore':
+            backup = request.get('backup')
+            if not isinstance(backup, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}_\d{6}', backup):
+                self.send_json({'error': 'Choose a backup to restore.'}, 400)
+                return
+            payload['backup'] = backup
         target = {'/api/system/check': '/release/check', '/api/system/update': '/release/update',
-                  '/api/settings': '/settings'}[path]
+                  '/api/settings': '/settings', '/api/restore': '/restore'}[path]
         try:
             result = controller_request(target, payload, timeout=60)
         except ControllerError as exc:
-            self.send_json({'error': str(exc)}, exc.status if exc.status in (400, 403, 409, 423, 503) else 502)
+            self.send_json({'error': str(exc)}, exc.status if exc.status in (400, 403, 404, 409, 423, 503) else 502)
             return
         if result is None:
             self.send_json({'error': 'Updates and settings need the controller. Run the update from a terminal.'}, 503)
@@ -1658,6 +1709,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'error': 'Invalid request.'}, 400)
             return
         try:
+            if 'id' not in request and type(request.get('tmdb')) is int and 0 < request['tmdb'] <= 2147483647:
+                # From Discover: TMDB's ID, and the usual defaults. Sonarr adds series by TheTVDB's ID.
+                request = {'id': tvdb_for_tmdb(request['tmdb']) if kind == 'sonarr' else request['tmdb']}
             self.send_json(add_title(kind, request))
         except AddError as exc:
             self.send_json({'error': str(exc)}, 409)

@@ -16,7 +16,34 @@ Each backup is a folder named by its start time, with one archive per app and a 
 
 A backup is written to a hidden `.partial` folder and renamed when complete, so a backup folder is either whole or absent. If one app can't be backed up, the others are still saved and the Backups page marks the backup **Incomplete** with the reason. Old backups are thinned automatically: the last 14 are kept, then one per week for 8 weeks. If the VM was off at 01:00, a backup runs about ten minutes after the controller starts.
 
-A checksum proves each archive matches what was saved, not that it restores. Restoring is the next step, and should be rehearsed on the test VM before relying on it.
+A checksum proves each archive matches what was saved, not that it restores; a restore rehearsal does.
+
+## Restoring
+
+**From the dashboard.** On the Backups page, choose **Restore** beside a backup and enter your PIN. The controller can only read the state folder, so it runs setup to do the restore, in a container of its own, the same way as an update; the page shows setup's output as it goes. Setup:
+
+1. checks every archive against the backup's checksums, and that none would write outside the state folder, before it changes anything;
+2. stops the stack, including the dashboard, which the page waits for;
+3. puts each app's data back: Sonarr's, Radarr's and Prowlarr's database and `config.xml`, Bazarr's database and `config.yaml`, Transmission's settings and torrent list, Plex's `Preferences.xml` and databases, and MartinFlix's options, keys, VPN credentials, dashboard password and PIN;
+4. starts the apps on the restored data and reconnects them, as an update does.
+
+Everything the restore replaces is moved, not deleted, into a `before-restore-<date>` folder in the state directory. Only the newest such folder is kept. Media files are never part of a backup, so they stay as they are. Options that describe the machine rather than the stack (its address and ports, the media and backup folders, the release channel) stay as they are now; everything else comes from the backup, including which apps are installed. The PIN and dashboard password become the ones from the backup.
+
+**From a terminal**, add `--restore` with the backup's folder to setup. On the same machine:
+
+```sh
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge update --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
+```
+
+**Onto a new machine**, the same option with `install` rebuilds the whole stack from a backup in one go, with no claim code, PIN or credentials to enter, because they come from the backup. Pass the media folder as for any new install; backups carry on into the folder the backup came from unless you pass `--backup-dir`:
+
+```sh
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/martinflix --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
+```
+
+Add `--check` to either to check the backup and the plan without changing anything. In a terminal setup asks you to type `RESTORE` before it stops anything.
 
 ## The prototype for the reference host
 

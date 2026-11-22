@@ -260,7 +260,7 @@ function renderBackups(backups, schedule, problem) {
     $('#backup-schedule').textContent += ` · Last problem: ${schedule.lastError}`;
   }
   $('#backups-content').innerHTML = backups.length
-    ? `<table class="table"><thead><tr><th scope="col">Taken</th><th scope="col">Contents</th><th scope="col" class="num">Size</th><th scope="col">Result</th></tr></thead><tbody>${
+    ? `<table class="table"><thead><tr><th scope="col">Taken</th><th scope="col">Contents</th><th scope="col" class="num">Size</th><th scope="col">Result</th>${schedule ? '<th scope="col"><span class="sr-only">Restore</span></th>' : ''}</tr></thead><tbody>${
       backups.map(backup => {
         const problems = backup.errors?.length ? backup.errors : (backup.missing || []);
         const apps = (backup.apps || []).map(name => BACKUP_APPS[name] || name).join(', ');
@@ -268,7 +268,8 @@ function renderBackups(backups, schedule, problem) {
         return `<tr><td>${esc(date(backup.created))}${kind}</td><td>${esc(apps || `${backup.files ?? 0} archives`)}</td>
           <td class="num">${esc(backup.size == null ? '—' : bytesLabel(backup.size))}</td><td>${problems.length
           ? `<span class="badge warn">Incomplete</span> <span class="muted">${esc(problems.join('; '))}</span>`
-          : '<span class="badge ok">Complete</span>'}</td></tr>`;
+          : '<span class="badge ok">Complete</span>'}</td>${schedule ? `<td class="row-action">${(backup.apps || []).length
+          ? `<button class="button button-quiet button-small" type="button" data-control="restore" data-backup="${esc(backup.id)}" data-created="${esc(backup.created || '')}"${running ? ' disabled' : ''}>Restore</button>` : ''}</td>` : ''}</tr>`;
       }).join('')}</tbody></table>`
     : `<div class="empty-state"><h3>No backups yet</h3><p>${esc(schedule ? 'The first one runs tonight at 01:00, or use Back up now.' : problem || 'Backups start once the controller answers.')}</p></div>`;
   // While a backup runs, check back until it's done.
@@ -370,6 +371,10 @@ function setupControls() {
     }
     if (action === 'release') {
       startUpdate();
+      return;
+    }
+    if (action === 'restore') {
+      startRestore(button.dataset.backup, button.dataset.created);
       return;
     }
     const service = controlServices.get(button.dataset.service);
@@ -742,14 +747,14 @@ function posterDetails(item, kind) {
     const code = episodeCode(item.nextEpisode);
     return {meta: code ? `${code} · ${when}` : `Next episode ${when}`, extra: item.nextEpisode?.title || ''};
   }
-  if (item.nextRelease) {
-    const when = upcomingDay(item.nextRelease.date + 'T12:00:00');
-    return {meta: `${item.nextRelease.type} · ${when}`, extra: ''};
+  // When Radarr can download it, by the film's minimum availability, as in Radarr's Missing list.
+  const film = item.availability || {};
+  const day = film.date ? new Date(film.date + 'T12:00:00') : null;
+  if (film.available) {
+    const since = day ? ` · ${film.type} ${day.toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: day.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'})}` : '';
+    return {meta: `Available${since}`, extra: 'Not downloaded yet'};
   }
-  if (item.releaseDate) {
-    const released = new Date(item.releaseDate + 'T00:00:00Z').toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC'});
-    return {meta: `Released ${released}`, extra: 'Not downloaded yet'};
-  }
+  if (day) return {meta: `${film.type} · ${upcomingDay(day)}`, extra: ''};
   return {meta: 'Release date unknown', extra: ''};
 }
 
@@ -769,8 +774,7 @@ function posterCard(item, kind) {
 
 function libraryItems(library) {
   const items = library.data?.items || [];
-  return library.upcomingOnly ? items.filter(item => item.nextRelease)
-    .sort((a, b) => a.nextRelease.date.localeCompare(b.nextRelease.date)) : items;
+  return items;
 }
 
 function renderLibraryCount(library) {
@@ -785,7 +789,7 @@ function renderLibraryCount(library) {
   const queue = queued ? ` · ${queued} in the download queue` : '';
   if (library.limit) {
     count.textContent = kind === 'sonarr' ? `${total} ${total === 1 ? 'series airs' : 'series air'} in the next 12 months${queue}`
-      : `${total} ${total === 1 ? 'film has' : 'films have'} a release ahead${queue}`;
+      : `${total} ${total === 1 ? 'film' : 'films'} not downloaded yet${queue}`;
   } else {
     count.textContent = `${total} ${kind === 'sonarr' ? 'upcoming' : 'missing'}${queue}`;
   }
@@ -801,9 +805,7 @@ function emptyLibrary(library) {
   if (library.kind === 'sonarr') {
     return '<div class="empty-state"><h3>Nothing airing soon</h3><p>No monitored series have an episode due in the next 12 months.</p><a class="text-link" href="/add">Add a series</a></div>';
   }
-  return library.upcomingOnly
-    ? '<div class="empty-state"><h3>No releases ahead</h3><p>None of your monitored films have a cinema, digital or physical release coming up.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>'
-    : '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has a file.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>';
+  return '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has been downloaded.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>';
 }
 
 function renderLibrary(library) {
@@ -856,7 +858,7 @@ if (page === 'library') {
   }
 } else if (page === 'overview') {
   libraries.sonarr = overviewLibrary('sonarr', $('#next-series'), $('#next-series-count'));
-  libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'), {upcomingOnly: true});
+  libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'));
 }
 
 /* Add page: search Sonarr or Radarr's own lookup, then add a title with the defaults or the admin's choices. */
@@ -1175,20 +1177,23 @@ function renderRelease(data) {
 
 function renderRun(updater) {
   const panel = $('#setup-run');
-  const recent = updater && (updater.state === 'running' || Date.now() - new Date(updater.finishedAt) < 86400000);
+  // Backups shows restores; Settings shows updates and settings changes.
+  const here = updater && (page === 'backups') === (updater.kind === 'restore');
+  const recent = here && (updater.state === 'running' || Date.now() - new Date(updater.finishedAt) < 86400000);
   panel.hidden = !recent;
   if (!recent) return;
-  const update = updater.kind === 'update';
+  const taken = updater.detail ? when(updater.detail.replace(/^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$/, '$1T$2:$3:$4')) || updater.detail : '';
   const titles = {
-    running: update ? `Updating to ${updater.version}…` : 'Applying your settings…',
-    succeeded: update ? `Updated to ${updater.version}` : 'Settings applied',
-    failed: update ? 'The update did not finish' : 'The settings could not be applied',
-  };
+    update: {running: `Updating to ${updater.version}…`, succeeded: `Updated to ${updater.version}`, failed: 'The update did not finish'},
+    settings: {running: 'Applying your settings…', succeeded: 'Settings applied', failed: 'The settings could not be applied'},
+    restore: {running: `Restoring the backup from ${taken}…`, succeeded: `Restored the backup from ${taken}`, failed: 'The restore did not finish'},
+  }[updater.kind] || {running: 'Running setup…', succeeded: 'Setup finished', failed: 'Setup did not finish'};
   $('#setup-run-title').textContent = titles[updater.state];
   const started = when(updater.startedAt, {hour: '2-digit', minute: '2-digit'});
   const finished = when(updater.finishedAt, {hour: '2-digit', minute: '2-digit'});
   $('#setup-run-detail').textContent = updater.state === 'running'
-    ? `Started ${started}. The dashboard restarts near the end and this page reloads by itself.`
+    ? updater.kind === 'restore' ? `Started ${started}. The apps, this dashboard too, stop while their data is replaced; this page reconnects by itself.`
+      : `Started ${started}. The dashboard restarts near the end and this page reloads by itself.`
     : updater.state === 'failed' ? `Stopped at ${finished}. The output below says why; nothing after that step changed. Fix it, then try again.`
     : `Finished at ${finished}.`;
   $('#setup-run-badge').innerHTML = updater.state === 'running' ? '<span class="badge">Running</span>'
@@ -1232,10 +1237,19 @@ async function system() {
   $('#settings-form').inert = running;
   if (lastRunState === 'running' && !running) {
     following = false;
-    if (data.updater.kind === 'settings') loadSettings();
+    if (data.updater.kind !== 'update' && page === 'settings') loadSettings();
+    if (page === 'backups') status();
   }
   lastRunState = state;
   if (running || following || data.checking) followTimer = setTimeout(system, running || following ? 3000 : 5000);
+}
+
+function startRestore(name, created) {
+  const taken = when(created) || name;
+  askPin({title: `Restore the backup from ${taken}?`, verb: 'Restore', busy: 'Starting…', icon: 'refresh',
+    detail: `Every app’s settings and data go back to how they were on ${taken}: series and films added since are forgotten, and the PIN and dashboard password become the ones from then. What it replaces is kept aside on the VM, not deleted. Media files stay as they are. The apps stop for a few minutes; follow it here.`},
+  code => post('/api/restore', {pin: code, backup: name}),
+  () => { following = true; lastRunState = 'running'; system(); });
 }
 
 function startUpdate() {
@@ -1396,25 +1410,55 @@ function discoverDate(item) {
   return when > new Date() ? upcomingDay(item.date + 'T00:00:00') : String(item.year);
 }
 
+function discoverOwned() {
+  return `<span class="discover-owned">${icon('tick')}In your library</span>`;
+}
+
 function discoverCard(item) {
-  const find = `tmdb:${item.id}`;
-  const add = `/add?${new URLSearchParams({kind: item.kind, find, title: item.title})}`;
-  const action = style => item.inLibrary ? '<span class="badge ok">In library</span>'
-    : `<a class="button ${style} button-small" href="${esc(add)}" aria-label="Add ${esc(item.title)}">${icon('plus')}Add</a>`;
-  // Hovering or focusing the poster shows the synopsis and the action over it; touch screens tap the poster instead.
-  return `<li class="discover-card">
-    <div class="poster-art" tabindex="0" aria-label="${esc(item.title)}: show synopsis">
+  const options = `/add?${new URLSearchParams({kind: item.kind, find: `tmdb:${item.id}`, title: item.title})}`;
+  // Hovering, focusing or tapping the poster shows the synopsis and Add over it. Add uses the usual defaults;
+  // Options opens the Add page to choose the quality profile, seasons or folder first.
+  return `<li class="discover-card${item.inLibrary ? ' is-owned' : ''}" data-kind="${esc(item.kind)}" data-tmdb="${esc(item.id)}">
+    <div class="poster-art" tabindex="0" aria-label="${esc(item.title)}${item.inLibrary ? ', in your library' : ''}: show synopsis">
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="342" height="513">` : ''}
+      <span class="owned-mark" title="In your library">${icon('tick')}<span class="sr-only">In your library</span></span>
       <div class="discover-hover">
         <p>${esc(item.overview || 'No synopsis yet.')}</p>
-        <div class="discover-hover-action">${action('button-primary')}</div>
+        <div class="discover-hover-action">${item.inLibrary ? discoverOwned()
+          : `<button class="button button-primary button-small" type="button" data-discover-add aria-label="Add ${esc(item.title)}">${icon('plus')}Add</button>
+             <a class="discover-options" href="${esc(options)}" aria-label="Add ${esc(item.title)} with options">Options</a>`}</div>
+        <p class="discover-problem" role="alert" hidden></p>
       </div>
     </div>
     <h3 class="poster-title">${esc(item.title)}</h3>
     <p class="poster-meta">${esc(discoverDate(item))}</p>
-    <div class="discover-touch-action">${action('button-quiet')}</div>
   </li>`;
+}
+
+function setupDiscover() {
+  $('#discover-content').addEventListener('click', async event => {
+    const button = event.target.closest('[data-discover-add]');
+    if (!button || button.disabled) return;
+    const card = button.closest('.discover-card');
+    const problem = card.querySelector('.discover-problem');
+    button.disabled = true;
+    button.classList.add('is-busy');
+    button.innerHTML = `${icon('refresh')}Adding…`;
+    problem.hidden = true;
+    try {
+      await post(`/api/add/${card.dataset.kind}`, {tmdb: Number(card.dataset.tmdb)});
+      card.classList.add('is-owned');
+      card.querySelector('.discover-hover-action').innerHTML = discoverOwned();
+      card.querySelector('.poster-art').setAttribute('aria-label', `${card.querySelector('.poster-title').textContent}, in your library: show synopsis`);
+    } catch (error) {
+      button.disabled = false;
+      button.classList.remove('is-busy');
+      button.innerHTML = `${icon('plus')}Add`;
+      problem.textContent = error.message;
+      problem.hidden = false;
+    }
+  });
 }
 
 let discoverLoaded = 0;
@@ -1447,7 +1491,7 @@ async function refresh() {
   if (page === 'discover') jobs.push(discover());
   if (page === 'live') jobs.push(live(), watchHistory());
   if (page === 'overview') jobs.push(transferSummary());
-  if (page === 'settings' && !following) jobs.push(system());
+  if ((page === 'settings' || page === 'backups') && !following) jobs.push(system());
   if (page === 'overview' || page === 'library') {
     jobs.push(activity());
     for (const library of Object.values(libraries)) jobs.push(loadLibrary(library));
@@ -1460,6 +1504,7 @@ async function refresh() {
 
 if (page === 'services' || page === 'backups' || page === 'settings') setupControls();
 if (page === 'live') setupSpeedChart();
+if (page === 'discover') setupDiscover();
 if (page === 'settings') {
   setupSettings();
   loadSettings();

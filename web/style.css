@@ -316,11 +316,15 @@
   }
   .discover-hover p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 9; overflow: hidden; font-size: var(--text-xs); line-height: 1.45; }
   .discover-card:hover .discover-hover, .discover-card .poster-art:focus-within .discover-hover { opacity: 1; }
-  .discover-hover-action, .discover-touch-action { display: flex; }
-  .discover-touch-action { margin-top: var(--space-1); }
-  /* With a mouse the action lives on the poster; on touch screens it stays under the title, and a tap shows the synopsis. */
-  @media (hover: hover) { .discover-touch-action { display: none; } }
-  @media (hover: none) { .discover-hover-action { display: none; } }
+  .discover-hover-action { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+  .discover-options { color: #f3efe4; font-size: var(--text-sm); font-weight: 600; }
+  .discover-owned { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: 600; font-size: var(--text-sm); color: var(--mint); }
+  .discover-owned .icon { width: 18px; height: 18px; }
+  .discover-problem { padding: var(--space-1) var(--space-2); border-radius: 6px; background: var(--crit-bg); color: var(--crit); -webkit-line-clamp: unset !important; }
+  /* Titles already in Sonarr or Radarr carry a tick on the poster, always in view. */
+  .owned-mark { position: absolute; top: var(--space-2); right: var(--space-2); z-index: 1; display: none; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--ok); color: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .35); }
+  .owned-mark .icon { width: 20px; height: 20px; }
+  .is-owned .owned-mark { display: grid; }
   .poster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: var(--space-5) var(--space-4); }
   .poster-card { min-width: 0; }
   .poster-art {
@@ -590,6 +594,8 @@
   .change-list li { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
   .change-list li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
   .change-list li > .muted { flex: none; white-space: nowrap; }
+  .setup-run { max-width: 1320px; margin-bottom: var(--space-5); }
+  .table td.row-action { text-align: right; padding-block: var(--space-2); }
   .setup-log {
     max-height: 420px; overflow: auto; margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
     background: var(--forest); color: var(--rail-fg); font: .8125rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;

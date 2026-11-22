@@ -5,6 +5,7 @@ This runs inside the MartinFlix image, started by its launcher (launch.py), whic
 the same paths, this machine's network, and the Docker socket. Start it with docker run, as the launcher explains.
 """
 import argparse
+import datetime
 import errno
 import getpass
 import hashlib
@@ -29,6 +30,7 @@ from xml.etree import ElementTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'controller'))
 from controller import hash_pin, valid_pin  # noqa: E402
+import restore  # noqa: E402
 from configure import (AppApi, BazarrApi, TransmissionRpc, configure_apps, configure_bazarr, ensure_arr_login,
                        ensure_bazarr_login, seed_transmission_defaults)
 
@@ -98,6 +100,15 @@ def resolve_state_directory(requested):
     return current.resolve()
 
 
+def project_exists(project):
+    try:
+        listed = subprocess.run(['docker', 'ps', '-aq', '--filter', f'label=com.docker.compose.project={project}'],
+                                capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return listed.returncode != 0 or bool(listed.stdout.strip())
+
+
 def compose_project(state, previous, fresh=False):
     suffix = hashlib.sha256(os.fsencode(state)).hexdigest()[:16]
     current = f'martinflix-{suffix}'
@@ -106,7 +117,9 @@ def compose_project(state, previous, fresh=False):
         return current
     project = previous.get('project')
     if project is None:
-        return legacy if has_installation(state) else current
+        # Installs from before setup saved its options ran under the older name. Anything else, such as a first run
+        # that stopped part-way, takes the current one.
+        return legacy if has_installation(state) and project_exists(legacy) else current
     if project not in (current, legacy):
         raise ValueError('The saved Docker project does not match this state directory. Use the original --state-dir.')
     return project
@@ -453,16 +466,15 @@ def live_states(project, names, environment, run=subprocess.run):
     """Each named service's container state and Docker's status line, such as "Up 9 seconds (health: starting)"."""
     try:
         listed = run(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={project}', '--format',
-                      '{{.Label "com.docker.compose.service"}}\t{{.State}}\t{{.Status}}'],
+                      '{{.Label "com.docker.compose.service"}}\t{{.State}}\t{{.Status}}\t{{.ID}}'],
                      env=environment, capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return {}
     states = {}
     for line in listed.stdout.splitlines() if listed.returncode == 0 else []:
-        service, _, rest = line.partition('\t')
-        state, _, status = rest.partition('\t')
+        service, state, status, container = (line.split('\t') + ['', '', ''])[:4]
         if service in names:
-            states[service] = (state, status)
+            states[service] = (state, status, container)
     return states
 
 
@@ -470,7 +482,7 @@ def describe_state(found, follows=None):
     """What an app is doing while Compose waits for it, in words. Returns (text, finished)."""
     if found is None:
         return 'waiting to be created', False
-    state, status = found
+    state, status = found[:2]
     if state == 'created':
         return (f'waiting for {app_label(follows)}' if follows else 'waiting to start'), False
     if state == 'restarting':
@@ -498,6 +510,9 @@ class StepProgress:
         self.started = clock()
         self.shown = 0
         self.reported = {}
+        # Containers as they were before the step. One still there may be about to be replaced, so it only "runs".
+        self.before = {name: found[2] for name, found in live_states(project, self.names, environment, run).items()
+                       if len(found) > 2}
 
     def update(self):
         waited = int(self.clock() - self.started)
@@ -507,7 +522,10 @@ class StepProgress:
         states = live_states(self.project, self.names, self.environment, self.run)
         lines = []
         for name in self.names:
-            text, finished = describe_state(states.get(name), self.follows if name != self.follows else None)
+            found = states.get(name)
+            text, finished = describe_state(found, self.follows if name != self.follows else None)
+            if found and len(found) > 2 and found[2] == self.before.get(name) and text == 'ready':
+                text = 'running'
             if self.live:
                 lines.append(f'   {app_label(name):<20} {text}' + ('' if finished else f' {waited // 60}:{waited % 60:02d}'))
             elif self.reported.get(name) != text:
@@ -1219,6 +1237,11 @@ def install(args, overlay_file):
         raise ValueError('Choose a state directory outside the repository for application data and secrets.')
     check_directory(state)
     existing = has_installation(state)
+    if args.restore and args.reset:
+        raise ValueError('A restore replaces the app data anyway. Leave out --reset.')
+    if args.restore and not args.backup_dir and not saved_options(state).get('backup_dir'):
+        # Rebuilding a machine from its backups: keep backing up to the folder they came from.
+        args.backup_dir = str(Path(args.restore).resolve().parent.parent)
     if (args.reset or args.update) and not existing:
         flag = '--reset' if args.reset else '--update'
         raise ValueError(f'No installer-managed MartinFlix installation was found at {state}. '
@@ -1260,8 +1283,15 @@ def install(args, overlay_file):
     describe_plan(plan, target, args, current if existing else None)
     if target != state:
         print(f'The fresh installation moves to {target}. The archive of the current one stays in {state}.\n', flush=True)
+    backup = None
+    if args.restore:
+        backup = restore.Backup(args.restore)
+        print('Restore\n' + backup.describe() + '\n', flush=True)
     if args.check:
-        if args.reset:
+        if backup:
+            print('Preflight passed, and every archive in the backup matches its checksum. Run the same command '
+                  'without --check to restore it.')
+        elif args.reset:
             print('Preflight passed. Run the same command without --check. Setup will ask you to type RESET '
                   'before it stops and archives the current installation.')
         else:
@@ -1270,7 +1300,39 @@ def install(args, overlay_file):
     if args.reset:
         reset_installation(state, old_project)
         previous = {}
-    run_installation(plan, target, previous, mode='reset' if args.reset else 'update' if existing else 'install')
+    if backup:
+        previous, plan = restore_backup(args, backup, target, previous, plan, project, overlay_file)
+    run_installation(plan, target, previous,
+                     mode='restore' if backup else 'reset' if args.reset else 'update' if existing else 'install')
+
+
+def restore_backup(args, backup, state, previous, plan, project, overlay_file):
+    """Stop the stack, put the backup's data in place, and plan the run that starts the apps on it. Returns the
+    options and plan to carry on with."""
+    import fcntl
+
+    if sys.stdin.isatty():
+        print('Restoring replaces every app’s settings and data listed above with the backup’s. Anything changed '
+              'since it was taken is set aside, not deleted. Media files stay as they are.')
+        if input('Type RESTORE to continue: ') != 'RESTORE':
+            raise ValueError('Restore cancelled. Nothing was changed.')
+    print('Restoring the backup. The apps stop while their data is replaced…', flush=True)
+    private_directory(state)
+    with (state / 'install.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        stopped = subprocess.run(plan['compose'] + ['stop'], env=plan['environment'], capture_output=True, text=True,
+                                 timeout=300)
+        if stopped.returncode:
+            raise ValueError('Setup could not stop the apps before restoring: '
+                             + (stopped.stderr or stopped.stdout).strip()[-600:])
+        aside = state / datetime.datetime.now().strftime('before-restore-%Y-%m-%d_%H%M%S')
+        private_directory(aside)
+        restore.Restorer(state, aside).restore(backup)
+        restore.prune_aside(state, aside)
+        options = restore.merge_options(saved_options(state), previous)
+        write_secret(state / 'install-options.json', json.dumps(options))
+    print(f'   What the restore replaced is kept in {aside}', flush=True)
+    return options, plan_installation(args, state, options, project, overlay_file)
 
 
 def current_settings(options):
@@ -1703,7 +1765,7 @@ def print_summary(mode, plan, password, password_set, apps_use_it, output=None):
     names += ['Plex'] if plan['plex'] else []
     names += ['Gluetun (VPN)'] if plan['vpn'] else []
     listed = ', '.join(names[:-1]) + ' and ' + names[-1]
-    done = {'update': 'Updated', 'reset': 'Installed from scratch'}.get(mode, 'Installed')
+    done = {'update': 'Updated', 'reset': 'Installed from scratch', 'restore': 'Restored'}.get(mode, 'Installed')
     output.write(f'\n{done}: MartinFlix {VERSION} is running, with {listed} connected.\n')
 
     heading('Dashboard', output)
@@ -1779,6 +1841,10 @@ def build_parser():
                         help='Which MartinFlix releases the dashboard offers: stable (version tags) or edge (every '
                              'change). Defaults to the channel of the image you ran.')
     parser.add_argument('--settings-file', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--restore', type=Path, metavar='BACKUP',
+                        help='Restore a backup folder, such as /mnt/martinflix/Backups/vm/2026-11-22_010000, into this '
+                             'installation, or into a new one. Setup checks the backup, stops the apps, puts their '
+                             'data back and starts them again. Media files are not touched.')
     parser.add_argument('--change-pin', action='store_true',
                         help='Choose a new PIN for restarting and updating apps from the dashboard.')
     parser.add_argument('--download-client', choices=['transmission'])

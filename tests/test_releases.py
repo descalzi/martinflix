@@ -141,8 +141,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(updater['version'], '2026.11.22.7')
         self.assertIn('Sonarr               up to date', updater['log'])
         self.assertNotIn('\x1b', updater['log'])
-        self.docker.updater['State'] = {'Running': False, 'ExitCode': 1, 'FinishedAt': '2026-11-22T19:04:00Z'}
+        self.docker.updater['State'] = {'Running': False, 'Status': 'exited', 'ExitCode': 1, 'FinishedAt': '2026-11-22T19:04:00Z'}
         self.assertEqual(self.releases.updater()['state'], 'failed')
+        # Once finished, its result is kept and the container goes.
+        self.assertEqual(self.docker.calls[-1], ['rm', 'martinflix-abc-updater'])
+        self.docker.updater = None
+        kept = self.releases.updater()
+        self.assertEqual((kept['state'], kept['version']), ('failed', '2026.11.22.7'))
+        self.assertIn('Sonarr               up to date', kept['log'])
 
     def test_settings_are_read_from_setup_without_revealing_secrets(self):
         (self.state / 'install-options.json').write_text(json.dumps({
@@ -158,12 +164,12 @@ class ReleaseTests(unittest.TestCase):
 
 
 class HandlerTests(unittest.TestCase):
-    def request(self, path, body=None, token='t' * 40):
+    def request(self, path, body=None, token='t' * 40, backups=None):
         handler = object.__new__(controller.Handler)
         pins = SimpleNamespace(check=lambda pin: None if pin == '2468' else (403, 'Wrong PIN.'))
         started = []
-        handler.server = SimpleNamespace(token='t' * 40, pins=pins, releases=SimpleNamespace(
-            start=lambda kind, *args: started.append((kind, *args)) or {'started': True, 'kind': kind},
+        handler.server = SimpleNamespace(token='t' * 40, pins=pins, backups=backups, releases=SimpleNamespace(
+            start=lambda kind, *args, **kwargs: started.append((kind, *args)) or {'started': True, 'kind': kind},
             running=lambda: False, check_soon=lambda: started.append(('check',))))
         payload = json.dumps(body or {}).encode()
         handler.path = path
@@ -189,6 +195,25 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(self.request('/settings', {'pin': '2468', 'settings': {'discover': 'nope'}})[0], 400)
         self.assertEqual(self.request('/settings', {'pin': '2468', 'settings': {}})[0], 400)
         self.assertEqual(self.request('/release/update', {'pin': '2468'}, token='wrong')[0], 401)
+
+    def test_a_restore_names_a_backup_in_this_machines_folder(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        (root / '2026-11-22_010000').mkdir()
+        (root / '2026-11-22_010000' / 'manifest.json').write_text('{}')
+        backups_state = SimpleNamespace(root=lambda: root, running=None)
+        statuses = []
+        for body in ({'pin': '2468', 'backup': '2026-11-22_010000'}, {'pin': '2468', 'backup': '../etc'},
+                     {'pin': '2468', 'backup': '2026-11-21_010000'}):
+            handler_status, _, started = self.request('/restore', body, backups=backups_state)
+            statuses.append(handler_status)
+        self.assertEqual(statuses, [202, 400, 404])
+        self.assertEqual(started, [])
+        _, _, started = self.request('/restore', {'pin': '2468', 'backup': '2026-11-22_010000'}, backups=backups_state)
+        self.assertEqual(started, [('restore', ['--restore', str(root / '2026-11-22_010000')])])
+        backups_state.running = '2026-11-22T20:00:00'
+        self.assertEqual(self.request('/restore', {'pin': '2468', 'backup': '2026-11-22_010000'}, backups=backups_state)[0], 409)
 
     def test_checking_for_updates_needs_only_the_token(self):
         status, _, started = self.request('/release/check')

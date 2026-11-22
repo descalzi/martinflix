@@ -73,7 +73,7 @@ The lists come from [TMDB](https://www.themoviedb.org/), using MartinFlix's own 
 
 ### Backups
 
-Every night at 01:00 the controller backs up each app's settings and data, keeping the last 14 plus one a week for 8 weeks. Choose the folder under **Settings → Backups**, or with `--backup-dir`, ideally a NAS share or another disk (for example `--backup-dir /mnt/martinflix/Backups`); each machine uses its own subfolder. See [Backup and recovery](backups.md) for what each backup holds.
+Every night at 01:00 the controller backs up each app's settings and data, keeping the last 14 plus one a week for 8 weeks. Choose the folder under **Settings → Backups**, or with `--backup-dir`, ideally a NAS share or another disk (for example `--backup-dir /mnt/martinflix/Backups`); each machine uses its own subfolder. To restore one, choose **Restore** beside it on the Backups page; `--restore` does the same from a terminal, and rebuilds a new machine from a backup. See [Backup and recovery](backups.md) for what each backup holds and how a restore works.
 
 ### Restart and update apps from the dashboard
 

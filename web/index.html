@@ -29,6 +29,7 @@
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
     <symbol id="i-tunnel" viewBox="0 0 24 24"><path d="M12 3.5 5 6.5v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9v-5z"/><path d="m9 12 2 2 4-4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
+    <symbol id="i-tick" viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></symbol>
@@ -61,6 +62,12 @@
           <button id="refresh" class="button button-quiet" type="button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
       </header>
+
+      <!-- Setup running in the background, for an update, new settings or a restore. Shown on Settings and Backups. -->
+      <section class="panel setup-run" id="setup-run" aria-labelledby="setup-run-title" hidden>
+        <div class="panel-head"><div><h2 id="setup-run-title">Updating</h2><p id="setup-run-detail"></p></div><span id="setup-run-badge"></span></div>
+        <pre class="setup-log" id="setup-log" tabindex="0" aria-label="Setup output"></pre>
+      </section>
 
       <div class="page" data-for="overview">
         <a class="update-banner" id="update-banner" href="/settings" hidden>
@@ -102,7 +109,7 @@
 
         <section class="panel" aria-labelledby="next-films-title">
           <div class="panel-head">
-            <div><h2 id="next-films-title">Upcoming films</h2><p id="next-films-count">Monitored films with a release still ahead.</p></div>
+            <div><h2 id="next-films-title">Missing films</h2><p id="next-films-count">Monitored films not downloaded yet.</p></div>
             <a class="text-link" href="/library#films">All films<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
           </div>
           <div id="next-films" class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
@@ -174,7 +181,7 @@
         </section>
         <section id="films" class="panel library" data-library="radarr" aria-labelledby="films-title">
           <div class="panel-head">
-            <div><h2 id="films-title">Missing films</h2><p>Monitored films without a file, by release date.</p></div>
+            <div><h2 id="films-title">Missing films</h2><p>Monitored films not downloaded yet: those Radarr can get now first, then the rest by when it can, from each film’s minimum availability.</p></div>
           </div>
           <div class="library-controls">
             <p class="library-count"></p>
@@ -233,11 +240,6 @@
             <button class="button button-quiet" type="button" id="release-check" hidden><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Check for updates</button>
           </div>
           <div id="release-content" aria-live="polite"></div>
-        </section>
-
-        <section class="panel setup-run" id="setup-run" aria-labelledby="setup-run-title" hidden>
-          <div class="panel-head"><div><h2 id="setup-run-title">Updating</h2><p id="setup-run-detail"></p></div><span id="setup-run-badge"></span></div>
-          <pre class="setup-log" id="setup-log" tabindex="0" aria-label="Setup output"></pre>
         </section>
 
         <form id="settings-form" class="settings" novalidate hidden>
