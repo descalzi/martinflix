@@ -324,6 +324,8 @@ def pull_images(compose, environment, services, sleep=time.sleep, popen=subproce
         if image and image not in seen:
             seen.add(image)
             pulls.append(ImagePull(service, image))
+    # Downloads run in parallel and nothing starts until all are done, so the list is alphabetical, for reading.
+    pulls.sort(key=lambda pull: pull.label.casefold())
     live = output.isatty()
     width = shutil.get_terminal_size((80, 20)).columns - 1
     shown = 0
