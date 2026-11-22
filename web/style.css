@@ -260,6 +260,7 @@
     background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   }
   .search input:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 40%, transparent); outline-offset: 0; border-color: var(--accent); }
+  .table td.num { white-space: nowrap; }
   /* Live */
   .live-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--space-3); margin-bottom: var(--space-4); }
   .live-stats div { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }

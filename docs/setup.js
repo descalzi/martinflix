@@ -79,6 +79,7 @@ function validateStep(step, options) {
   }
   if (step === 'options') {
     checkPath(options.state, 'State directory');
+    checkPath(options.backupDir, 'Backup folder');
     checkPorts(options);
   }
   if (step === 'location') checkPath(options.state, 'State directory');
@@ -86,6 +87,7 @@ function validateStep(step, options) {
     const change = options.changes || {};
     if (change.access === 'lan') checkAddress(change.address);
     checkPath(change.media, 'Media directory');
+    checkPath(change.backupDir, 'Backup folder');
     if (change.flaresolverr && !change.prowlarr && change.prowlarrInstalled === false) {
       throw new Error('FlareSolverr needs Prowlarr.');
     }
@@ -98,6 +100,7 @@ function changeArguments(change) {
   if (change.access === 'local') args.push('--dashboard-bind=127.0.0.1');
   if (change.access === 'lan') args.push('--dashboard-bind=' + shellQuote(change.address));
   if (change.media) args.push('--media-path=' + shellQuote(change.media));
+  if (change.backupDir) args.push('--backup-dir=' + shellQuote(change.backupDir));
   if (change.vpn) {
     args.push('--enable-vpn');
     args.push((change.exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(change.exit));
@@ -131,6 +134,7 @@ function installArguments(options) {
   if (options.lan) args.push('--dashboard-bind=' + shellQuote(options.address));
   if (options.media) args.push('--media-path=' + shellQuote(options.media));
   if (options.state) args.push('--state-dir=' + shellQuote(options.state));
+  if (options.backupDir) args.push('--backup-dir=' + shellQuote(options.backupDir));
   if (options.vpn) {
     args.push('--enable-vpn', '--vpn-provider=' + shellQuote(options.provider));
     args.push((options.exit === 'Prague' ? '--vpn-city=' : '--vpn-country=') + shellQuote(options.exit));
@@ -228,6 +232,7 @@ if (typeof document !== 'undefined') {
       plexUrl: byId('plex-url').value.trim().replace(/\/+$/, ''),
       region: byId('discover-region').value,
       state: (update ? byId('state-update') : byId('state')).value.trim(),
+      backupDir: byId('backup-dir').value.trim(),
       ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
       changes: {
         access: byId('u-access').value,
@@ -247,6 +252,7 @@ if (typeof document !== 'undefined') {
         plexToken: byId('u-plex-token').checked,
         region: byId('u-discover-region').value,
         media: byId('u-media').value.trim(),
+        backupDir: byId('u-backup-dir').value.trim(),
       },
     };
   }
@@ -352,6 +358,7 @@ if (typeof document !== 'undefined') {
       if (added.length) summary.push(['Add apps', added.join(', ')]);
       if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
       if (change.media) summary.push(['Media directory', change.media]);
+      if (change.backupDir) summary.push(['Backup folder', change.backupDir]);
       if (change.plexName) summary.push(['Plex server name', change.plexName]);
       if (change.plexUrl) summary.push(['Plex server', change.plexUrl]);
       if (change.plexToken || change.plexUrl) summary.push(['Plex token', 'Enter it when setup asks']);
@@ -372,6 +379,7 @@ if (typeof document !== 'undefined') {
       summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
       summary.push(['Plex', options.plex ? `Installed here as ${options.plexName || 'martinflix'} · setup asks for a claim code`
         : options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not installed']);
+      summary.push(['Backups', `${options.backupDir || 'Default folder on this VM'} · nightly at 01:00`]);
       summary.push(['State directory', options.state || 'Default location']);
       for (const [name, label, fallback] of enabledPorts(options)) {
         const port = options.ports[name];

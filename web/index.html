@@ -202,28 +202,33 @@
         <p class="page-intro" id="services-description">Service health and dependencies.</p>
         <p class="control-notice" id="control-notice" role="status" hidden></p>
         <div id="services-content" class="service-list" aria-live="polite"><p class="empty">Checking services…</p></div>
-        <dialog class="control-dialog" id="control-dialog" aria-labelledby="control-title">
-          <form id="control-form" novalidate>
-            <h2 id="control-title">Restart</h2>
-            <p class="control-detail" id="control-detail"></p>
-            <label for="control-pin">PIN</label>
-            <input id="control-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" minlength="4" maxlength="8" pattern="[0-9]{4,8}" required>
-            <p class="error error-inline" id="control-error" role="alert" hidden></p>
-            <div class="control-actions">
-              <button class="button button-quiet" type="button" id="control-cancel">Cancel</button>
-              <button class="button button-primary" type="submit" id="control-confirm">Restart</button>
-            </div>
-          </form>
-        </dialog>
       </div>
 
       <div class="page" data-for="backups">
-        <p class="page-intro">Snapshots of the latest backup each app wrote. A checksum proves the copy matches; only a restore rehearsal proves it works.</p>
+        <p class="page-intro">Every app’s settings and data, taken each night. A checksum proves each copy matches what was saved; a restore rehearsal proves it works.</p>
+        <p class="control-notice" id="backup-notice" role="status" hidden></p>
         <section class="panel" aria-labelledby="snapshots-title">
-          <div class="panel-head"><h2 id="snapshots-title">Snapshots</h2></div>
+          <div class="panel-head">
+            <div><h2 id="snapshots-title">Backups</h2><p id="backup-schedule">Checking the schedule…</p></div>
+            <button class="button button-quiet" type="button" id="backup-now" data-control="backup" hidden><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Back up now</button>
+          </div>
           <div id="backups-content" class="backup-list"><p class="empty">Checking snapshots…</p></div>
         </section>
       </div>
+
+      <dialog class="control-dialog" id="control-dialog" aria-labelledby="control-title">
+        <form id="control-form" novalidate>
+          <h2 id="control-title">Restart</h2>
+          <p class="control-detail" id="control-detail"></p>
+          <label for="control-pin">PIN</label>
+          <input id="control-pin" name="pin" type="password" inputmode="numeric" autocomplete="off" minlength="4" maxlength="8" pattern="[0-9]{4,8}" required>
+          <p class="error error-inline" id="control-error" role="alert" hidden></p>
+          <div class="control-actions">
+            <button class="button button-quiet" type="button" id="control-cancel">Cancel</button>
+            <button class="button button-primary" type="submit" id="control-confirm">Restart</button>
+          </div>
+        </form>
+      </dialog>
 
       <footer class="foot">
         <span>MartinFlix control room</span>

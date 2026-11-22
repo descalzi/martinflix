@@ -17,6 +17,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from backups import BackupError, Backups
+
 # Restarting these ends the request that asked for it, so the controller answers first and restarts them after.
 SELF = frozenset({'dashboard', 'controller'})
 RESTART_DELAY_SECONDS = 1.0
@@ -285,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'error': 'Not found.'}, 404)
             return
         try:
-            self.send_json(self.server.stack.status())
+            self.send_json({**self.server.stack.status(), 'backups': self.server.backups.status()})
         except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
             self.send_json({'error': str(exc) or 'Docker status is unavailable.'}, 502)
 
@@ -301,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                 self.send_json({'error': str(exc) or 'Transmission could not be restarted.'}, 502)
             return
-        action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin'}.get(self.path)
+        action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin', '/backup': 'backup'}.get(self.path)
         if action is None:
             self.send_json({'error': 'Not found.'}, 404)
             return
@@ -321,6 +323,14 @@ class Handler(BaseHTTPRequestHandler):
         if problem := self.server.pins.check(pin):
             self.send_json({'error': problem[1]}, problem[0])
             return
+        if action == 'backup':
+            # A backup takes minutes, so it runs in the background; the Backups page follows its progress.
+            if self.server.backups.running:
+                self.send_json({'error': 'A backup is already running.'}, 409)
+                return
+            threading.Thread(target=take_backup, args=(self.server, 'manual'), daemon=True).start()
+            self.send_json({'ok': True, 'started': True}, 202)
+            return
         try:
             if name not in self.server.stack.controllable():
                 self.send_json({'error': 'That app cannot be controlled from here.'}, 404)
@@ -337,6 +347,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'error': str(exc) or f'The {action} failed.'}, 502)
 
 
+def take_backup(server, kind):
+    """One backup, holding the same lock as restarts and updates so nothing restarts an app mid-backup."""
+    with server.busy:
+        try:
+            manifest = server.backups.run(kind)
+            print(f'Backup {manifest["created"]} done: {len(manifest["apps"])} apps'
+                  + (f', problems: {"; ".join(manifest["errors"])}' if manifest['errors'] else '.'), flush=True)
+        except BackupError as exc:
+            print(f'Backup failed: {exc}', flush=True)
+
+
+def schedule_backups(server):
+    while True:
+        when = server.backups.first_run()
+        server.backups.sleep(max(1.0, (when - server.backups.now()).total_seconds()))
+        take_backup(server, 'scheduled')
+
+
 def serve():
     token = Path(os.environ['MARTINFLIX_CONTROL_TOKEN_FILE']).read_text().strip()
     if len(token) < 32:
@@ -348,6 +376,9 @@ def serve():
     server.busy = threading.Lock()
     marker = Path(os.environ['MARTINFLIX_CONTROL_PIN_FILE']).with_name('transmission-password-applied')
     server.transmission = TransmissionPassword(server.stack, server.busy, marker)
+    server.backups = Backups(server.stack)
+    if server.stack.config().get('backupDir'):
+        threading.Thread(target=schedule_backups, args=(server,), daemon=True).start()
     print('MartinFlix controller listening on port %d' % server.server_address[1], flush=True)
     server.serve_forever()
 

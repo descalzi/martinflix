@@ -245,16 +245,35 @@ function renderOverview(docker, services, backups, probes) {
   $('#backup-detail').textContent = latest ? (incomplete ? `Incomplete · missing ${[...(latest.missing || []), ...(latest.errors || [])].join(', ')}` : 'Captured · restore untested') : 'No snapshots found';
 }
 
-function renderBackups(backups) {
+const BACKUP_APPS = {sonarr: 'Sonarr', radarr: 'Radarr', prowlarr: 'Prowlarr', bazarr: 'Bazarr', transmission: 'Transmission',
+  plex: 'Plex', martinflix: 'MartinFlix'};
+
+function renderBackups(backups, schedule) {
+  const running = schedule?.running;
+  $('#backup-now').hidden = !schedule;
+  $('#backup-now').disabled = Boolean(running);
+  const next = schedule?.next ? new Date(schedule.next) : null;
+  $('#backup-schedule').textContent = !schedule ? 'Scheduled backups need the controller. Rerun setup to add it.'
+    : running ? `Backing up now, started ${new Date(running).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})}…`
+    : `Next backup ${next ? next.toLocaleString(undefined, {weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : 'tonight'} · Saved in ${schedule.folder}`;
+  if (schedule?.lastError && !running) {
+    $('#backup-schedule').textContent += ` · Last problem: ${schedule.lastError}`;
+  }
   $('#backups-content').innerHTML = backups.length
-    ? `<table class="table"><thead><tr><th scope="col">Captured</th><th scope="col" class="num">Archives</th><th scope="col">Result</th></tr></thead><tbody>${
+    ? `<table class="table"><thead><tr><th scope="col">Taken</th><th scope="col">Contents</th><th scope="col" class="num">Size</th><th scope="col">Result</th></tr></thead><tbody>${
       backups.map(backup => {
-        const problems = [...(backup.missing || []), ...(backup.errors || [])];
-        return `<tr><td>${esc(date(backup.created))}</td><td class="num">${esc(backup.files ?? 0)}</td><td>${problems.length
-          ? `<span class="badge warn">Incomplete</span> <span class="muted">Missing ${esc(problems.join(', '))}</span>`
-          : '<span class="badge ok">Captured</span> <span class="muted">Restore untested</span>'}</td></tr>`;
+        const problems = backup.errors?.length ? backup.errors : (backup.missing || []);
+        const apps = (backup.apps || []).map(name => BACKUP_APPS[name] || name).join(', ');
+        const kind = backup.kind === 'manual' ? ' <span class="muted">· on request</span>' : '';
+        return `<tr><td>${esc(date(backup.created))}${kind}</td><td>${esc(apps || `${backup.files ?? 0} archives`)}</td>
+          <td class="num">${esc(backup.size == null ? '—' : bytesLabel(backup.size))}</td><td>${problems.length
+          ? `<span class="badge warn">Incomplete</span> <span class="muted">${esc(problems.join('; '))}</span>`
+          : '<span class="badge ok">Complete</span>'}</td></tr>`;
       }).join('')}</tbody></table>`
-    : '<div class="empty-state"><h3>No snapshots yet</h3><p>Run <code>python3 backup.py create</code> on the host to capture the latest app backups. They appear here once a manifest is written.</p></div>';
+    : `<div class="empty-state"><h3>No backups yet</h3><p>${schedule ? 'The first one runs tonight at 01:00, or use Back up now.' : 'Backups start once the controller is set up.'}</p></div>`;
+  // While a backup runs, check back until it's done.
+  clearTimeout(renderBackups.timer);
+  if (running) renderBackups.timer = setTimeout(status, 5000);
 }
 
 const servicesPage = page === 'services';
@@ -318,13 +337,17 @@ function setupControls() {
     cancel.disabled = state;
     confirm.setAttribute('aria-disabled', String(state));
     confirm.classList.toggle('is-busy', state);
-    confirm.innerHTML = `${icon(request.action === 'restart' ? 'refresh' : 'up')}${esc(label)}`;
+    confirm.innerHTML = `${icon(request.action === 'restart' ? 'refresh' : request.action === 'backup' ? 'plus' : 'up')}${esc(label)}`;
   };
-  $('#services-content').addEventListener('click', event => {
+  document.addEventListener('click', event => {
     const button = event.target.closest('[data-control]');
-    const service = button && controlServices.get(button.dataset.service);
+    if (!button || button.disabled) return;
+    const backup = button.dataset.control === 'backup';
+    const service = backup ? {name: 'backup'} : controlServices.get(button.dataset.service);
     if (!service) return;
-    const text = controlText(button.dataset.control, service);
+    const text = backup ? {title: 'Back up now?', verb: 'Back up', busy: 'Starting…',
+      detail: 'Takes a backup of every app now, alongside the nightly ones. The apps keep running; it takes a few minutes.'}
+      : controlText(button.dataset.control, service);
     request = {action: button.dataset.control, service: service.name, text};
     $('#control-title').textContent = text.title;
     $('#control-detail').textContent = text.detail;
@@ -349,16 +372,18 @@ function setupControls() {
     error.hidden = true;
     setBusy(true, request.text.busy);
     try {
-      const response = await fetch(`/api/control/${request.action}`, {
+      const backup = request.action === 'backup';
+      const response = await fetch(backup ? '/api/backup' : `/api/control/${request.action}`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({service: request.service, pin: pin.value}),
+        body: JSON.stringify(backup ? {pin: pin.value} : {service: request.service, pin: pin.value}),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.error || 'The request failed. Try again.');
       busy = false;
       dialog.close();
-      notice.textContent = data.message;
-      notice.hidden = false;
+      const where = backup ? $('#backup-notice') : notice;
+      where.textContent = data.message;
+      where.hidden = false;
       if (request.service === 'dashboard') {
         waitForDashboard();
         return;
@@ -439,7 +464,7 @@ async function status() {
     } else if (page === 'overview') {
       renderOverview(docker, services, data.backups.snapshots, probes);
     } else if (page === 'backups') {
-      renderBackups(data.backups.snapshots);
+      renderBackups(data.backups.snapshots, data.backups.schedule);
     }
     $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
   } catch {
@@ -1142,7 +1167,7 @@ async function refresh() {
   refreshing = false;
 }
 
-if (page === 'services') setupControls();
+if (page === 'services' || page === 'backups') setupControls();
 if (page === 'live') setupSpeedChart();
 // Live figures move faster than the rest: every five seconds on Live, ten on the Overview's summary.
 if (page === 'live') setInterval(() => { if (!document.hidden) live(); }, 5000);

@@ -1,5 +1,25 @@
 # Backup and recovery
 
+## Backups on an installer-built stack
+
+The controller backs up the stack every night at 01:00, local time, and whenever you press **Back up now** on the Backups page (it asks for your PIN). Choose where with `--backup-dir`, ideally another disk or a mounted NAS share such as `/mnt/martinflix/Backups`; it must already exist, because setup never creates a mount point. Without it, backups go to `~/.local/share/martinflix/backups` on the VM itself, which a failed disk would take with it. Each machine writes into its own subfolder named after the machine, so several machines can share one folder without mixing backups.
+
+Each backup is a folder named by its start time, with one archive per app and a `manifest.json` listing each archive's size and SHA-256 checksum:
+
+| Archive | Contents |
+|---|---|
+| `sonarr.zip`, `radarr.zip`, `prowlarr.zip` | The app's own backup (database and settings), made through its API so the database is consistent while the app runs. Sonarr's and Radarr's databases hold every series and film they track, including ones not released yet, with their monitoring, quality profiles, tags and history |
+| `bazarr.zip` | Bazarr's own backup |
+| `transmission.tar.gz` | `settings.json` and the torrent list, so seeding can resume |
+| `plex.tar.gz` | `Preferences.xml` and Plex's library and blobs databases (libraries, watch history, watched status), copied with Plex's own SQLite while Plex runs. Plex's caches and downloaded artwork are left out; Plex rebuilds them |
+| `martinflix.tar.gz` | Setup's options, the dashboard password hash, app keys, VPN credentials and the PIN hash. **Private**: readable only by your account |
+
+A backup is written to a hidden `.partial` folder and renamed when complete, so a backup folder is either whole or absent. If one app can't be backed up, the others are still saved and the Backups page marks the backup **Incomplete** with the reason. Old backups are thinned automatically: the last 14 are kept, then one per week for 8 weeks. If the VM was off at 01:00, a backup runs about ten minutes after the controller starts.
+
+A checksum proves each archive matches what was saved, not that it restores. Restoring is the next step, and should be rehearsed on the test VM before relying on it.
+
+## The prototype for the reference host
+
 The prototype captures the latest *existing* app-generated archive in each of the configured Sonarr, Radarr, Prowlarr, Bazarr and Tautulli backup directories, if found. It does not ask the apps to create a new backup. The manifest records source modification times, sizes, SHA-256 checksums and missing sources. An incomplete snapshot returns a non-zero exit code. Archives can contain API keys and credentials: protect both the destination and any copies.
 
 Create a snapshot with `python3 backup.py create`; use `--destination /secure/path` to choose another location. The default is `~/.local/share/martinflix/backups`. Verify with `python3 backup.py verify /path/to/snapshot`. A manual dashboard run reads the default location or `MARTINFLIX_BACKUP_DIR`. The container deployment currently has no backup manifests mounted.

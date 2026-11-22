@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-19">
-  <script src="./setup.js?v=wizard-19" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-20">
+  <script src="./setup.js?v=wizard-20" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -167,6 +167,11 @@
               <input id="state" type="text" placeholder="~/.local/state/martinflix" aria-describedby="state-help" spellcheck="false">
               <small id="state-help">Holds app settings, databases and private credentials. Leave blank for the default. An existing installation keeps its current folder unless you enter its absolute path here.</small>
             </div>
+            <div class="field">
+              <label for="backup-dir">Backup folder <small>Recommended</small></label>
+              <input id="backup-dir" type="text" placeholder="~/.local/share/martinflix/backups" aria-describedby="backup-dir-help" spellcheck="false">
+              <small id="backup-dir-help">Nightly backups at 01:00, keeping the last 14 plus one a week for 8 weeks. Choose a folder on another disk or a mounted NAS share, such as <code>/mnt/nas/Backups</code>, so a failed disk doesn’t take the backups with it. Each machine writes into its own subfolder.</small>
+            </div>
             <div id="ports" class="ports"></div>
           </section>
 
@@ -250,6 +255,11 @@
               <label for="u-media">Media directory <small>Only if this installation doesn’t have one yet</small></label>
               <input id="u-media" type="text" placeholder="Keep the current one" spellcheck="false" aria-describedby="u-media-help">
               <small id="u-media-help">Transmission and Bazarr need one. An installation that already has a media directory keeps it.</small>
+            </div>
+            <div class="field">
+              <label for="u-backup-dir">Backup folder <small>Only to change it</small></label>
+              <input id="u-backup-dir" type="text" placeholder="Keep the current one" spellcheck="false" aria-describedby="u-backup-dir-help">
+              <small id="u-backup-dir-help">Another disk or a mounted NAS share. Existing backups stay where they are.</small>
             </div>
           </section>
 

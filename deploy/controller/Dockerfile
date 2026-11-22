@@ -5,6 +5,6 @@ FROM python:3.13-alpine
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 WORKDIR /app
-COPY deploy/controller/controller.py .
+COPY deploy/controller/controller.py deploy/controller/backups.py ./
 RUN chmod -R a+rX /app
 CMD ["python", "-B", "controller.py"]

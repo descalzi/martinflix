@@ -356,6 +356,19 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(Path(secret.name).read_text(), 'a brand new password')
         controller.assert_called_once_with('/transmission-password', {}, timeout=300)
 
+    def test_back_up_now_needs_the_pin_and_goes_to_the_controller(self):
+        with patch.object(server, 'controller_request', return_value={'ok': True, 'started': True}) as controller:
+            status, data = self.post('/api/backup', {'pin': '2468'})
+        self.assertEqual(status, 200)
+        self.assertIn('Backup started', data['message'])
+        controller.assert_called_once_with('/backup', {'pin': '2468'}, timeout=30)
+        with patch.object(server, 'controller_request') as controller:
+            self.assertEqual(self.post('/api/backup', {'pin': 'abc'})[0], 400)
+            self.assertEqual(self.post('/api/backup', {'pin': '2468'}, origin='http://evil.example')[0], 403)
+            controller.assert_not_called()
+        with patch.object(server, 'controller_request', side_effect=server.ControllerError(409, 'A backup is already running.')):
+            self.assertEqual(self.post('/api/backup', {'pin': '2468'}), (409, {'error': 'A backup is already running.'}))
+
     def test_martinflix_containers_get_their_own_section(self):
         helpers = server.helper_services({
             'dashboard': {'state': 'running', 'startedAt': '2026-11-20T08:00:00Z', 'dependents': [], 'canUpdate': False},

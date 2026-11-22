@@ -398,6 +398,21 @@ def restart_outcome(before, after, new_image):
     return 'running, unchanged'
 
 
+DEFAULT_BACKUP_DIR = Path.home() / '.local/share/martinflix/backups'
+
+
+def backup_folder(requested, previous):
+    """Where backups go. A chosen folder must already exist, as a mounted NAS share would; setup never creates a
+    mount point. Each machine writes into its own subfolder, so machines sharing a folder never mix backups."""
+    folder = Path(requested or previous or DEFAULT_BACKUP_DIR).expanduser()
+    if not folder.is_absolute():
+        raise ValueError('Use an absolute path for --backup-dir, such as /mnt/martinflix/Backups.')
+    if folder != DEFAULT_BACKUP_DIR and not folder.is_dir():
+        raise ValueError(f'The backup folder {folder} does not exist. If it is on a NAS, check that the share is '
+                         'mounted, then rerun setup.')
+    return folder
+
+
 PLEX_PORT = 32400
 PLEX_CLAIM_HELP = """
 Link the new Plex server to your Plex account with a claim code: sign in at https://plex.tv/claim and copy the
@@ -955,6 +970,10 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     region = (args.discover_region or previous.get('discover_region') or 'GB').upper()
     if not re.fullmatch(r'[A-Z]{2}', region):
         raise ValueError('Use a two-letter country code for --discover-region, such as GB or US.')
+    backups = backup_folder(args.backup_dir, previous.get('backup_dir'))
+    options['backup_dir'] = str(backups)
+    environment.update(MARTINFLIX_BACKUP_DIR=str(backups),
+                       MARTINFLIX_BACKUP_HOST_DIR=str(backups / socket.gethostname()))
     options['discover_region'] = region
     environment['MARTINFLIX_DISCOVER_REGION'] = region
     options['discover'] = args.discover or previous.get('discover') or 'on'
@@ -1096,6 +1115,8 @@ def keep_flags(options):
         flags += ['--dashboard-bind', options['dashboard_bind']]
     if options.get('media_path'):
         flags += ['--media-path', options['media_path']]
+    if options.get('backup_dir') and Path(options['backup_dir']) != DEFAULT_BACKUP_DIR:
+        flags += ['--backup-dir', options['backup_dir']]
     if options.get('discover_region', 'GB') != 'GB':
         flags += ['--discover-region', options['discover_region']]
     if options.get('discover') == 'off':
@@ -1216,6 +1237,14 @@ def run_installation(plan, state, previous, mode='install'):
                 {key: value for key, value in previous.items() if key not in ('ports', 'dashboard_bind')}:
             raise ValueError('Setup options changed while this command was waiting. Run the installer again.')
         secret_dir = state / 'dashboard-secrets'
+        backup_host_dir = Path(environment['MARTINFLIX_BACKUP_HOST_DIR'])
+        try:
+            if backup_host_dir.parent == DEFAULT_BACKUP_DIR:
+                DEFAULT_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            backup_host_dir.mkdir(mode=0o700, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f'Setup cannot write to the backup folder {backup_host_dir.parent} ({exc.strerror}). '
+                             'Check its permissions, or choose another with --backup-dir.') from None
         private_directory(secret_dir)
         auth_dir = state / 'dashboard-auth'
         private_directory(auth_dir)
@@ -1407,7 +1436,8 @@ def run_installation(plan, state, previous, mode='install'):
         if plan['control']:
             # The controller runs Compose exactly as setup does, with the final addresses and ports.
             write_secret(state / 'controller' / 'compose.json', json.dumps({
-                'project': project, 'compose': compose[1:],
+                'project': project, 'compose': compose[1:], 'stateDir': str(state),
+                'backupDir': environment['MARTINFLIX_BACKUP_DIR'], 'host': socket.gethostname(),
                 'env': {key: value for key, value in environment.items() if key.startswith('MARTINFLIX_')},
                 **({'transmissionPasswordFile': str(state / 'download-secrets' / 'transmission_password')}
                    if 'transmission' in downloads else {})}))
@@ -1495,6 +1525,9 @@ def build_parser():
     parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
                         help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--backup-dir',
+                        help=f'Folder for nightly backups, ideally on another disk or a NAS share. Each machine '
+                             f'uses its own subfolder. Defaults to {DEFAULT_BACKUP_DIR}.')
     parser.add_argument('--enable-plex', action='store_true',
                         help='Install Plex Media Server for your media directory. Requires --media-path.')
     parser.add_argument('--plex-name',

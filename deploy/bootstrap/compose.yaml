@@ -63,11 +63,19 @@ services:
       MARTINFLIX_DISCOVER: "${MARTINFLIX_DISCOVER:-on}"
       MARTINFLIX_DISCOVER_REGION: "${MARTINFLIX_DISCOVER_REGION:-GB}"
       MARTINFLIX_CONTROLLER_URL: http://controller:9800
+      MARTINFLIX_BACKUP_DIR: /run/backups
       MARTINFLIX_CONTROLLER_TOKEN_FILE: /run/dashboard-secrets/controller-token
     networks: [default, control]
     volumes:
       - "${MARTINFLIX_STATE_DIR}/dashboard-secrets:/run/dashboard-secrets:ro"
       - "${MARTINFLIX_STATE_DIR}/dashboard-auth:/run/dashboard-auth"
+      # This machine's backups, read-only, for the Backups page. The controller writes them.
+      - type: bind
+        source: ${MARTINFLIX_BACKUP_HOST_DIR}
+        target: /run/backups
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 8765), 2).close()"]
       interval: 3s
@@ -100,6 +108,13 @@ services:
       - "${MARTINFLIX_STATE_DIR}:${MARTINFLIX_STATE_DIR}:ro"
       # Writable only so the PIN can be changed from the dashboard.
       - "${MARTINFLIX_STATE_DIR}/controller:${MARTINFLIX_STATE_DIR}/controller"
+      # Where backups go, at the same path as on the host, and the host's time zone for the 01:00 schedule.
+      - type: bind
+        source: ${MARTINFLIX_BACKUP_DIR}
+        target: ${MARTINFLIX_BACKUP_DIR}
+        bind:
+          create_host_path: false
+      - /etc/localtime:/etc/localtime:ro
       - "${MARTINFLIX_REPO_DIR:-/nonexistent}:${MARTINFLIX_REPO_DIR:-/nonexistent}:ro"
     healthcheck:
       test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 9800), 2).close()"]

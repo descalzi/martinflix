@@ -67,6 +67,10 @@ The **Discover** page shows trending films and series, what's coming to cinemas,
 
 The lists come from [TMDB](https://www.themoviedb.org/), using MartinFlix's own TMDB API key, so Discover works without any setup. To use your own key instead, get a free one in your TMDB account under **Settings → API** (the **API Key**, or the longer **API Read Access Token**), then run setup with `--set-tmdb-key` and paste it when asked; it's stored privately on the VM. Leave the answer blank to go back to MartinFlix's key. To hide the page, use `--discover off`, and `--discover on` to bring it back. Cinema and streaming lists use the UK by default; choose another country with `--discover-region`, for example `--discover-region US`. The lists are cached for an hour.
 
+### Backups
+
+Every night at 01:00 the controller backs up each app's settings and data, keeping the last 14 plus one a week for 8 weeks. Choose the folder with `--backup-dir`, ideally a NAS share or another disk (for example `--backup-dir /mnt/martinflix/Backups`); each machine uses its own subfolder. See [Backup and recovery](backups.md) for what each backup holds.
+
 ### Restart and update apps from the dashboard
 
 Each card on the **Services** page has **Restart** and **Update** buttons, and the dashboard asks for a PIN before either runs. Setup asks you to choose the PIN (4 to 8 digits) and stores only a hash of it. To change it, use **Change PIN** in the dashboard's sidebar, which asks for the current PIN first. If you've forgotten it, rerun setup on the VM with `--change-pin`. Five wrong PINs lock restarts, updates, and PIN changes for five minutes.

@@ -971,10 +971,19 @@ def backup_status():
         for path in manifests:
             try:
                 data = json.loads(path.read_text())
-                result.append({'id': path.parent.name, 'created': data.get('created'), 'files': len(data.get('files', [])), 'missing': data.get('missing', []), 'errors': data.get('errors', [])})
+                result.append({'id': path.parent.name, 'created': data.get('created'), 'files': len(data.get('files', [])),
+                               'missing': data.get('missing', []), 'errors': data.get('errors', []),
+                               'apps': sorted((data.get('apps') or {}).keys()), 'kind': data.get('kind'),
+                               'size': data.get('size') if type(data.get('size')) is int else None})
             except (OSError, ValueError):
                 result.append({'id': path.parent.name, 'errors': ['Manifest unreadable']})
-        return {'directory': str(directory), 'snapshots': result}
+        schedule = None
+        try:
+            control = controller_request('/status', timeout=4)
+            schedule = control.get('backups') if isinstance(control, dict) else None
+        except ControllerError:
+            pass
+        return {'directory': str(directory), 'snapshots': result, 'schedule': schedule}
     except OSError:
         return {'directory': str(directory), 'snapshots': [], 'error': 'Cannot read backup directory.'}
 
@@ -1422,6 +1431,9 @@ class Handler(BaseHTTPRequestHandler):
         if control := re.fullmatch(r'/api/control/(restart|update)', path):
             self.control_request(control.group(1))
             return
+        if path == '/api/backup':
+            self.backup_request()
+            return
         if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password', '/change-pin'):
             self.send_error(404)
             return
@@ -1453,6 +1465,34 @@ class Handler(BaseHTTPRequestHandler):
             self.redirect('/setup-password' if self.server.password_setup_required else '/')
             return
         self.change_password(fields, changing)
+
+    def backup_request(self):
+        if not self.same_origin():
+            self.send_json({'error': 'Open the dashboard and try again.'}, 403)
+            return
+        if not self.authorized():
+            self.require_login()
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 256 or self.headers.get_content_type() != 'application/json':
+                raise ValueError
+            pin = json.loads(self.rfile.read(length))['pin']
+        except (OSError, ValueError, TypeError, KeyError):
+            self.send_json({'error': 'Invalid request.'}, 400)
+            return
+        if not isinstance(pin, str) or not re.fullmatch(r'[0-9]{4,8}', pin):
+            self.send_json({'error': 'Enter your 4 to 8 digit PIN.'}, 400)
+            return
+        try:
+            result = controller_request('/backup', {'pin': pin}, timeout=30)
+        except ControllerError as exc:
+            self.send_json({'error': str(exc)}, exc.status if exc.status in (400, 403, 409, 423, 503) else 502)
+            return
+        if result is None:
+            self.send_json({'error': 'Backups need the controller. Rerun setup to add it.'}, 503)
+            return
+        self.send_json({'ok': True, 'message': 'Backup started. It takes a few minutes and appears here when done.'})
 
     def control_request(self, action):
         if not self.same_origin():

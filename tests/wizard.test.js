@@ -97,3 +97,11 @@ test('a Plex name is passed only when it differs from martinflix', () => {
   assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexName: 'martinflix-test'}}),
     ['--update', '--plex-name=martinflix-test']);
 });
+
+test('a backup folder is passed on and must be an absolute path', () => {
+  const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, backupDir: '/mnt/martinflix/Backups'});
+  assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--backup-dir=/mnt/martinflix/Backups']);
+  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', backupDir: '/mnt/nas/Backups'}}),
+    ['--update', '--backup-dir=/mnt/nas/Backups']);
+  assert.throws(() => wizard.validateStep('options', {...defaults, backupDir: 'Backups'}), /Backup folder must be an absolute/);
+});

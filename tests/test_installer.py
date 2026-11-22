@@ -104,6 +104,20 @@ class InstallerPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'plex-name'):
             self.plan(enable_plex=True, media_path=str(media), plex_name='<script>')
 
+    def test_backups_go_to_a_chosen_folder_that_must_exist(self):
+        plan = self.plan()
+        self.assertEqual(plan['options']['backup_dir'], str(install.DEFAULT_BACKUP_DIR))
+        self.assertEqual(plan['environment']['MARTINFLIX_BACKUP_HOST_DIR'],
+                         str(install.DEFAULT_BACKUP_DIR / install.socket.gethostname()))
+        nas = self.root / 'nas'
+        with self.assertRaisesRegex(ValueError, 'NAS'):
+            self.plan(backup_dir=str(nas))
+        nas.mkdir()
+        self.assertEqual(self.plan(backup_dir=str(nas))['environment']['MARTINFLIX_BACKUP_DIR'], str(nas))
+        self.assertEqual(self.plan({'backup_dir': str(nas)})['options']['backup_dir'], str(nas), 'remembered')
+        with self.assertRaisesRegex(ValueError, 'absolute'):
+            self.plan(backup_dir='Backups')
+
     def test_plex_address_is_checked_and_remembered(self):
         self.assertEqual(self.plan()['environment']['MARTINFLIX_PLEX_URL'], '')
         plan = self.plan(plex_url='http://192.168.5.204:32400/')
