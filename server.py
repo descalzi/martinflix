@@ -784,18 +784,54 @@ def next_episodes(episodes, now):
     return {series: details for series, (_, details) in result.items()}
 
 
-def arr_items(kind, raw, now, episodes=None):
+# How long after an episode airs, or a film becomes available, before its absence counts as a problem. Releases
+# take a while to appear and download, and Radarr waits a day after availability as setup configures it.
+MISSING_GRACE = timedelta(days=1)
+
+
+def arr_problems(kind, connection, now):
+    """What Sonarr or Radarr should have by now but doesn't, leaving out what it is downloading. For Sonarr, the
+    missing episodes of each series, by series ID; for Radarr, the IDs of the films it is downloading."""
+    queue = (arr_json(connection, '/api/v3/queue?pageSize=500', timeout=10) or {}).get('records') or []
+    if kind == 'radarr':
+        return {'downloading': {record.get('movieId') for record in queue if isinstance(record, dict)}}
+    queued = {record.get('episodeId') for record in queue if isinstance(record, dict)}
+    wanted = arr_json(connection, '/api/v3/wanted/missing?' + urllib.parse.urlencode(
+        {'page': 1, 'pageSize': 1000, 'monitored': 'true'}), timeout=10) or {}
+    missing = {}
+    for record in wanted.get('records') or []:
+        if not isinstance(record, dict) or type(record.get('seriesId')) is not int or record.get('id') in queued:
+            continue
+        aired = next_airing(record.get('airDateUtc'))
+        if aired is None or now - aired < MISSING_GRACE:
+            continue
+        entry = missing.setdefault(record['seriesId'], {'count': 0, 'since': aired, 'first': None})
+        entry['count'] += 1
+        if aired <= entry['since']:
+            entry['since'] = aired
+            entry['first'] = {'season': record.get('seasonNumber'), 'number': record.get('episodeNumber')}
+    for entry in missing.values():
+        entry['since'] = entry['since'].isoformat()
+    return {'missing': missing}
+
+
+def arr_items(kind, raw, now, episodes=None, problems=None):
     last_day = calendar.monthrange(now.year + 1, now.month)[1]
     deadline = now.replace(year=now.year + 1, day=min(now.day, last_day))
+    problems = problems or {}
     items = []
     for item in raw:
         if not item.get('monitored'):
             continue
         airing = None
         status = item.get('status') or ''
+        missing = (problems.get('missing') or {}).get(item.get('id')) if kind == 'sonarr' else None
         if kind == 'sonarr':
             airing = next_airing(item.get('nextAiring'))
-            if status.casefold() not in ('upcoming', 'continuing') or not airing or not now <= airing <= deadline:
+            upcoming = status.casefold() in ('upcoming', 'continuing') and airing and now <= airing <= deadline
+            if not upcoming:
+                airing = None
+            if not upcoming and not missing:
                 continue
         elif item.get('hasFile') is not False:
             continue
@@ -814,15 +850,26 @@ def arr_items(kind, raw, now, episodes=None):
         }
         if kind == 'sonarr' and episodes and media_id in episodes:
             entry['nextEpisode'] = episodes[media_id]
+        if missing:
+            entry['missing'] = missing
         if kind == 'radarr':
             entry['nextRelease'] = next_release(item, now.date())
-            entry['availability'] = film_availability(item, now.date())
+            availability = film_availability(item, now.date())
+            entry['availability'] = availability
+            entry['downloading'] = media_id in (problems.get('downloading') or ())
+            # Past the day Radarr could get it, with nothing downloading: worth a look.
+            if availability['available'] and not entry['downloading'] and (
+                    availability['date'] is None or date.fromisoformat(availability['date']) <= now.date() - MISSING_GRACE):
+                entry['overdue'] = True
         items.append(entry)
     if kind == 'radarr':
-        # As Radarr's Missing list: films it can download now first, then the rest by when it can.
-        return sorted(items, key=lambda item: (not item['availability']['available'], item['availability']['date'] is None,
-                                               item['availability']['date'] or '', item['title'].casefold()))
-    return sorted(items, key=lambda item: (item['nextAiring'] is None, item['nextAiring'] or '', item['title'].casefold()))
+        # As Radarr's Missing list, with overdue films first, then those available now, then the rest by date.
+        return sorted(items, key=lambda item: (not item.get('overdue'), not item['availability']['available'],
+                                               item['availability']['date'] is None, item['availability']['date'] or '',
+                                               item['title'].casefold()))
+    # Series with missing episodes first, then by the next episode.
+    return sorted(items, key=lambda item: (not item.get('missing'), item['nextAiring'] is None, item['nextAiring'] or '',
+                                           item['title'].casefold()))
 
 
 def arr_data(kind):
@@ -846,7 +893,12 @@ def arr_data(kind):
                     episodes = next_episodes(json.load(response), now)
             except (OSError, ValueError, TypeError):
                 episodes = None
-        return {'configured': True, 'items': arr_items(kind, raw, now, episodes)}
+        # Warnings are a nicety too: without them the lists still show.
+        try:
+            problems = arr_problems(kind, connection, now)
+        except (OSError, ValueError, TypeError, AttributeError):
+            problems = None
+        return {'configured': True, 'items': arr_items(kind, raw, now, episodes, problems)}
     except (OSError, ValueError, TypeError, AttributeError):
         return {'configured': True, 'error': 'Could not reach the service or its API rejected the key.', 'items': []}
 

@@ -740,19 +740,39 @@ function episodeCode(episode) {
   return `S${String(episode.season).padStart(2, '0')}E${String(episode.number).padStart(2, '0')}`;
 }
 
+function shortDate(value) {
+  const day = new Date(value);
+  return day.toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: day.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'});
+}
+
+/** A problem worth a look: episodes that aired but weren't downloaded, or a film past the day Radarr could get it. */
+function posterProblem(item, kind) {
+  if (kind === 'sonarr' && item.missing) {
+    const {count, since, first} = item.missing;
+    const code = first ? episodeCode(first) : '';
+    return {flag: 'Missing', text: `${count} episode${count === 1 ? '' : 's'} missing${code ? `, from ${code}` : ''} · aired ${shortDate(since)}`};
+  }
+  if (kind === 'radarr' && item.overdue) {
+    const film = item.availability || {};
+    return {flag: 'Overdue', text: film.date ? `Not downloaded since ${film.type} ${shortDate(film.date + 'T12:00:00')}` : 'Available, not downloaded'};
+  }
+  return null;
+}
+
 function posterDetails(item, kind) {
   if (kind === 'sonarr') {
     const airing = item.nextAiring && new Date(item.nextAiring);
-    const when = airing ? upcomingDay(airing) : 'Date unknown';
     const code = episodeCode(item.nextEpisode);
+    if (!airing) return {meta: 'No episode due in the next 12 months', extra: ''};
+    const when = upcomingDay(airing);
     return {meta: code ? `${code} · ${when}` : `Next episode ${when}`, extra: item.nextEpisode?.title || ''};
   }
   // When Radarr can download it, by the film's minimum availability, as in Radarr's Missing list.
   const film = item.availability || {};
   const day = film.date ? new Date(film.date + 'T12:00:00') : null;
   if (film.available) {
-    const since = day ? ` · ${film.type} ${day.toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: day.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'})}` : '';
-    return {meta: `Available${since}`, extra: 'Not downloaded yet'};
+    const since = day ? ` · ${film.type} ${shortDate(day)}` : '';
+    return {meta: `Available${since}`, extra: item.downloading ? 'Downloading' : 'Not downloaded yet'};
   }
   if (day) return {meta: `${film.type} · ${upcomingDay(day)}`, extra: ''};
   return {meta: 'Release date unknown', extra: ''};
@@ -760,21 +780,33 @@ function posterDetails(item, kind) {
 
 function posterCard(item, kind) {
   const {meta, extra} = posterDetails(item, kind);
+  const problem = posterProblem(item, kind);
   const title = item.year ? `${item.title} (${item.year})` : item.title;
-  return `<li class="poster-card">
+  return `<li class="poster-card${problem ? ' has-problem' : ''}">
     <div class="poster-art">
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" width="250" height="375">` : ''}
+      ${problem ? `<span class="poster-flag">${icon('alert')}${esc(problem.flag)}</span>` : ''}
     </div>
     <h3 class="poster-title">${esc(title)}</h3>
-    <p class="poster-meta">${esc(meta)}</p>
-    ${extra ? `<p class="poster-extra">${esc(extra)}</p>` : ''}
+    ${problem ? `<p class="poster-problem">${esc(problem.text)}</p>` : ''}
+    ${problem && kind === 'radarr' ? '' : `<p class="poster-meta">${esc(meta)}</p>
+    ${extra ? `<p class="poster-extra">${esc(extra)}</p>` : ''}`}
   </li>`;
 }
 
+/** The Overview shows what's coming up; the Library shows everything monitored, with problems first. */
 function libraryItems(library) {
   const items = library.data?.items || [];
-  return items;
+  if (!library.upcomingOnly) return items;
+  return library.kind === 'sonarr'
+    ? items.filter(item => item.nextAiring).sort((a, b) => a.nextAiring.localeCompare(b.nextAiring))
+    : items.filter(item => !item.availability?.available && item.availability?.date)
+      .sort((a, b) => a.availability.date.localeCompare(b.availability.date));
+}
+
+function problemCount(library) {
+  return (library.data?.items || []).filter(item => posterProblem(item, library.kind)).length;
 }
 
 function renderLibraryCount(library) {
@@ -788,10 +820,17 @@ function renderLibraryCount(library) {
   const queued = queues[kind];
   const queue = queued ? ` · ${queued} in the download queue` : '';
   if (library.limit) {
-    count.textContent = kind === 'sonarr' ? `${total} ${total === 1 ? 'series airs' : 'series air'} in the next 12 months${queue}`
-      : `${total} ${total === 1 ? 'film' : 'films'} not downloaded yet${queue}`;
+    // The Overview only shows what's coming, so it mentions problems and leaves the details to the Library.
+    const problems = problemCount(library);
+    const flagged = !problems ? '' : kind === 'sonarr' ? ` · ${problems} with missing episodes` : ` · ${problems} overdue`;
+    count.textContent = (kind === 'sonarr' ? `${total} ${total === 1 ? 'series airs' : 'series air'} in the next 12 months`
+      : `${total} ${total === 1 ? 'film has' : 'films have'} a release ahead`) + flagged + queue;
+    count.classList.toggle('has-problem', problems > 0);
   } else {
-    count.textContent = `${total} ${kind === 'sonarr' ? 'upcoming' : 'missing'}${queue}`;
+    const problems = problemCount(library);
+    const flagged = problems ? ` · ${problems} need${problems === 1 ? 's' : ''} a look` : '';
+    count.textContent = `${total} ${kind === 'sonarr' ? 'series' : 'missing'}${flagged}${queue}`;
+    count.classList.toggle('has-problem', problems > 0);
   }
 }
 
@@ -805,7 +844,9 @@ function emptyLibrary(library) {
   if (library.kind === 'sonarr') {
     return '<div class="empty-state"><h3>Nothing airing soon</h3><p>No monitored series have an episode due in the next 12 months.</p><a class="text-link" href="/add">Add a series</a></div>';
   }
-  return '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has been downloaded.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>';
+  return library.upcomingOnly
+    ? '<div class="empty-state"><h3>No releases ahead</h3><p>None of your monitored films still to download has a release date coming up.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>'
+    : '<div class="empty-state"><h3>No missing films</h3><p>Every monitored film has been downloaded.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>';
 }
 
 function renderLibrary(library) {
@@ -858,7 +899,8 @@ if (page === 'library') {
   }
 } else if (page === 'overview') {
   libraries.sonarr = overviewLibrary('sonarr', $('#next-series'), $('#next-series-count'));
-  libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'));
+  libraries.sonarr.upcomingOnly = true;
+  libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'), {upcomingOnly: true});
 }
 
 /* Add page: search Sonarr or Radarr's own lookup, then add a title with the defaults or the admin's choices. */

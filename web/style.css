@@ -327,6 +327,12 @@
   .is-owned .owned-mark { display: grid; }
   .poster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: var(--space-5) var(--space-4); }
   .poster-card { min-width: 0; }
+  /* Something to look at: episodes that aired but weren't downloaded, or a film past its date. */
+  .poster-flag { position: absolute; top: var(--space-2); left: var(--space-2); z-index: 1; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 6px; border-radius: var(--radius-pill); background: var(--warn-bg); color: var(--warn); font-size: var(--text-xs); font-weight: 700; box-shadow: 0 1px 4px rgb(0 0 0 / .3); }
+  .poster-flag .icon { width: 14px; height: 14px; }
+  .has-problem .poster-art { outline: 2px solid var(--warn); outline-offset: 2px; }
+  .poster-problem { color: var(--warn); font-size: var(--text-xs); font-weight: 600; }
+  .library-count.has-problem, .panel-head p.has-problem { color: var(--warn); font-weight: 600; }
   .poster-art {
     position: relative; display: grid; place-items: center; aspect-ratio: 2 / 3; overflow: hidden;
     border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border);

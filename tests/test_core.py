@@ -113,6 +113,45 @@ class CoreTests(unittest.TestCase):
         order = [item['title'] for item in server.arr_items('radarr', raw, now)]
         self.assertEqual(order, ['Out now', 'Radarr says so', 'Cinema wanted', 'Cinema run', 'No home date', 'Unknown'])
 
+    def test_aired_episodes_not_downloaded_flag_their_series(self):
+        now = datetime(2026, 11, 22, 20, 0, tzinfo=timezone.utc)
+        responses = {
+            '/api/v3/queue?pageSize=500': {'records': [{'episodeId': 13}]},
+        }
+        wanted = {'records': [
+            {'id': 11, 'seriesId': 1, 'seasonNumber': 2, 'episodeNumber': 3, 'airDateUtc': '2026-11-10T21:00:00Z'},
+            {'id': 12, 'seriesId': 1, 'seasonNumber': 2, 'episodeNumber': 4, 'airDateUtc': '2026-11-17T21:00:00Z'},
+            {'id': 13, 'seriesId': 2, 'seasonNumber': 1, 'episodeNumber': 1, 'airDateUtc': '2026-11-01T21:00:00Z'},  # downloading
+            {'id': 14, 'seriesId': 3, 'seasonNumber': 1, 'episodeNumber': 9, 'airDateUtc': '2026-11-22T06:00:00Z'},  # just aired
+        ]}
+        fake = lambda connection, endpoint, timeout=5: responses.get(endpoint) or wanted
+        with patch.object(server, 'arr_json', side_effect=fake):
+            problems = server.arr_problems('sonarr', ('base', 'key'), now)
+        self.assertEqual(list(problems['missing']), [1])
+        self.assertEqual(problems['missing'][1]['count'], 2)
+        self.assertEqual(problems['missing'][1]['first'], {'season': 2, 'number': 3})
+        raw = [{'id': 1, 'title': 'Ended, but missing', 'monitored': True, 'status': 'ended'},
+               {'id': 2, 'title': 'Airing', 'monitored': True, 'status': 'continuing', 'nextAiring': '2026-11-29T21:00:00Z'},
+               {'id': 3, 'title': 'Nothing due', 'monitored': True, 'status': 'continuing'}]
+        items = server.arr_items('sonarr', raw, now, problems=problems)
+        self.assertEqual([item['title'] for item in items], ['Ended, but missing', 'Airing'])
+        self.assertIsNone(items[0]['nextAiring'])
+
+    def test_films_past_their_date_with_nothing_downloading_are_overdue(self):
+        now = datetime(2026, 11, 22, tzinfo=timezone.utc)
+        missing = {'monitored': True, 'hasFile': False, 'minimumAvailability': 'released'}
+        raw = [dict(missing, id=1, title='Overdue', digitalRelease='2026-11-01'),
+               dict(missing, id=2, title='Downloading', digitalRelease='2026-11-01'),
+               dict(missing, id=3, title='Out today', digitalRelease='2026-11-22'),
+               dict(missing, id=4, title='Coming', digitalRelease='2026-12-20')]
+        items = {item['title']: item for item in server.arr_items('radarr', raw, now, problems={'downloading': {2}})}
+        self.assertTrue(items['Overdue'].get('overdue'))
+        self.assertFalse(items['Downloading'].get('overdue'))
+        self.assertTrue(items['Downloading']['downloading'])
+        self.assertFalse(items['Out today'].get('overdue'), 'a day’s grace')
+        self.assertFalse(items['Coming'].get('overdue'))
+        self.assertEqual(server.arr_items('radarr', raw, now, problems={'downloading': {2}})[0]['title'], 'Overdue')
+
     def test_plex_activity_projects_only_title_and_playback_state(self):
         payload = {'response': {'result': 'success', 'data': {'stream_count': '1', 'sessions': [
             {'full_title': 'Example title', 'state': 'playing', 'user': 'private-viewer', 'ip_address': '192.0.2.2'},
