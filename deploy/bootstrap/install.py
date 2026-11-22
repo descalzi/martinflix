@@ -358,7 +358,41 @@ def pull_images(compose, environment, services, sleep=time.sleep, popen=subproce
         output.write(f'   The image registry stayed busy, so setup is using the versions of {", ".join(kept)} already on '
                      'this VM. Rerun setup later to update them.\n')
     failed = [pull for pull in pulls if pull.state == 'failed']
+    pull_images.changed = {pull.service for pull in pulls if pull.state in ('updated', 'downloaded')}
     return '\n\n'.join(f'{pull.label}:\n{pull.output}' for pull in failed) if failed else None
+
+
+def app_label(service):
+    return APP_LABELS.get(service, service.replace('-', ' ').title())
+
+
+def container_states(project, environment, run=subprocess.run):
+    """Each service's container ID, whether it is running, and when it started."""
+    listed = run(['docker', 'ps', '-aq', '--filter', f'label=com.docker.compose.project={project}'],
+                 env=environment, capture_output=True, text=True)
+    ids = listed.stdout.split() if listed.returncode == 0 else []
+    if not ids:
+        return {}
+    inspected = run(['docker', 'inspect', *ids], env=environment, capture_output=True, text=True)
+    try:
+        items = json.loads(inspected.stdout) if inspected.returncode == 0 else []
+    except ValueError:
+        items = []
+    return {item['Config']['Labels'].get('com.docker.compose.service'):
+            (item.get('Id'), bool(item['State'].get('Running')), item['State'].get('StartedAt')) for item in items}
+
+
+def restart_outcome(before, after, new_image):
+    """What a step did to one app, in words, from its container before and after."""
+    if after is None:
+        return None
+    if before is None or not before[1]:
+        return 'started'
+    if before[0] != after[0]:
+        return 'restarted with the new image' if new_image else 'restarted with new settings'
+    if before[2] != after[2]:
+        return 'restarted'
+    return 'running, unchanged'
 
 
 def docker_socket():
@@ -991,6 +1025,21 @@ def run_installation(plan, state, previous, mode='install'):
     project = options['project']
     private_directory(state)
 
+    def started_step(label, command, names, diagnose=None, before=None, follows=None):
+        """A step that starts apps, followed by what it did to each: started, restarted (and why), or unchanged.
+        Apps that follow another, like the download apps on Gluetun's network, say so when that is why."""
+        before = container_states(project, environment) if before is None else before
+        compose_step(label, command, diagnose)
+        after = container_states(project, environment)
+        changed = getattr(pull_images, 'changed', set())
+        leader_restarted = bool(follows) and before.get(follows) is not None and before.get(follows) != after.get(follows)
+        for name in sorted(names, key=lambda item: app_label(item).casefold()):
+            outcome = restart_outcome(before.get(name), after.get(name), name in changed)
+            if leader_restarted and outcome in ('restarted', 'restarted with new settings'):
+                outcome = f'restarted with {app_label(follows)}'
+            if outcome:
+                print(f'   {app_label(name):<20} {outcome}', flush=True)
+
     def compose_step(label, command, diagnose=None):
         print(label, flush=True)
         with tempfile.TemporaryFile() as log:
@@ -1077,7 +1126,7 @@ def run_installation(plan, state, previous, mode='install'):
             raise ValueError('Setup could not download the app images. If the details mention "toomanyrequests", the '
                              'image registry is busy: wait a few minutes, then rerun setup with the same options. '
                              'Otherwise check this VM’s internet connection and Docker storage.')
-        compose_step('3. Starting Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
+        started_step('3. Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS], APPS)
         arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
@@ -1095,15 +1144,20 @@ def run_installation(plan, state, previous, mode='install'):
         environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
         # New credentials only reach a new Gluetun container, and apps sharing its network must follow it.
         recreate = ['--force-recreate'] if vpn_credentials_changed else []
+        # Restarting Gluetun restarts the apps on its network too, so they are compared with the state before it.
+        before_downloads = container_states(project, environment)
         if vpn:
             refresh_vpn_servers(compose, environment, state / 'gluetun')
-            compose_step(f'{step}. Connecting the VPN. This can take a minute or two…',
-                         ['up', '-d', '--wait', '--wait-timeout', '180', *recreate, 'gluetun'],
+            started_step(f'{step}. VPN. Connecting can take a minute or two…',
+                         ['up', '-d', '--wait', '--wait-timeout', '180', *recreate, 'gluetun'], ['gluetun'],
+                         before=before_downloads,
                          diagnose=lambda: diagnose_vpn(compose, environment, state / 'download-secrets'))
         if services:
-            label = 'Starting the download apps' if vpn else 'Starting selected download and tracker apps'
-            compose_step(f'{step}. {label}…' if not vpn else f'   {label}…',
-                         ['up', '-d', '--wait', '--wait-timeout', '210', *recreate, *services])
+            label = 'Download apps' if vpn else 'Download and tracker apps'
+            started_step(f'{step}. {label}…' if not vpn else f'   {label}…',
+                         ['up', '-d', '--wait', '--wait-timeout', '210', *recreate, *services],
+                         [service for service in services if service != 'gluetun'], before=before_downloads,
+                         follows='gluetun' if vpn and download_network == 'vpn' else None)
             step += 1
         elif vpn:
             step += 1
@@ -1165,8 +1219,16 @@ def run_installation(plan, state, previous, mode='install'):
                 # The controller applies password changes now, so the helper from earlier installs goes.
                 subprocess.run(compose + ['--profile', 'transmission-auth', 'rm', '--stop', '--force', 'transmission-auth'],
                                env=environment, capture_output=True, timeout=120)
-        compose_step(f'{step + 1}. Building and starting your dashboard…', ['build', '--pull', '--quiet', *web])
-        compose_step('   Starting the dashboard…', ['up', '-d', '--wait', '--wait-timeout', '90', *web])
+        compose_step(f'{step + 1}. Dashboard. Building it from this copy of MartinFlix…', ['build', '--pull', '--quiet', *web])
+        before_build = container_states(project, environment)
+        compose_step('   Starting it if anything changed…', ['up', '-d', '--wait', '--wait-timeout', '90', *web])
+        after_build = container_states(project, environment)
+        for name in sorted(web, key=lambda item: app_label(item).casefold()):
+            outcome = restart_outcome(before_build.get(name), after_build.get(name), False)
+            if outcome == 'restarted with new settings':
+                outcome = 'restarted with the new version'
+            if outcome:
+                print(f'   {app_label(name):<20} {outcome}', flush=True)
         verify = '''
 import server
 for app in ('sonarr', 'radarr'):

@@ -423,6 +423,31 @@ class PullTests(unittest.TestCase):
         self.assertEqual(sorted(pauses), [10, 10, 30, 30, 60, 60])
 
 
+
+class RestartReportTests(unittest.TestCase):
+    def test_each_app_says_what_the_step_did(self):
+        running = ('id-1', True, '2026-11-22T10:00:00Z')
+        self.assertEqual(install.restart_outcome(running, running, False), 'running, unchanged')
+        self.assertEqual(install.restart_outcome(running, ('id-2', True, 'later'), True), 'restarted with the new image')
+        self.assertEqual(install.restart_outcome(running, ('id-2', True, 'later'), False), 'restarted with new settings')
+        self.assertEqual(install.restart_outcome(running, ('id-1', True, 'later'), False), 'restarted',
+                         'same container, new start: it followed Gluetun')
+        self.assertEqual(install.restart_outcome(None, running, False), 'started')
+        self.assertEqual(install.restart_outcome(('id-1', False, 'old'), running, False), 'started')
+        self.assertIsNone(install.restart_outcome(running, None, False))
+
+    def test_container_states_are_read_by_service(self):
+        def run(command, **kwargs):
+            if command[:2] == ['docker', 'ps']:
+                return SimpleNamespace(returncode=0, stdout='abc\ndef\n')
+            return SimpleNamespace(returncode=0, stdout=json.dumps([
+                {'Id': 'abc', 'Config': {'Labels': {'com.docker.compose.service': 'sonarr'}},
+                 'State': {'Running': True, 'StartedAt': 't1'}},
+                {'Id': 'def', 'Config': {'Labels': {'com.docker.compose.service': 'gluetun'}},
+                 'State': {'Running': False, 'StartedAt': 't0'}}]))
+        self.assertEqual(install.container_states('martinflix-x', {}, run=run),
+                         {'sonarr': ('abc', True, 't1'), 'gluetun': ('def', False, 't0')})
+
 class VpnDiagnosisTests(unittest.TestCase):
     def diagnose(self, log):
         folder = tempfile.TemporaryDirectory()
