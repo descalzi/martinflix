@@ -1,6 +1,7 @@
 import argparse
 import io
 import json
+import urllib.error
 import os
 import sys
 import tempfile
@@ -530,6 +531,27 @@ class PlexTests(unittest.TestCase):
         self.assertEqual(install.preroll_list(self.config), '/preroll/pre-roll-darcy-rain.mp4;/preroll/pre-roll-yarn-city.mp4')
         self.assertEqual(install.plex_tracked_settings('martinflix-test', self.config)['FriendlyName'], 'martinflix-test')
         self.assertEqual(install.preroll_list(self.config / 'missing'), '')
+
+    def test_setup_waits_while_plex_is_still_starting(self):
+        replies = iter([503, 503, 200])
+        pauses = []
+        def open_(request, timeout):
+            code = next(replies)
+            if code != 200:
+                raise urllib.error.HTTPError(request.full_url, code, 'Service Unavailable', {}, io.BytesIO())
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = b'{"MediaContainer": {}}'
+            return response
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertTrue(install.wait_for_plex_ready('token', opener=open_, sleep=pauses.append))
+        self.assertEqual(pauses, [5, 5])
+        self.assertIn('still starting up', output.getvalue())
+
+    def test_setup_gives_up_waiting_after_a_while(self):
+        def open_(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 503, 'Service Unavailable', {}, io.BytesIO())
+        with redirect_stdout(io.StringIO()):
+            self.assertFalse(install.wait_for_plex_ready('token', seconds=15, opener=open_, sleep=lambda _: None))
 
     def test_existing_libraries_are_left_alone(self):
         open_, requests = self.opener([{'key': '1', 'title': 'Films'}])

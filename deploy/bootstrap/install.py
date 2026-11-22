@@ -474,6 +474,28 @@ def wait_for_plex_token(config, seconds=60):
 LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def wait_for_plex_ready(token, seconds=180, opener=LOCAL_OPENER.open, sleep=time.sleep):
+    """Plex answers its identity check within seconds of starting, but other requests get 503 until it has finished
+    setting up (its database, and linking to the account on first start). Returns True once it really answers."""
+    waited, told = 0, False
+    while True:
+        try:
+            plex_request(token, 'GET', '/library/sections', opener=opener)
+            return True
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            if exc.code != 503 or waited >= seconds:
+                return False
+        except OSError:
+            if waited >= seconds:
+                return False
+        if not told:
+            print('   Plex is still starting up; waiting for it to finish…', flush=True)
+            told = True
+        sleep(5)
+        waited += 5
+
+
 def plex_request(token, method, path, params=None, opener=LOCAL_OPENER.open):
     query = f'?{urllib.parse.urlencode(params)}' if params else ''
     request = urllib.request.Request(f'http://127.0.0.1:{PLEX_PORT}{path}{query}', method=method,
@@ -1346,6 +1368,11 @@ def run_installation(plan, state, previous, mode='install'):
             started_step(f'{step}. Plex…', ['up', '-d', '--wait', '--wait-timeout', '180', 'plex'], ['plex'])
             environment.pop('MARTINFLIX_PLEX_CLAIM', None)
             token = wait_for_plex_token(plex_config, 60 if claim else 1)
+            if token and not wait_for_plex_ready(token):
+                print('   Plex is taking longer than usual to start, so setup will configure it next time. '
+                      'Rerun setup with --update in a few minutes.', flush=True)
+                write_secret(secret_dir / 'plex-token', token)
+                token = ''
             if token:
                 # Live reads now playing and watch history with the server owner's token.
                 write_secret(secret_dir / 'plex-token', token)
