@@ -1183,7 +1183,7 @@ for app in ('sonarr', 'radarr'):
     print(f'Address   http://{bind}:{ports["dashboard"]}')
     print('Username  admin')
     if (auth_dir / 'password-hash').is_file():
-        print('Password  Use the password you set on first sign-in.')
+        print('Password  Your dashboard password. To change it, use Change password in the dashboard.')
     else:
         print('Password  Run this on the VM to show your temporary password:')
         print(f'          cat {shlex.quote(str(password))}')
@@ -1194,8 +1194,6 @@ for app in ('sonarr', 'radarr'):
     print('\nApp sign-in')
     if personal_password_set:
         print(f'{listed} use admin and your dashboard password. Changing it in the dashboard updates every app.')
-        if mode == 'update':
-            print('Apps added before this version keep their old password until you next change your dashboard password.')
     else:
         print(f'{listed} use admin and the same temporary password. Setting your own password updates every app.')
     if plan['control']:
