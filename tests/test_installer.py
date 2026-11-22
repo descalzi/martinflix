@@ -44,24 +44,42 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(plan['options']['dashboard_bind'], '127.0.0.1')
         self.assertFalse(plan['downloads'])
 
-    def test_controller_joins_when_docker_has_a_local_socket(self):
+    def test_the_controller_always_joins_and_runs_from_this_image(self):
         with patch.object(install, 'docker_socket', return_value=(Path('/var/run/docker.sock'), 998)):
             plan = self.plan()
         self.assertTrue(plan['control'])
-        self.assertEqual(plan['compose'][-2:], ['--profile', 'control'])
+        self.assertNotIn('--profile', plan['compose'])
         self.assertEqual(plan['environment']['MARTINFLIX_DOCKER_GID'], '998')
-        self.assertEqual(plan['environment']['MARTINFLIX_REPO_DIR'], str(install.REPO_DIR))
-        with patch.object(install, 'docker_socket', return_value=None):
-            self.assertFalse(self.plan()['control'])
+        self.assertEqual(plan['environment']['MARTINFLIX_IMAGE'], install.OWN_IMAGE)
+        self.assertNotIn('MARTINFLIX_REPO_DIR', plan['environment'])
+        with patch.object(install, 'docker_socket', return_value=None), self.assertRaisesRegex(ValueError, 'socket'):
+            self.plan()
 
-    def test_the_transmission_password_helper_runs_only_without_the_controller(self):
+    def test_the_socket_path_is_this_machines_not_the_containers(self):
+        socket_file = self.root / 'docker.sock'
+        socket_file.touch()
+        with patch.dict(os.environ, {'DOCKER_HOST': f'unix://{socket_file}', 'MARTINFLIX_DOCKER_SOCKET': '/run/user/1000/docker.sock'}):
+            self.assertEqual(install.docker_socket(), (Path('/run/user/1000/docker.sock'), socket_file.stat().st_gid))
+
+    def test_the_release_channel_comes_from_the_image_then_stays_as_chosen(self):
+        with patch.dict(os.environ, {'MARTINFLIX_CHANNEL': 'stable'}):
+            self.assertEqual(self.plan()['options']['channel'], 'stable')
+            self.assertEqual(self.plan(previous={'channel': 'edge'})['options']['channel'], 'edge')
+            self.assertEqual(self.plan(previous={'channel': 'edge'}, channel='stable')['options']['channel'], 'stable')
+        with patch.dict(os.environ, {'MARTINFLIX_CHANNEL': 'dev'}):
+            self.assertEqual(self.plan()['options']['channel'], 'edge')
+        self.assertIn('--channel', install.keep_flags({'channel': 'stable'}))
+
+    def test_the_tunnel_and_gpu_are_looked_for_on_this_machine(self):
         media = self.root / 'media'
         media.mkdir()
-        options = dict(download_client='transmission', media_path=str(media), download_network='direct')
-        with patch.object(install, 'docker_socket', return_value=(Path('/var/run/docker.sock'), 998)):
-            self.assertNotIn('transmission-auth', self.plan(**options)['compose'])
-        with patch.object(install, 'docker_socket', return_value=None):
-            self.assertIn('transmission-auth', self.plan(**options)['compose'])
+        host_dev = self.root / 'dev'
+        (host_dev / 'dri').mkdir(parents=True)
+        with patch.object(install, 'HOST_DEV', host_dev), self.assertRaisesRegex(ValueError, '/dev/net/tun'):
+            self.plan(enable_vpn=True)
+        with patch.object(install, 'HOST_DEV', host_dev):
+            plan = self.plan(enable_plex=True, media_path=str(media))
+        self.assertTrue(any(item.endswith('plex-gpu-compose.json') for item in plan['compose']))
 
     def test_the_pin_is_asked_twice_and_stored_as_a_hash(self):
         folder = self.state / 'controller'
@@ -749,6 +767,58 @@ class InstallerFlowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No installer-managed'):
             self.call(update=True, state_dir=self.home / 'missing')
         self.run.assert_not_called()
+
+
+class ImageSetupTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+
+    def test_secrets_from_the_dashboard_are_read_once_and_the_file_removed(self):
+        path = self.root / 'settings-1.json'
+        path.write_text(json.dumps({'tmdbKey': 'k' * 32, 'vpnUser': 'user', 'vpnPassword': 'pass', 'other': 'x'}))
+        self.assertEqual(install.read_settings_file(path), {'tmdbKey': 'k' * 32, 'vpnUser': 'user', 'vpnPassword': 'pass'})
+        self.assertFalse(path.exists())
+        for bad in ({'tmdbKey': 'short'}, {'plexToken': 'has spaces in it'}, {'vpnUser': 'only-user'}, ['list']):
+            path.write_text(json.dumps(bad))
+            with self.assertRaises(ValueError, msg=bad):
+                install.read_settings_file(path)
+            self.assertFalse(path.exists(), 'even an invalid file is removed')
+        self.assertEqual(install.read_settings_file(None), {})
+
+    def test_secrets_from_the_dashboard_are_stored_or_removed(self):
+        secrets_dir, vpn_dir = self.root / 'dashboard-secrets', self.root / 'download-secrets'
+        install.private_directory(secrets_dir)
+        (secrets_dir / 'plex-token').write_text('old-token-value\n')
+        (secrets_dir / 'plex-token').chmod(0o600)
+        with redirect_stdout(io.StringIO()):
+            changed = install.apply_settings_secrets({'tmdbKey': 'k' * 32, 'plexToken': ''}, secrets_dir, vpn_dir)
+        self.assertFalse(changed)
+        self.assertEqual((secrets_dir / 'tmdb-key').read_text(), 'k' * 32 + '\n')
+        self.assertFalse((secrets_dir / 'plex-token').exists())
+        with redirect_stdout(io.StringIO()):
+            self.assertTrue(install.apply_settings_secrets({'vpnUser': 'user', 'vpnPassword': 'pass'}, secrets_dir, vpn_dir))
+        self.assertEqual((vpn_dir / 'openvpn_password').read_text(), 'pass')
+
+    def test_prerolls_are_kept_in_step_with_the_image(self):
+        source, target = self.root / 'image', self.root / 'state/preroll'
+        source.mkdir()
+        (source / 'a.mp4').write_bytes(b'clip a')
+        (source / 'b.mp4').write_bytes(b'clip b')
+        install.sync_prerolls(target, source)
+        self.assertEqual(sorted(path.name for path in target.iterdir()), ['a.mp4', 'b.mp4'])
+        (source / 'b.mp4').unlink()
+        (source / 'a.mp4').write_bytes(b'clip A, re-cut')
+        install.sync_prerolls(target, source)
+        self.assertEqual([path.name for path in target.iterdir()], ['a.mp4'])
+        self.assertEqual((target / 'a.mp4').read_bytes(), b'clip A, re-cut')
+
+    def test_setup_outside_the_image_explains_how_to_start_it(self):
+        with patch.dict(os.environ, {'MARTINFLIX_STAGE': ''}), redirect_stdout(io.StringIO()), \
+                patch('sys.stderr', new=io.StringIO()) as errors, self.assertRaises(SystemExit):
+            install.main(['--check'])
+        self.assertIn('docker run --rm -it', errors.getvalue())
 
 
 if __name__ == '__main__':

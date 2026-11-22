@@ -38,7 +38,7 @@ ARR_HEALTH_ENDPOINTS = {
 }
 CATALOG = json.loads((WEB / 'catalog.json').read_text(encoding='utf-8'))
 STACKS = {group['name']: group['services'] for group in CATALOG['groups']}
-PAGES = ('overview', 'live', 'library', 'discover', 'add', 'services', 'backups')
+PAGES = ('overview', 'live', 'library', 'discover', 'add', 'services', 'backups', 'settings')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -155,7 +155,7 @@ def apply_control_status(services, control):
 
 
 # Containers that keep MartinFlix itself running, listed in their own section of the Services page.
-HELPERS = ('dashboard', 'controller', 'transmission-auth')
+HELPERS = ('dashboard', 'controller')
 
 
 def helper_services(control):
@@ -179,6 +179,44 @@ def control_message(result):
     if not result.get('updated'):
         return f'{name} already runs the newest image.'
     return f'{name} updated' + (f', and {listed} restarted with it.' if followed else '.')
+
+
+GITHUB_API = 'https://api.github.com'
+CHANGES_CACHE = {}
+CHANGES_CACHE_SECONDS = 3600
+
+
+def release_brief():
+    """This MartinFlix version and any newer one on its channel, as the controller last saw them."""
+    try:
+        result = controller_request('/release/brief', timeout=4)
+    except ControllerError:
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def release_changes(base, head):
+    """What changed between two MartinFlix versions: the commits on GitHub, newest first. None if unknown."""
+    commit = re.compile(r'[0-9a-f]{7,40}')
+    if not (isinstance(base, str) and isinstance(head, str) and commit.fullmatch(base) and commit.fullmatch(head)):
+        return None
+    hit = CHANGES_CACHE.get((base, head))
+    if hit and time.time() - hit[0] < CHANGES_CACHE_SECONDS:
+        return hit[1]
+    repository = os.environ.get('MARTINFLIX_REPOSITORY', 'descalzi/martinflix')
+    request = urllib.request.Request(f'{GITHUB_API}/repos/{repository}/compare/{base}...{head}', headers={
+        'Accept': 'application/vnd.github+json', 'User-Agent': 'MartinFlix dashboard'})
+    try:
+        with ARR_OPENER.open(request, timeout=10) as response:
+            data = json.load(response)
+        commits = [{'sha': item['sha'][:7], 'title': item['commit']['message'].splitlines()[0][:200],
+                    'date': item['commit']['committer']['date']} for item in data.get('commits', [])]
+        result = {'commits': commits[::-1][:40], 'total': data.get('total_commits', len(commits)),
+                  'url': data.get('html_url'), 'older': data.get('status') == 'behind'}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
+        return None
+    CHANGES_CACHE[(base, head)] = (time.time(), result)
+    return result
 
 
 def installer_downloads():
@@ -1095,7 +1133,7 @@ def tmdb_get(path, **params):
     """One TMDB API call. Accepts a v3 API key or a v4 read access token, whichever setup was given."""
     key = tmdb_key()
     if not key:
-        raise AddError('Discover is turned off. Rerun setup with --discover on.')
+        raise AddError('Discover is turned off. Turn it on in Settings.')
     headers = {'Accept': 'application/json'}
     if key.startswith('eyJ'):
         headers['Authorization'] = f'Bearer {key}'
@@ -1337,12 +1375,24 @@ class Handler(BaseHTTPRequestHandler):
             catalog = {key: CATALOG.get(key, {}) for key in ('apps', 'branches', 'uses', 'groupRest')}
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
                     'canChangePassword': form_login, 'canChangePin': form_login and controller_configured(),
-                    'discover': bool(tmdb_key()),
+                    'discover': bool(tmdb_key()), 'release': release_brief(),
                     'catalog': catalog}
             self.send_json(data)
+        elif path in ('/api/system', '/api/settings'):
+            try:
+                result = controller_request('/release' if path == '/api/system' else '/settings', timeout=15)
+            except ControllerError as exc:
+                self.send_json({'error': str(exc)}, 502)
+                return
+            if result is None:
+                self.send_json({'configured': False})
+                return
+            if path == '/api/system' and result.get('available'):
+                result['changes'] = release_changes(result['current'].get('revision'), result['available'].get('revision'))
+            self.send_json({'configured': True, **result})
         elif path == '/api/discover':
             if not tmdb_key():
-                self.send_json({'error': 'Discover is turned off. Rerun setup with --discover on.'}, 404)
+                self.send_json({'error': 'Discover is turned off. Turn it on in Settings.'}, 404)
             else:
                 self.send_json(discover_rows())
         elif path == '/api/live':
@@ -1434,6 +1484,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/backup':
             self.backup_request()
             return
+        if path in ('/api/system/check', '/api/system/update', '/api/settings'):
+            self.system_request(path)
+            return
         if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password', '/change-pin'):
             self.send_error(404)
             return
@@ -1493,6 +1546,55 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'error': 'Backups need the controller. Rerun setup to add it.'}, 503)
             return
         self.send_json({'ok': True, 'message': 'Backup started. It takes a few minutes and appears here when done.'})
+
+    def json_body(self, limit):
+        """The JSON object of a dashboard action, or None once an error has been sent."""
+        if not self.same_origin():
+            self.send_json({'error': 'Open the dashboard and try again.'}, 403)
+            return None
+        if not self.authorized():
+            self.require_login()
+            return None
+        if self.server.password_setup_required:
+            self.send_json({'error': 'Set your dashboard password first.'}, 403)
+            return None
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= limit or self.headers.get_content_type() != 'application/json':
+                raise ValueError
+            request = json.loads(self.rfile.read(length))
+            if not isinstance(request, dict):
+                raise ValueError
+            return request
+        except (OSError, ValueError):
+            self.send_json({'error': 'Invalid request.'}, 400)
+            return None
+
+    def system_request(self, path):
+        """Check for, or install, a MartinFlix update, or apply changed settings, through the controller."""
+        request = self.json_body(8192)
+        if request is None:
+            return
+        payload = {}
+        if path != '/api/system/check':
+            pin = request.get('pin')
+            if not isinstance(pin, str) or not re.fullmatch(r'[0-9]{4,8}', pin):
+                self.send_json({'error': 'Enter your 4 to 8 digit PIN.'}, 400)
+                return
+            payload['pin'] = pin
+        if path == '/api/settings':
+            payload.update(settings=request.get('settings') or {}, secrets=request.get('secrets') or {})
+        target = {'/api/system/check': '/release/check', '/api/system/update': '/release/update',
+                  '/api/settings': '/settings'}[path]
+        try:
+            result = controller_request(target, payload, timeout=60)
+        except ControllerError as exc:
+            self.send_json({'error': str(exc)}, exc.status if exc.status in (400, 403, 409, 423, 503) else 502)
+            return
+        if result is None:
+            self.send_json({'error': 'Updates and settings need the controller. Run the update from a terminal.'}, 503)
+            return
+        self.send_json({'ok': True, **result})
 
     def control_request(self, action):
         if not self.same_origin():
@@ -1617,7 +1719,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.password_verifier = verifier
             self.server.admin_password = ''
             self.server.password_setup_required = False
-            self.server.session_key = secrets.token_bytes(32)
+            self.server.session_key = new_session_key(self.server.admin_state_file)
         self.redirect('/login?password-set=1', f'{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')
 
     def require_login(self):
@@ -1811,6 +1913,34 @@ class PasswordVerifier:
             return True
 
 
+def new_session_key(state_file):
+    """A new key for signing sign-in cookies, which signs everyone out. Kept beside the password hash, so sessions
+    survive the dashboard restarting, as it does for an update."""
+    key = secrets.token_bytes(32)
+    if state_file is not None:
+        path = state_file.with_name('session-key')
+        temporary = path.with_name(f'.session-key.{secrets.token_hex(4)}')
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, 'w') as output:
+                output.write(key.hex())
+            os.replace(temporary, path)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+    return key
+
+
+def load_session_key(state_file):
+    if state_file is not None:
+        try:
+            key = bytes.fromhex(state_file.with_name('session-key').read_text().strip())
+            if len(key) == 32:
+                return key
+        except (OSError, ValueError):
+            pass
+    return new_session_key(state_file)
+
+
 def save_admin_password(path, encoded):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as output:
         temporary = Path(output.name)
@@ -1848,7 +1978,7 @@ if __name__ == '__main__':
     server.password_setup_required = setup_required
     server.password_setup_token = secrets.token_urlsafe(32)
     server.password_setup_lock = threading.Lock()
-    server.session_key = secrets.token_bytes(32)
+    server.session_key = load_session_key(state_file)
     threading.Thread(target=sample_speeds_forever, daemon=True, name='speed-samples').start()
     print('MartinFlix listening on %s:%d' % (host, port), flush=True)
     server.serve_forever()

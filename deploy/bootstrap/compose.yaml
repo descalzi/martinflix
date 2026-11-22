@@ -33,10 +33,11 @@ services:
       retries: 20
       start_period: 15s
 
+  # The dashboard and the controller run from the MartinFlix image setup itself came from, by its version.
   dashboard:
-    build:
-      context: ../..
-      dockerfile: deploy/dashboard/Dockerfile
+    image: "${MARTINFLIX_IMAGE:?Run setup}"
+    pull_policy: never
+    command: [dashboard]
     restart: unless-stopped
     user: "${MARTINFLIX_UID}:${MARTINFLIX_GID}"
     read_only: true
@@ -85,10 +86,9 @@ services:
   # The only container with Docker access. It has no published port and shares a private network with the
   # dashboard alone, and it acts only for a request that carries the PIN chosen during setup.
   controller:
-    profiles: [control]
-    build:
-      context: ../..
-      dockerfile: deploy/controller/Dockerfile
+    image: "${MARTINFLIX_IMAGE:?Run setup}"
+    pull_policy: never
+    command: [controller]
     restart: unless-stopped
     user: "${MARTINFLIX_UID}:${MARTINFLIX_GID}"
     group_add: ["${MARTINFLIX_DOCKER_GID:-0}"]
@@ -106,7 +106,7 @@ services:
     volumes:
       - "${MARTINFLIX_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"
       - "${MARTINFLIX_STATE_DIR}:${MARTINFLIX_STATE_DIR}:ro"
-      # Writable only so the PIN can be changed from the dashboard.
+      # Writable so the PIN can be changed and settings handed to setup from the dashboard.
       - "${MARTINFLIX_STATE_DIR}/controller:${MARTINFLIX_STATE_DIR}/controller"
       # Where backups go, at the same path as on the host, and the host's time zone for the 01:00 schedule.
       - type: bind
@@ -115,7 +115,6 @@ services:
         bind:
           create_host_path: false
       - /etc/localtime:/etc/localtime:ro
-      - "${MARTINFLIX_REPO_DIR:-/nonexistent}:${MARTINFLIX_REPO_DIR:-/nonexistent}:ro"
     healthcheck:
       test: [CMD, python, -B, -c, "import socket; socket.create_connection(('127.0.0.1', 9800), 2).close()"]
       interval: 5s

@@ -2,8 +2,9 @@
 """MartinFlix controller: the one container with Docker access.
 
 It sits on a private network that only the dashboard joins, and it does only what is listed here: report container
-status, restart an app, or update an app to its newest image. Every action needs the PIN chosen during setup, which
-the controller checks itself, so even a compromised dashboard cannot act without it. Apps that share another app's
+status, restart an app, update an app to its newest image, take backups, and update MartinFlix itself or apply its
+settings by running setup again (see releases.py). Every action needs the PIN chosen during setup, which the
+controller checks itself, so even a compromised dashboard cannot act without it. Apps that share another app's
 network or process namespace, such as the download apps behind Gluetun, are restarted or recreated after it.
 """
 import hashlib
@@ -18,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from backups import BackupError, Backups
+from releases import Releases, UpdateError, secret_values, setup_arguments
 
 # Restarting these ends the request that asked for it, so the controller answers first and restarts them after.
 SELF = frozenset({'dashboard', 'controller'})
@@ -152,8 +154,9 @@ class Stack:
 
     @staticmethod
     def updatable(spec):
-        # Setup builds these from your copy of MartinFlix, so they change with a git pull and setup, not from here.
-        return 'build' not in spec
+        # MartinFlix's own containers change version together, through Settings, not one by one.
+        image = spec.get('image') or ''
+        return 'build' not in spec and not image.startswith(os.environ.get('MARTINFLIX_IMAGE_REPO', 'ghcr.io/descalzi/martinflix') + ':')
 
     def containers(self):
         project = self.config()['project']
@@ -200,7 +203,7 @@ class Stack:
     def update(self, name):
         services = self.controllable()
         if not self.updatable(services[name]):
-            raise ValueError(f'{name} is built from your copy of MartinFlix. Update it with git pull, then setup.')
+            raise ValueError(f'{name} is part of MartinFlix. Update MartinFlix from Settings instead.')
         follow = dependents(services, name)
         before = self.containers().get(name, {}).get('id')
         pulled = self.compose('pull', '--quiet', name)
@@ -283,11 +286,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             self.send_json({'error': 'Not authorized.'}, 401)
             return
-        if self.path != '/status':
+        routes = {
+            '/status': lambda: {**self.server.stack.status(), 'backups': self.server.backups.status(),
+                                'release': self.server.releases.brief()},
+            '/release': self.server.releases.status,
+            '/release/brief': self.server.releases.brief,
+            '/settings': self.server.releases.settings,
+        }
+        if self.path not in routes:
             self.send_json({'error': 'Not found.'}, 404)
             return
         try:
-            self.send_json({**self.server.stack.status(), 'backups': self.server.backups.status()})
+            self.send_json(routes[self.path]())
         except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
             self.send_json({'error': str(exc) or 'Docker status is unavailable.'}, 502)
 
@@ -303,13 +313,19 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                 self.send_json({'error': str(exc) or 'Transmission could not be restarted.'}, 502)
             return
-        action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin', '/backup': 'backup'}.get(self.path)
+        if self.path == '/release/check':
+            # Only downloads an image, so it needs no PIN.
+            self.server.releases.check_soon()
+            self.send_json({'ok': True, 'checking': True}, 202)
+            return
+        action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin', '/backup': 'backup',
+                  '/release/update': 'release', '/settings': 'settings'}.get(self.path)
         if action is None:
             self.send_json({'error': 'Not found.'}, 404)
             return
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            request = json.loads(self.rfile.read(min(length, 4096)) or b'{}')
+            request = json.loads(self.rfile.read(min(length, 16384)) or b'{}')
             name, pin = request.get('service'), request.get('pin')
         except (ValueError, AttributeError):
             self.send_json({'error': 'Invalid request.'}, 400)
@@ -322,6 +338,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if problem := self.server.pins.check(pin):
             self.send_json({'error': problem[1]}, problem[0])
+            return
+        if action in ('release', 'settings'):
+            self.start_setup(action, request)
+            return
+        if updating(self.server):
+            self.send_json({'error': 'MartinFlix is updating. Try again when it has finished.'}, 409)
             return
         if action == 'backup':
             # A backup takes minutes, so it runs in the background; the Backups page follows its progress.
@@ -347,9 +369,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'error': str(exc) or f'The {action} failed.'}, 502)
 
 
+    def start_setup(self, action, request):
+        """Update MartinFlix, or apply settings, by running setup in the updater container."""
+        try:
+            if action == 'settings':
+                arguments = setup_arguments(request.get('settings') or {})
+                given = secret_values(request.get('secrets'))
+                if not arguments and not given:
+                    self.send_json({'error': 'Nothing changed.'}, 400)
+                    return
+                result = self.server.releases.start('settings', arguments, given)
+            else:
+                result = self.server.releases.start('update')
+            self.send_json({'ok': True, **result}, 202)
+        except UpdateError as exc:
+            self.send_json({'error': str(exc)}, exc.status)
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            self.send_json({'error': str(exc) or 'The update could not start.'}, 502)
+
+
+def updating(server):
+    try:
+        return server.releases.running()
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
+
+
 def take_backup(server, kind):
     """One backup, holding the same lock as restarts and updates so nothing restarts an app mid-backup."""
     with server.busy:
+        if kind == 'scheduled' and updating(server):
+            print('Backup skipped: MartinFlix is updating. The next one runs tomorrow.', flush=True)
+            return
         try:
             manifest = server.backups.run(kind)
             print(f'Backup {manifest["created"]} done: {len(manifest["apps"])} apps'
@@ -377,6 +428,8 @@ def serve():
     marker = Path(os.environ['MARTINFLIX_CONTROL_PIN_FILE']).with_name('transmission-password-applied')
     server.transmission = TransmissionPassword(server.stack, server.busy, marker)
     server.backups = Backups(server.stack)
+    server.releases = Releases(server.stack)
+    threading.Thread(target=server.releases.check_forever, daemon=True).start()
     if server.stack.config().get('backupDir'):
         threading.Thread(target=schedule_backups, args=(server,), daemon=True).start()
     print('MartinFlix controller listening on port %d' % server.server_address[1], flush=True)

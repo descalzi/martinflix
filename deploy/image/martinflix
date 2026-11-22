@@ -1,0 +1,3 @@
+#!/bin/sh
+# The image's entry point: martinflix install | update | dashboard | controller | version
+exec python -B /app/deploy/bootstrap/launch.py "$@"

@@ -2,5 +2,9 @@
 !server.py
 !web/
 !web/**
-!deploy/controller/controller.py
-!deploy/controller/backups.py
+!deploy/controller/*.py
+!deploy/bootstrap/*.py
+!deploy/bootstrap/*.yaml
+!deploy/bootstrap/*.json
+!deploy/image/martinflix
+!assets/preroll/*.mp4

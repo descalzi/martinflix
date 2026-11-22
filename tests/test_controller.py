@@ -1,4 +1,6 @@
+import fnmatch
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy/controller'))
 import controller  # noqa: E402
+import releases  # noqa: E402
 
 SERVICES = {
     'gluetun': {'image': 'qmcgaw/gluetun:v3.41.3'},
@@ -14,8 +17,8 @@ SERVICES = {
     'transmission-auth': {'image': 'busybox', 'network_mode': 'none', 'pid': 'service:transmission'},
     'prowlarr': {'image': 'lscr.io/linuxserver/prowlarr:latest', 'network_mode': 'service:gluetun'},
     'sonarr': {'image': 'lscr.io/linuxserver/sonarr:latest'},
-    'dashboard': {'build': {'context': '.'}},
-    'controller': {'build': {'context': '.'}},
+    'dashboard': {'image': 'ghcr.io/descalzi/martinflix:2026.11.22.7'},
+    'controller': {'image': 'ghcr.io/descalzi/martinflix:2026.11.22.7'},
 }
 
 
@@ -108,8 +111,10 @@ class StackTests(unittest.TestCase):
         self.assertFalse(any('restart' in call for call in self.calls), 'nothing restarts before the answer is sent')
         deferred[0]()
         self.assertEqual(self.calls[-1][-2:], ['restart', 'controller'])
-        with self.assertRaisesRegex(ValueError, 'git pull'):
+        with self.assertRaisesRegex(ValueError, 'Settings'):
             stack.update('dashboard')
+        self.assertFalse(stack.updatable(SERVICES['controller']))
+        self.assertTrue(stack.updatable(SERVICES['sonarr']))
 
     def test_restarting_gluetun_restarts_the_apps_on_its_network_after_it(self):
         stack = self.stack({'gluetun': 'g'})
@@ -169,18 +174,42 @@ class TransmissionPasswordTests(unittest.TestCase):
 
 
 class BuildContextTests(unittest.TestCase):
-    def test_every_copied_file_is_let_into_the_build_context(self):
+    """The image is built from a context that .dockerignore narrows to what MartinFlix runs."""
+
+    def included(self):
         root = Path(__file__).resolve().parents[1]
-        allowed = [line[1:].rstrip('/*') for line in (root / '.dockerignore').read_text().splitlines() if line.startswith('!')]
-        for dockerfile in root.glob('deploy/*/Dockerfile'):
-            for line in dockerfile.read_text().splitlines():
-                parts = line.split()
-                if not parts or parts[0] != 'COPY' or any(part.startswith('--from') for part in parts):
-                    continue
-                for source in parts[1:-1]:
-                    source = source.rstrip('/')
-                    self.assertTrue(any(source == item or source.startswith(item + '/') for item in allowed),
-                                    f'{dockerfile.relative_to(root)} copies {source}, which .dockerignore leaves out')
+        patterns = [line[1:] for line in (root / '.dockerignore').read_text().splitlines() if line.startswith('!')]
+
+        def allowed(path):
+            text = path.as_posix()
+            return any(fnmatch.fnmatchcase(text, pattern) or text.startswith(pattern.rstrip('*').rstrip('/') + '/')
+                       and pattern.endswith(('/', '/**')) or fnmatch.fnmatchcase(text, pattern.replace('/**', '/*'))
+                       for pattern in patterns)
+        files = [path.relative_to(root) for path in root.rglob('*') if path.is_file() and '.git' not in path.parts]
+        return root, {path for path in files if allowed(path) and '__pycache__' not in path.parts}
+
+    def test_the_image_gets_everything_it_runs(self):
+        root, included = self.included()
+        needed = ['server.py', 'web/index.html', 'web/app.js', 'web/catalog.json', 'deploy/image/martinflix',
+                  'deploy/controller/controller.py', 'deploy/controller/backups.py', 'deploy/controller/releases.py',
+                  'deploy/bootstrap/launch.py', 'deploy/bootstrap/install.py', 'deploy/bootstrap/configure.py',
+                  'deploy/bootstrap/compose.yaml', 'deploy/bootstrap/compose.plex.yaml',
+                  'deploy/bootstrap/transmission-settings.json',
+                  *(clip.relative_to(root).as_posix() for clip in (root / 'assets/preroll').glob('*.mp4'))]
+        self.assertFalse({Path(name) for name in needed} - included)
+        self.assertFalse({path for path in included if path.parts[0] in ('tests', 'docs', '.github')})
+
+    def test_every_copy_in_the_dockerfile_has_files_to_copy(self):
+        root, included = self.included()
+        for line in (root / 'Dockerfile').read_text().splitlines():
+            parts = line.split()
+            if not parts or parts[0] != 'COPY' or any(part.startswith('--from') for part in parts):
+                continue
+            for source in parts[1:-1]:
+                source = Path(source.rstrip('/'))
+                self.assertTrue(any(path == source or source in path.parents for path in included),
+                                f'The Dockerfile copies {source}, which .dockerignore leaves out')
+
 
 if __name__ == '__main__':
     unittest.main()

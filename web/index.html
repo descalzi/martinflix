@@ -31,6 +31,7 @@
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m10 8.5 5.5 3.5-5.5 3.5z"/></symbol>
   </svg>
   <a class="skip" href="#main">Skip to content</a>
@@ -44,6 +45,7 @@
         <a href="/discover" data-nav="discover" id="nav-discover" hidden><svg class="icon" aria-hidden="true"><use href="#i-compass"/></svg><span>Discover</span></a>
         <a href="/services" data-nav="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span><span class="nav-flag" id="nav-flag" hidden></span></a>
         <a href="/backups" data-nav="backups"><svg class="icon" aria-hidden="true"><use href="#i-backups"/></svg><span>Backups</span></a>
+        <a href="/settings" data-nav="settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span><span class="nav-flag nav-flag-new" id="nav-update" hidden>New</span></a>
       </nav>
       <div class="rail-foot">
         <a href="/change-pin" id="nav-pin" hidden><svg class="icon" aria-hidden="true"><use href="#i-keypad"/></svg><span>Change PIN</span></a>
@@ -61,6 +63,11 @@
       </header>
 
       <div class="page" data-for="overview">
+        <a class="update-banner" id="update-banner" href="/settings" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-up"/></svg>
+          <span><strong id="update-banner-title">A new version of MartinFlix is ready</strong> <span id="update-banner-detail">See what’s new and update from Settings.</span></span>
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>
+        </a>
         <section class="status-strip" aria-label="System status">
           <a class="status-item" id="service-summary" href="/services">
             <span class="status-label" id="services-metric-label">Services</span>
@@ -141,7 +148,7 @@
           <div id="live-history"><p class="empty">Loading…</p></div>
         </section>
 
-        <div class="empty-state" id="live-empty" hidden><h3>Nothing to show yet</h3><p>Live needs Transmission or a Plex connection. Rerun setup with <code>--plex-url</code> and <code>--set-plex-token</code> to connect Plex.</p></div>
+        <div class="empty-state" id="live-empty" hidden><h3>Nothing to show yet</h3><p>Live needs Transmission or a Plex connection. Connect a Plex server under <a href="/settings">Settings</a>.</p></div>
       </div>
 
       <div class="page" data-for="discover">
@@ -214,6 +221,122 @@
           </div>
           <div id="backups-content" class="backup-list"><p class="empty">Checking snapshots…</p></div>
         </section>
+      </div>
+
+      <div class="page" data-for="settings">
+        <p class="page-intro">Your MartinFlix version, and the choices made at setup. Saving runs setup again in the background, with your PIN; it restarts only the apps a change affects.</p>
+        <p class="control-notice" id="settings-notice" role="status" hidden></p>
+
+        <section class="panel" aria-labelledby="release-title">
+          <div class="panel-head">
+            <div><h2 id="release-title">MartinFlix</h2><p id="release-summary">Checking the version…</p></div>
+            <button class="button button-quiet" type="button" id="release-check" hidden><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Check for updates</button>
+          </div>
+          <div id="release-content" aria-live="polite"></div>
+        </section>
+
+        <section class="panel setup-run" id="setup-run" aria-labelledby="setup-run-title" hidden>
+          <div class="panel-head"><div><h2 id="setup-run-title">Updating</h2><p id="setup-run-detail"></p></div><span id="setup-run-badge"></span></div>
+          <pre class="setup-log" id="setup-log" tabindex="0" aria-label="Setup output"></pre>
+        </section>
+
+        <form id="settings-form" class="settings" novalidate hidden>
+          <section class="panel" aria-labelledby="settings-discover-title">
+            <div class="panel-head"><div><h2 id="settings-discover-title">Discover</h2><p>Trending and upcoming titles from TMDB, on their own page.</p></div></div>
+            <div class="settings-fields">
+              <label class="switch"><input type="checkbox" name="discover"><span>Show the Discover page</span></label>
+              <div class="field">
+                <label for="setting-region">Country for cinema and streaming dates</label>
+                <select id="setting-region" name="discoverRegion">
+                  <option value="GB">United Kingdom</option><option value="IE">Ireland</option><option value="US">United States</option>
+                  <option value="CA">Canada</option><option value="AU">Australia</option><option value="NZ">New Zealand</option>
+                  <option value="DE">Germany</option><option value="FR">France</option><option value="ES">Spain</option>
+                  <option value="IT">Italy</option><option value="NL">Netherlands</option><option value="CZ">Czechia</option>
+                  <option value="PT">Portugal</option><option value="BR">Brazil</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="setting-tmdb">Your own TMDB API key <span class="optional">optional</span></label>
+                <input id="setting-tmdb" name="tmdbKey" type="password" autocomplete="off" spellcheck="false" maxlength="1024">
+                <p class="option-help" id="setting-tmdb-help">Discover uses MartinFlix’s key. Paste a key from TMDB’s API settings to use yours.</p>
+                <label class="check" id="setting-tmdb-clear-row" hidden><input type="checkbox" name="tmdbClear"><span>Go back to MartinFlix’s key</span></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="settings-plex-title">
+            <div class="panel-head"><div><h2 id="settings-plex-title">Plex</h2><p id="settings-plex-detail">For Live’s now playing and watch history.</p></div></div>
+            <div class="settings-fields">
+              <div class="field" id="setting-plex-name-row" hidden>
+                <label for="setting-plex-name">Server name</label>
+                <input id="setting-plex-name" name="plexName" type="text" maxlength="50" autocomplete="off">
+                <p class="option-help">How Plex apps list this server.</p>
+              </div>
+              <div class="field" id="setting-plex-url-row" hidden>
+                <label for="setting-plex-url">Plex server address</label>
+                <input id="setting-plex-url" name="plexUrl" type="url" inputmode="url" placeholder="http://192.168.1.10:32400" autocomplete="off" spellcheck="false">
+                <p class="option-help">Leave it empty to disconnect Plex.</p>
+              </div>
+              <div class="field" id="setting-plex-token-row" hidden>
+                <label for="setting-plex-token">Plex token</label>
+                <input id="setting-plex-token" name="plexToken" type="password" autocomplete="off" spellcheck="false" maxlength="200">
+                <p class="option-help" id="setting-plex-token-help">In Plex Web, open any title’s ⋯ → Get Info → View XML, and copy the value after X-Plex-Token= in the address.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="settings-backups-title">
+            <div class="panel-head"><div><h2 id="settings-backups-title">Backups</h2><p>Taken each night at 01:00. Each machine saves into its own folder inside this one.</p></div></div>
+            <div class="settings-fields">
+              <div class="field">
+                <label for="setting-backup-dir">Backup folder</label>
+                <input id="setting-backup-dir" name="backupDir" type="text" autocomplete="off" spellcheck="false" maxlength="250" placeholder="/mnt/martinflix/Backups">
+                <p class="option-help">A full path that already exists on this machine, ideally another disk or a NAS share.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" id="settings-vpn" aria-labelledby="settings-vpn-title" hidden>
+            <div class="panel-head"><div><h2 id="settings-vpn-title">VPN</h2><p>NordVPN through Gluetun. Changing it reconnects the VPN; downloads pause for a minute or so.</p></div></div>
+            <div class="settings-fields">
+              <div class="field">
+                <label for="setting-vpn-location">Exit location</label>
+                <select id="setting-vpn-location" name="vpnLocation"></select>
+              </div>
+              <fieldset class="field">
+                <legend>Connection</legend>
+                <div class="segmented">
+                  <label><input type="radio" name="vpnProtocol" value="udp"><span>UDP · faster</span></label>
+                  <label><input type="radio" name="vpnProtocol" value="tcp"><span>TCP · gets through more networks</span></label>
+                </div>
+              </fieldset>
+              <div class="field">
+                <label for="setting-vpn-user">New service username <span class="optional">optional</span></label>
+                <input id="setting-vpn-user" name="vpnUser" type="text" autocomplete="off" spellcheck="false" maxlength="200">
+              </div>
+              <div class="field">
+                <label for="setting-vpn-password">New service password</label>
+                <input id="setting-vpn-password" name="vpnPassword" type="password" autocomplete="off" maxlength="200">
+                <p class="option-help">Only to replace the credentials. Use the service credentials from Nord Account → NordVPN → Set up NordVPN manually, not your Nord Account login.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="settings-channel-title">
+            <div class="panel-head"><div><h2 id="settings-channel-title">Updates</h2><p>Which MartinFlix versions this machine is offered.</p></div></div>
+            <fieldset class="choice-list">
+              <legend class="sr-only">Release channel</legend>
+              <label class="choice"><input type="radio" name="channel" value="stable"><span><strong>Stable</strong> Released versions only.</span></label>
+              <label class="choice"><input type="radio" name="channel" value="edge"><span><strong>Edge</strong> Every change as soon as it’s made. For testing.</span></label>
+            </fieldset>
+          </section>
+
+          <div class="settings-bar">
+            <p id="settings-changes" aria-live="polite">No changes.</p>
+            <button class="button button-quiet" type="reset" id="settings-reset" disabled>Undo changes</button>
+            <button class="button button-primary" type="submit" id="settings-save" disabled>Save changes</button>
+          </div>
+        </form>
       </div>
 
       <dialog class="control-dialog" id="control-dialog" aria-labelledby="control-title">

@@ -14,35 +14,31 @@ A home media control room with a repeatable Docker setup. See which services are
 
 ### 1. Prepare the VM
 
-Use a Linux VM. Open a terminal and run `git --version` and `python3 --version`. If either command is missing, install Git and Python using your Linux distribution’s package manager. The installer accepts **Python 3.9 or newer**, including 3.9.2. Use a currently supported Linux release for a new VM.
+Use a Linux VM with [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/), and check that `docker info` works as your normal user. That’s all: MartinFlix runs entirely in Docker, so there’s nothing to clone and no Python to install. Docker downloads MartinFlix itself.
 
-If `python3 --version` shows an older version, run `cat /etc/os-release` to identify your distribution. Install a newer Python through its package manager. On Debian or Ubuntu, `sudo apt update` followed by `sudo apt install python3` installs the version available for your release. If that version is still too old, use a newer Linux release or install a supported Python alongside the system version and run the installer with it, for example `python3.11 deploy/bootstrap/install.py --check`. [Python version support](https://devguide.python.org/versions/)
+### 2. Choose how to connect, and install
 
-### 2. Clone, choose how to connect, and install
-
-```sh
-git clone --depth 1 https://github.com/descalzi/martinflix.git
-cd martinflix
-```
-
-Run one of the following sets of commands as your normal user. The check creates no stack files or containers and explains how to fix missing prerequisites. Run the install command once the check passes.
+Run one of the following as your normal user, not with sudo. The check creates no stack files or containers and explains how to fix missing prerequisites. Run the install once the check passes.
 
 Every installation needs a media directory: an existing, writable folder for your series, films, and downloads, such as a mounted NAS share. Replace `/mnt/media` with yours.
 
 **If your browser is on the VM**, use the defaults:
 
 ```sh
-python3 deploy/bootstrap/install.py --media-path /mnt/media --check
-python3 deploy/bootstrap/install.py --media-path /mnt/media
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --check
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media
 ```
 
-**If your browser is on another machine**, set the VM’s LAN IPv4 address before the first install. Replace the example address with your VM’s address:
+**If your browser is on another machine**, add the VM’s LAN IPv4 address. Replace the example address with your VM’s address:
 
 ```sh
-VM_IP=192.168.1.50
-python3 deploy/bootstrap/install.py --media-path /mnt/media --check --dashboard-bind "$VM_IP"
-python3 deploy/bootstrap/install.py --media-path /mnt/media --dashboard-bind "$VM_IP"
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --dashboard-bind 192.168.1.50
 ```
+
+Setup runs from the MartinFlix image in two short-lived containers: the first works out which of your folders setup needs, and the second runs the installer with exactly those folders, at the same paths, on the VM’s network, as your account. `:edge` follows every change; `:stable` follows released versions.
 
 Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default.
 
@@ -68,14 +64,15 @@ Sign in with it, choose a password of at least eight characters, then sign in ag
 
 See the [first-run guide](docs/first-run.md) for using different ports or storage.
 
-### 4. Update later
+### 4. Updates and settings
 
-From your checkout, pull the latest version and reapply it. The update keeps your saved settings, app data, and passwords:
+MartinFlix updates itself. The dashboard checks for a new version every six hours and shows it on the Overview; open **Settings** to see what changed and press **Update now**, with your PIN. The same page changes Discover, Plex, the backup folder, the VPN exit and credentials, and the release channel, without a terminal.
+
+To add apps or change the address or ports, rerun setup with `update` in place of `install`, adding only the options that change:
 
 ```sh
-git pull --ff-only
-python3 deploy/bootstrap/install.py --update --check
-python3 deploy/bootstrap/install.py --update
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge update --enable-bazarr
 ```
 
 Add `--state-dir` if you installed to a custom location. To start fresh with the same state directory, see [Start from scratch](docs/first-run.md#start-from-scratch).
@@ -104,7 +101,10 @@ The legacy Compose definitions and `deploy/stackctl` are migration references. R
 ```sh
 python3 -m unittest discover -s tests -v
 python3 -m py_compile server.py backup.py deploy/bootstrap/install.py
+docker build -t ghcr.io/descalzi/martinflix:dev .
 ```
+
+GitHub builds and publishes the image on every push to `main` (the edge channel) and every `v*` tag (the stable channel). A build from your own machine is version `dev`, which checks for no updates.
 
 The wizard tests run inside the suite when Node.js 18 or newer is installed. To run them on their own:
 

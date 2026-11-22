@@ -1,13 +1,17 @@
 # First-run installer
 
-Start with a Linux host and an account that can run Docker Engine and Docker Compose. The installer uses Python 3.9+ and its standard library. If Docker is missing, install [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/) for your distribution and confirm `docker info` works as your normal user. See [Prepare the VM](../README.md#1-prepare-the-vm) if Python is missing or too old.
+Start with a Linux host and an account that can run Docker Engine and Docker Compose. If Docker is missing, install [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/) for your distribution and confirm `docker info` works as your normal user. Nothing else is needed: setup, the dashboard and the controller all run from the MartinFlix image, `ghcr.io/descalzi/martinflix`.
 
-From the checkout, run:
+Run:
 
 ```sh
-python3 deploy/bootstrap/install.py --media-path /mnt/media --check
-python3 deploy/bootstrap/install.py --media-path /mnt/media
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --check
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media
 ```
+
+`docker run … install` starts setup in two steps. The first container sees only the Docker socket and your home folder; it works out which other folders setup needs (the media folder, the backup folder, a state directory outside your home) and starts the installer in a second container with exactly those folders at the same paths, the VM’s network, and your account. Paths must match the VM’s because Docker resolves every folder in the Compose files on the VM. `update` in place of `install` updates an existing installation, and `reset` starts from scratch. In the rest of this guide, “run setup with `--flag`” means adding the flag to that command.
 
 Replace `/mnt/media` with your media directory. New installations and resets need one, because Sonarr and Radarr file series and films there; installations made before this keep working without one until you add it.
 
@@ -38,13 +42,13 @@ Add `--enable-plex` (on by default in the wizard) to install Plex Media Server f
 
 Just before Plex starts for the first time, setup asks for a **claim code**, which links the new server to your Plex account. Sign in at [plex.tv/claim](https://plex.tv/claim) and paste the code it shows; it lasts four minutes, so get it when setup asks. Once the server is claimed, setup:
 
-- names the server **martinflix** (change it with `--plex-name`, for example on a test machine) and sets its pre-roll clips to every video in the repository's `assets/preroll` folder, played at random before films; both follow setup's options and the folder whenever they change;
+- names the server **martinflix** (change it with `--plex-name`, for example on a test machine) and sets its pre-roll clips to every video in the image's `assets/preroll` folder, which setup copies into the state directory's `preroll` folder and Plex plays at random before films; both follow setup's options and each new version's clips;
 - turns on **remote access** with automatic port mapping, so the router needs UPnP (eero has it on by default), and lets Plex use IPv6 where the network has it;
 - applies MartinFlix's default server settings once: maintenance between 02:00 and 09:00, scanning when files change plus a daily low-priority scan, intro and credits markers during maintenance, cinema trailers, and DLNA, push notifications, crash reports and debug logging off;
 - adds **Films** and **TV programmes** libraries over the media folders, with their advanced settings (only on a server with no libraries yet);
 - connects the dashboard's Live page to Plex, with no token to copy.
 
-If you skip the claim code, open Plex Web (`http://<VM address>:32400/web`) from a device on the same network to claim the server, then rerun setup with `--update` to add the libraries and connect Live. If the VM has a GPU (`/dev/dri`), setup gives Plex access to it for hardware transcoding, which Plex uses with a Plex Pass.
+If you skip the claim code, open Plex Web (`http://<VM address>:32400/web`) from a device on the same network to claim the server, then run setup's `update` to add the libraries and connect Live. If the VM has a GPU (`/dev/dri`), setup gives Plex access to it for hardware transcoding, which Plex uses with a Plex Pass.
 
 Everything Plex keeps (libraries, watch history, settings) is in the `plex` folder of the state directory, so backing up that folder backs up Plex.
 
@@ -59,32 +63,32 @@ The **Live** page shows what's happening now, updating every five seconds:
 
 The Overview shows a compact version: current speeds and downloads, with the last hour's download speed drawn faintly behind them.
 
-With Plex installed by setup, Live connects to it automatically. For a Plex server elsewhere, rerun setup with `--plex-url` (for example `--plex-url http://192.168.5.204:32400`) and `--set-plex-token`, then paste your Plex token when asked. To find the token, open Plex Web, choose any film or episode, open **⋯ → Get Info → View XML**, and copy the value after `X-Plex-Token=` in the address bar. The token stays private on the VM. Plex keeps its own watch history, but older entries may be pruned over time; Tautulli keeps a permanent record, so check how far back Live's history goes before retiring Tautulli.
+With Plex installed by setup, Live connects to it automatically. For a Plex server elsewhere, enter its address and token under **Settings → Plex** in the dashboard, or run setup with `--plex-url` (for example `--plex-url http://192.168.5.204:32400`) and `--set-plex-token`. To find the token, open Plex Web, choose any film or episode, open **⋯ → Get Info → View XML**, and copy the value after `X-Plex-Token=` in the address bar. The token stays private on the VM. Plex keeps its own watch history, but older entries may be pruned over time; Tautulli keeps a permanent record, so check how far back Live's history goes before retiring Tautulli.
 
 ### Discover
 
 The **Discover** page shows trending films and series, what's coming to cinemas, and what's new on streaming in your region, whether or not it's in your library. Titles you already have say **In library**; **Add** opens the Add page on that exact title with its options ready.
 
-The lists come from [TMDB](https://www.themoviedb.org/), using MartinFlix's own TMDB API key, so Discover works without any setup. To use your own key instead, get a free one in your TMDB account under **Settings → API** (the **API Key**, or the longer **API Read Access Token**), then run setup with `--set-tmdb-key` and paste it when asked; it's stored privately on the VM. Leave the answer blank to go back to MartinFlix's key. To hide the page, use `--discover off`, and `--discover on` to bring it back. Cinema and streaming lists use the UK by default; choose another country with `--discover-region`, for example `--discover-region US`. The lists are cached for an hour.
+The lists come from [TMDB](https://www.themoviedb.org/), using MartinFlix's own TMDB API key, so Discover works without any setup. To use your own key instead, get a free one in your TMDB account under **Settings → API** (the **API Key**, or the longer **API Read Access Token**), then paste it under **Settings → Discover** in the dashboard (or run setup with `--set-tmdb-key`); it's stored privately on the VM. The same section hides the page, and chooses the country for the cinema and streaming lists, the UK by default (`--discover off` and `--discover-region US` from a terminal). The lists are cached for an hour.
 
 ### Backups
 
-Every night at 01:00 the controller backs up each app's settings and data, keeping the last 14 plus one a week for 8 weeks. Choose the folder with `--backup-dir`, ideally a NAS share or another disk (for example `--backup-dir /mnt/martinflix/Backups`); each machine uses its own subfolder. See [Backup and recovery](backups.md) for what each backup holds.
+Every night at 01:00 the controller backs up each app's settings and data, keeping the last 14 plus one a week for 8 weeks. Choose the folder under **Settings → Backups**, or with `--backup-dir`, ideally a NAS share or another disk (for example `--backup-dir /mnt/martinflix/Backups`); each machine uses its own subfolder. See [Backup and recovery](backups.md) for what each backup holds.
 
 ### Restart and update apps from the dashboard
 
 Each card on the **Services** page has **Restart** and **Update** buttons, and the dashboard asks for a PIN before either runs. Setup asks you to choose the PIN (4 to 8 digits) and stores only a hash of it. To change it, use **Change PIN** in the dashboard's sidebar, which asks for the current PIN first. If you've forgotten it, rerun setup on the VM with `--change-pin`. Five wrong PINs lock restarts, updates, and PIN changes for five minutes.
 
-The buttons are served by a separate **controller** container, the only part of the stack with Docker access. It has no published port, shares a private network with the dashboard alone, and checks the PIN itself, so the dashboard cannot restart or update anything without it. A **MartinFlix** section lists the dashboard and the controller. The dashboard and the controller can be restarted from there but not updated, because setup builds them from your copy of MartinFlix: `git pull`, then rerun setup. Restarting the dashboard signs you out, and the page reloads once it's back.
+The buttons are served by a separate **controller** container, the only part of the stack with Docker access. It has no published port, shares a private network with the dashboard alone, and checks the PIN itself, so the dashboard cannot restart or update anything without it. A **MartinFlix** section lists the dashboard and the controller. They can be restarted from there; they update together with MartinFlix, from **Settings**. The page reloads once the dashboard is back, and you stay signed in.
 
 - **Restart** restarts the app. Restarting Gluetun also restarts Transmission, Prowlarr, FlareSolverr, and Bazarr afterwards, because they use its network connection.
-- **Update** downloads the app's newest image. If there is one, the app is recreated with it, along with any apps on its network; your settings stay in place. Gluetun is pinned to a tested version, so its update arrives with a new MartinFlix release: `git pull`, then rerun setup with `--update`.
+- **Update** downloads the app's newest image. If there is one, the app is recreated with it, along with any apps on its network; your settings stay in place. Gluetun is pinned to a tested version, so its update arrives with a new MartinFlix version.
 
-The controller also reports each container's uptime, so every card shows how long it has been up. It needs Docker on a local socket, which is the default; setup turns these buttons off when Docker is reached over TCP or SSH.
+The controller also reports each container's uptime, so every card shows how long it has been up.
 
 Existing logins are preserved when you rerun the installer. Installations made before every app shared the dashboard password switch Transmission to the `admin` username and keep its old password; use **Change password** once to bring every app onto your password.
 
-Transmission has no API for changing its own password, but it takes the shared password from its private file each time it starts. When you change your password, the dashboard asks the controller to restart Transmission as part of the change, so it takes the new password straight away; downloads pause briefly and resume on their own. On hosts without the controller (Docker reached over TCP or SSH), a small `transmission-auth` helper applies the change instead, without a restart.
+Transmission has no API for changing its own password, but it takes the shared password from its private file each time it starts. When you change your password, the dashboard asks the controller to restart Transmission as part of the change, so it takes the new password straight away; downloads pause briefly and resume on their own.
 
 The dashboard, Sonarr, Radarr, Prowlarr, Transmission, and Bazarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
 
@@ -95,18 +99,27 @@ Run your installer command again and add `--reset`. Include the state directory,
 To run an isolated trial alongside another stack, use a separate state directory and different host ports:
 
 ```sh
-python3 deploy/bootstrap/install.py \
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install \
   --state-dir ~/.local/state/martinflix-trial --media-path /mnt/media-trial \
   --dashboard-port 18765 --sonarr-port 18989 --radarr-port 17878
 ```
 
+### Updates and settings
+
+The controller checks for a newer MartinFlix image on the installation's channel a couple of minutes after it starts and then every six hours, by asking Docker to download it; the controller itself never reaches the internet. A new version shows on the Overview and on **Settings**, with the list of changes from GitHub. **Update now** asks for your PIN, then runs setup again from the new image in a container of its own, `…-updater`, because setup recreates the controller and the dashboard on the way. Settings shows setup's output as it goes; the dashboard restarts near the end and the page reloads by itself. If an update fails, the output says why and nothing after that step changed; fix the cause and update again, from Settings or from a terminal.
+
+**Settings** also changes Discover (on or off, country, your own TMDB key), Plex (the server name, or the address and token of a Plex elsewhere), the backup folder, the VPN exit, protocol and service credentials, and the release channel. Saving runs setup the same way, with your PIN, so the change is checked and applied exactly as from a terminal and only the apps it affects restart. Secrets reach setup in a private file that it deletes as soon as it has read it.
+
+The **edge** channel gets every change pushed to `main`; **stable** gets versions tagged `v1.2.0` and so on. A new installation follows the channel of the image you ran (`:edge` or `:stable`); switch under **Settings → Updates**, or with `--channel`.
+
 ### Update an existing installation
 
-From your checkout, run `git pull --ff-only`, then `python3 deploy/bootstrap/install.py --update --check` and `python3 deploy/bootstrap/install.py --update`. Add `--state-dir` for a custom location. `--update` fails instead of creating a new installation if it cannot find one.
+MartinFlix updates from the dashboard: see [Updates and settings](#updates-and-settings). To change what's installed (add apps, move the address or ports), run setup with `update` in place of `install`, plus the options that change. Add `--state-dir` for a custom location. `update` fails instead of creating a new installation if it cannot find one.
 
 Setup remembers the dashboard address, ports, media directory, VPN exit, and download services. An update reuses them, and any flag you pass changes that one setting, for example `--enable-prowlarr` to add Prowlarr or `--dashboard-port 18765` to move the dashboard. Installs created before setup saved the address and ports recover them from their running containers. If those containers are stopped, pass `--dashboard-bind` again if you use LAN access. The download route can change in either direction with `--download-network`. Setup repoints Transmission’s connection and download path mapping in Sonarr and Radarr, Prowlarr’s address in both apps, and a FlareSolverr proxy in Prowlarr, if it uses the address setup printed. Before an update, setup lists what will change from the current installation. In the [setup wizard](https://descalzi.github.io/martinflix/), choose **Update or change an existing installation**: its **Changes** step starts with everything as it is, and only what you change goes into the command.
 
-Every run downloads the latest image for each app and rebuilds the dashboard on a fresh Python base image, so an update also updates Sonarr, Radarr, and the download apps. Containers whose image changed are recreated. Older images stay on disk; remove unused ones with `docker image prune` when you’re happy with the update. Bind-mounted settings, databases, credentials, and media persist. App data for these installs is under the state directory and each app normally mounts its subdirectory at `/config`. References to `/var/lib` in the inventory and existing-host guides describe the older reference deployment. The project name follows the state directory. The installer preserves app configurations and the password set on first sign-in, refreshes the private copies of the Arr keys, and verifies both connections again. Keep the application data and password files outside the checkout. The dashboard has no Docker socket.
+Every run downloads the latest image for each app, so an update also updates Sonarr, Radarr, and the download apps; the dashboard and controller run from the MartinFlix image setup came from. Containers whose image changed are recreated. Older images stay on disk; remove unused ones with `docker image prune` when you’re happy with the update. Bind-mounted settings, databases, credentials, and media persist. App data for these installs is under the state directory and each app normally mounts its subdirectory at `/config`. References to `/var/lib` in the inventory and existing-host guides describe the older reference deployment. The project name follows the state directory. The installer preserves app configurations and the password set on first sign-in, refreshes the private copies of the Arr keys, and verifies both connections again. The dashboard has no Docker socket.
 
 ## Media and downloads
 
@@ -115,11 +128,13 @@ Use a dedicated directory for your media. It can be a mounted NAS share or a dir
 For library folders without the download services, pass only `--media-path`. To install the download services too, run the following in a terminal. Replace the sample path and use your usual `--dashboard-bind` option if you access the dashboard from another device.
 
 ```sh
-python3 deploy/bootstrap/install.py --media-path "/mnt/media" --enable-downloads --check
-python3 deploy/bootstrap/install.py --media-path "/mnt/media" --enable-downloads
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --enable-downloads --check
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --enable-downloads
 ```
 
-The VPN option requires `/dev/net/tun` and your NordVPN **service credentials**, which aren’t your Nord Account email and password. In your [Nord Account](https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/), open NordVPN → **Set up NordVPN manually**, enter the code NordVPN emails you, and copy the username and password from the **Service credentials** tab. [NordVPN’s guide](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup) has screenshots. The installer prompts for the credentials without echoing them and saves them in private files outside the repo. Gluetun uses NordVPN and defaults to Prague, matching the reference Compose file. Pass `--enable-vpn` for a standalone VPN gateway. Use `--vpn-city Prague` or a supported `--vpn-country` to choose the exit. Before connecting, setup downloads NordVPN’s current server list into the state directory, and Gluetun refreshes it daily, so an out-of-date list built into the image can’t send it to a retired server. If your network blocks VPN traffic over UDP, add `--vpn-protocol tcp`; setup remembers the choice. If a server rejects the login (`AUTH_FAILED`), Gluetun moves on to another server in the same city instead of retrying the one that refused it. If every attempt is rejected, setup names the servers it tried and keeps your saved credentials, because NordVPN also refuses logins when the account is at its device limit. Stop VPN connections you no longer use before you rerun it. VPN-backed Transmission, Prowlarr, and FlareSolverr share Gluetun’s network and wait for its health check. If you explicitly choose `--download-network direct`, those three services use the normal Docker network. Existing download routes are retained on rerun. Their web pages use ports 9091 and 9696 by default, on the same address as the dashboard. Sign in to both with `admin` and your dashboard password.
+The VPN option requires `/dev/net/tun` and your NordVPN **service credentials**, which aren’t your Nord Account email and password. In your [Nord Account](https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/), open NordVPN → **Set up NordVPN manually**, enter the code NordVPN emails you, and copy the username and password from the **Service credentials** tab. [NordVPN’s guide](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup) has screenshots. The installer prompts for the credentials without echoing them and saves them in private files in the state directory; replace them later under **Settings → VPN**. Gluetun uses NordVPN and defaults to Prague, matching the reference Compose file. Pass `--enable-vpn` for a standalone VPN gateway. Use `--vpn-city Prague` or a supported `--vpn-country` to choose the exit. Before connecting, setup downloads NordVPN’s current server list into the state directory, and Gluetun refreshes it daily, so an out-of-date list built into the image can’t send it to a retired server. If your network blocks VPN traffic over UDP, add `--vpn-protocol tcp`; setup remembers the choice. If a server rejects the login (`AUTH_FAILED`), Gluetun moves on to another server in the same city instead of retrying the one that refused it. If every attempt is rejected, setup names the servers it tried and keeps your saved credentials, because NordVPN also refuses logins when the account is at its device limit. Stop VPN connections you no longer use before you rerun it. VPN-backed Transmission, Prowlarr, and FlareSolverr share Gluetun’s network and wait for its health check. If you explicitly choose `--download-network direct`, those three services use the normal Docker network. Existing download routes are retained on rerun. Their web pages use ports 9091 and 9696 by default, on the same address as the dashboard. Sign in to both with `admin` and your dashboard password.
 
 - Choose **MartinFlix HD (720p/1080p)** when adding titles. The installer creates the profile from the reference host’s allowed qualities and upgrade behavior. Existing titles keep their assigned profiles.
 - Transmission starts with the reference host’s settings:

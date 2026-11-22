@@ -4,7 +4,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;'
 const icon = (name, extra = '') => `<svg class="icon${extra}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 const page = document.body.dataset.page;
-const pageTitles = {overview: 'Overview', live: 'Live', library: 'Library', discover: 'Discover', add: 'Add to library', services: 'Services', backups: 'Backups'};
+const pageTitles = {overview: 'Overview', live: 'Live', library: 'Library', discover: 'Discover', add: 'Add to library', services: 'Services', backups: 'Backups', settings: 'Settings'};
 const legacyAnchors = {'#series': '/library#series', '#films': '/library#films', '#library': '/library', '#backups': '/backups', '#services': '/services'};
 if (page === 'overview' && legacyAnchors[window.location.hash]) window.location.replace(legacyAnchors[window.location.hash]);
 $('#page-title').textContent = pageTitles[page];
@@ -287,7 +287,7 @@ function controlText(action, service) {
   if (action === 'restart') {
     const verb = serviceIsUp(service) ? 'Restart' : 'Start';
     const own = {
-      dashboard: 'This page stops for a few seconds, then reloads. You’ll need to sign in again.',
+      dashboard: 'This page stops for a few seconds, then reloads.',
       controller: 'Restarts and updates are unavailable for a few seconds while it comes back.',
     }[service.name];
     return {
@@ -321,48 +321,78 @@ async function waitForDashboard() {
   $('#control-notice').textContent = 'The dashboard has not come back yet. Reload this page in a moment.';
 }
 
+async function post(url, body) {
+  const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (response.status === 401 && response.headers.get('X-MartinFlix-Login') === 'required') window.location.assign('/login');
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || 'The request failed. Try again.');
+  return data;
+}
+
+/** The PIN dialog, shared by every action that needs it. `send(pin)` does the action; `after(data)` runs once it worked. */
+let pinRequest = null;
+function askPin(text, send, after) {
+  pinRequest = {text, send, after};
+  $('#control-title').textContent = text.title;
+  $('#control-detail').textContent = text.detail;
+  $('#control-pin').value = '';
+  $('#control-error').hidden = true;
+  setPinBusy(false);
+  $('#control-dialog').showModal();
+  $('#control-pin').focus();
+}
+
+let pinBusy = false;
+function setPinBusy(state) {
+  pinBusy = state;
+  const confirm = $('#control-confirm');
+  $('#control-pin').disabled = state;
+  $('#control-cancel').disabled = state;
+  confirm.setAttribute('aria-disabled', String(state));
+  confirm.classList.toggle('is-busy', state);
+  confirm.innerHTML = `${icon(pinRequest.text.icon || 'up')}${esc(state ? pinRequest.text.busy : pinRequest.text.verb)}`;
+}
+
 function setupControls() {
   const dialog = $('#control-dialog');
-  const form = $('#control-form');
   const pin = $('#control-pin');
   const error = $('#control-error');
-  const confirm = $('#control-confirm');
-  const cancel = $('#control-cancel');
-  const notice = $('#control-notice');
-  let request = null;
-  let busy = false;
-  const setBusy = (state, label) => {
-    busy = state;
-    pin.disabled = state;
-    cancel.disabled = state;
-    confirm.setAttribute('aria-disabled', String(state));
-    confirm.classList.toggle('is-busy', state);
-    confirm.innerHTML = `${icon(request.action === 'restart' ? 'refresh' : request.action === 'backup' ? 'plus' : 'up')}${esc(label)}`;
-  };
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-control]');
     if (!button || button.disabled) return;
-    const backup = button.dataset.control === 'backup';
-    const service = backup ? {name: 'backup'} : controlServices.get(button.dataset.service);
+    const action = button.dataset.control;
+    if (action === 'backup') {
+      askPin({title: 'Back up now?', verb: 'Back up', busy: 'Starting…', icon: 'plus',
+        detail: 'Takes a backup of every app now, alongside the nightly ones. The apps keep running; it takes a few minutes.'},
+      code => post('/api/backup', {pin: code}),
+      data => { $('#backup-notice').textContent = data.message; $('#backup-notice').hidden = false; status(); });
+      return;
+    }
+    if (action === 'release') {
+      startUpdate();
+      return;
+    }
+    const service = controlServices.get(button.dataset.service);
     if (!service) return;
-    const text = backup ? {title: 'Back up now?', verb: 'Back up', busy: 'Starting…',
-      detail: 'Takes a backup of every app now, alongside the nightly ones. The apps keep running; it takes a few minutes.'}
-      : controlText(button.dataset.control, service);
-    request = {action: button.dataset.control, service: service.name, text};
-    $('#control-title').textContent = text.title;
-    $('#control-detail').textContent = text.detail;
-    pin.value = '';
-    error.hidden = true;
-    setBusy(false, request.text.verb);
-    dialog.showModal();
-    pin.focus();
+    const text = {...controlText(action, service), icon: action === 'restart' ? 'refresh' : 'up'};
+    askPin(text, code => post(`/api/control/${action}`, {service: service.name, pin: code}), data => {
+      $('#control-notice').textContent = data.message;
+      $('#control-notice').hidden = false;
+      if (service.name === 'dashboard') {
+        waitForDashboard();
+        return;
+      }
+      status();
+      // Apps take a little while to report healthy again after a restart.
+      setTimeout(status, 15000);
+    });
   });
-  cancel.addEventListener('click', () => dialog.close());
+  $('#control-cancel').addEventListener('click', () => dialog.close());
   // A running action cannot be stopped, so Escape waits for it like the Cancel button does.
-  dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-  form.addEventListener('submit', async event => {
+  dialog.addEventListener('cancel', event => { if (pinBusy) event.preventDefault(); });
+  $('#control-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (busy) return;
+    if (pinBusy || !pinRequest) return;
     if (!/^[0-9]{4,8}$/.test(pin.value)) {
       error.textContent = 'Enter your 4 to 8 digit PIN.';
       error.hidden = false;
@@ -370,29 +400,14 @@ function setupControls() {
       return;
     }
     error.hidden = true;
-    setBusy(true, request.text.busy);
+    setPinBusy(true);
     try {
-      const backup = request.action === 'backup';
-      const response = await fetch(backup ? '/api/backup' : `/api/control/${request.action}`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(backup ? {pin: pin.value} : {service: request.service, pin: pin.value}),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(data?.error || 'The request failed. Try again.');
-      busy = false;
+      const data = await pinRequest.send(pin.value);
+      pinBusy = false;
       dialog.close();
-      const where = backup ? $('#backup-notice') : notice;
-      where.textContent = data.message;
-      where.hidden = false;
-      if (request.service === 'dashboard') {
-        waitForDashboard();
-        return;
-      }
-      status();
-      // Apps take a little while to report healthy again after a restart.
-      setTimeout(status, 15000);
+      pinRequest.after?.(data);
     } catch (failure) {
-      setBusy(false, request.text.verb);
+      setPinBusy(false);
       error.textContent = failure.message;
       error.hidden = false;
       pin.value = '';
@@ -449,6 +464,12 @@ async function status() {
     $('#nav-password').hidden = !data.canChangePassword;
     $('#nav-pin').hidden = !data.canChangePin;
     $('#nav-discover').hidden = !data.discover && page !== 'discover';
+    const newer = data.release?.available;
+    $('#nav-update').hidden = !newer;
+    if (page === 'overview') {
+      $('#update-banner').hidden = !newer;
+      if (newer) $('#update-banner-title').textContent = `MartinFlix ${newer.version} is ready`;
+    }
     const problems = attentionRows(docker, services).length;
     $('#nav-flag').hidden = problems === 0;
     $('#nav-flag').innerHTML = `${problems}<span class="sr-only"> ${problems === 1 ? 'issue' : 'issues'}</span>`;
@@ -1098,6 +1119,275 @@ if (page === 'add') {
   term.focus();
 }
 
+/* Settings: MartinFlix's own version and updates, and the choices made at setup. */
+const CHANNEL_NAMES = {stable: 'Stable', edge: 'Edge', dev: 'Development'};
+const SETTING_LABELS = {discover: 'Discover', discoverRegion: 'Discover country', tmdbKey: 'TMDB key', plexName: 'Plex server name',
+  plexUrl: 'Plex address', plexToken: 'Plex token', backupDir: 'Backup folder', vpnLocation: 'VPN exit',
+  vpnProtocol: 'VPN connection', vpnUser: 'VPN credentials', channel: 'Release channel'};
+let systemData = null;
+let settingsData = null;
+let loadedVersion = null;
+let following = false;
+let followTimer = null;
+let lastRunState = null;
+
+function when(value, options = {dateStyle: 'medium', timeStyle: 'short'}) {
+  const stamp = new Date(value);
+  return value && !isNaN(stamp) && stamp.getFullYear() > 2000 ? stamp.toLocaleString(undefined, options) : '';
+}
+
+function changeList(changes, available) {
+  if (!changes) {
+    return `<p class="muted">The list of changes is on <a href="https://github.com/descalzi/martinflix/commits/main" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>`;
+  }
+  if (changes.older) return '<p class="muted">This is an earlier version than the one running now, because the release channel changed.</p>';
+  const more = changes.total > changes.commits.length ? `<li class="muted">and ${changes.total - changes.commits.length} more</li>` : '';
+  return `<ul class="change-list">${changes.commits.map(commit => `<li><span>${esc(commit.title)}</span><span class="muted">${esc(when(commit.date, {day: 'numeric', month: 'short'}))}</span></li>`).join('')}${more}</ul>
+    ${changes.url ? `<a class="text-link" href="${esc(changes.url)}" target="_blank" rel="noopener noreferrer">Compare on GitHub${icon('external')}</a>` : ''}`;
+}
+
+function renderRelease(data) {
+  const current = data.current;
+  const channel = CHANNEL_NAMES[current.channel] || current.channel;
+  const running = data.updater?.state === 'running';
+  $('#release-summary').textContent = current.channel === 'dev'
+    ? `Version ${current.version}, built on this machine. It isn’t offered updates.`
+    : `Version ${current.version} · ${channel} channel${current.revision ? ` · ${current.revision.slice(0, 7)}` : ''}`;
+  $('#release-check').hidden = current.channel === 'dev' || running;
+  $('#release-check').disabled = Boolean(data.checking);
+  const available = data.available;
+  let body = '';
+  // A newer version already here can be installed even when the registry can't be reached right now.
+  if (data.problem && !data.available) body += `<p class="error error-inline">${esc(data.problem)}</p>`;
+  if (available) {
+    const published = when(available.created, {day: 'numeric', month: 'short', year: 'numeric'});
+    body += `<div class="release-card">
+      <div><h3>Version ${esc(available.version)} is ready</h3><p class="muted">${published ? `Published ${esc(published)}` : 'Downloaded and ready to install'}${data.changes?.total ? ` · ${data.changes.total} change${data.changes.total === 1 ? '' : 's'}` : ''}</p></div>
+      <button class="button button-primary" type="button" data-control="release"${running ? ' disabled' : ''}>${icon('up')}Update now</button>
+    </div>${changeList(data.changes, available)}`;
+  } else if (current.channel !== 'dev') {
+    const checked = when(data.checkedAt, {weekday: 'short', hour: '2-digit', minute: '2-digit'});
+    body += `<p class="release-current">${icon('check')}<span>${data.checking ? 'Checking for a newer version…'
+      : checked ? `Up to date. Last checked ${esc(checked)}; MartinFlix checks again every six hours.` : 'Checks for updates a couple of minutes after starting, then every six hours.'}</span></p>`;
+  }
+  $('#release-content').innerHTML = body;
+}
+
+function renderRun(updater) {
+  const panel = $('#setup-run');
+  const recent = updater && (updater.state === 'running' || Date.now() - new Date(updater.finishedAt) < 86400000);
+  panel.hidden = !recent;
+  if (!recent) return;
+  const update = updater.kind === 'update';
+  const titles = {
+    running: update ? `Updating to ${updater.version}…` : 'Applying your settings…',
+    succeeded: update ? `Updated to ${updater.version}` : 'Settings applied',
+    failed: update ? 'The update did not finish' : 'The settings could not be applied',
+  };
+  $('#setup-run-title').textContent = titles[updater.state];
+  const started = when(updater.startedAt, {hour: '2-digit', minute: '2-digit'});
+  const finished = when(updater.finishedAt, {hour: '2-digit', minute: '2-digit'});
+  $('#setup-run-detail').textContent = updater.state === 'running'
+    ? `Started ${started}. The dashboard restarts near the end and this page reloads by itself.`
+    : updater.state === 'failed' ? `Stopped at ${finished}. The output below says why; nothing after that step changed. Fix it, then try again.`
+    : `Finished at ${finished}.`;
+  $('#setup-run-badge').innerHTML = updater.state === 'running' ? '<span class="badge">Running</span>'
+    : updater.state === 'succeeded' ? '<span class="badge ok">Done</span>' : '<span class="badge crit">Failed</span>';
+  const log = $('#setup-log');
+  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.textContent = updater.log || 'Starting…';
+  if (atEnd || updater.state === 'running') log.scrollTop = log.scrollHeight;
+}
+
+async function system() {
+  clearTimeout(followTimer);
+  let data;
+  try {
+    data = await get('/api/system');
+  } catch {
+    if (following) {
+      // The dashboard itself restarts during an update. Keep asking until the new one answers.
+      $('#setup-run-detail').textContent = 'MartinFlix is restarting. This page reloads when it’s back…';
+      followTimer = setTimeout(system, 3000);
+    } else {
+      $('#release-summary').textContent = 'Could not reach the controller.';
+    }
+    return;
+  }
+  if (!data.configured) {
+    $('#release-summary').textContent = 'Updates and settings need the controller. Run the update once from a terminal.';
+    return;
+  }
+  // A newer dashboard is running than the one that served this page: load the new page.
+  if (loadedVersion && data.current.version !== loadedVersion) {
+    window.location.reload();
+    return;
+  }
+  loadedVersion = data.current.version;
+  systemData = data;
+  renderRelease(data);
+  renderRun(data.updater);
+  const state = data.updater?.state;
+  const running = state === 'running';
+  $('#settings-form').inert = running;
+  if (lastRunState === 'running' && !running) {
+    following = false;
+    if (data.updater.kind === 'settings') loadSettings();
+  }
+  lastRunState = state;
+  if (running || following || data.checking) followTimer = setTimeout(system, running || following ? 3000 : 5000);
+}
+
+function startUpdate() {
+  const available = systemData?.available;
+  if (!available) return;
+  askPin({title: `Update to MartinFlix ${available.version}?`, verb: 'Update', busy: 'Starting…', icon: 'up',
+    detail: 'Setup runs again from the new version and keeps your settings. Apps restart only if the new version changes them. The dashboard restarts near the end, and this page reloads by itself.'},
+  code => post('/api/system/update', {pin: code}),
+  () => { following = true; lastRunState = 'running'; system(); });
+}
+
+function setOptions(select, values, current) {
+  const options = [...values];
+  if (current && !options.includes(current)) options.unshift(current);
+  select.innerHTML = options.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+  select.value = current || options[0] || '';
+}
+
+function fillSettings(data) {
+  const form = $('#settings-form');
+  form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = '';
+  form.tmdbClear.checked = false;
+  form.discover.checked = data.discover !== 'off';
+  if (![...form.discoverRegion.options].some(option => option.value === data.discoverRegion)) {
+    form.discoverRegion.insertAdjacentHTML('afterbegin', `<option value="${esc(data.discoverRegion)}">${esc(data.discoverRegion)}</option>`);
+  }
+  form.discoverRegion.value = data.discoverRegion;
+  $('#setting-tmdb-help').textContent = data.ownTmdbKey ? 'Discover uses your key. Paste another to replace it.'
+    : 'Discover uses MartinFlix’s key. Paste a key from TMDB’s API settings to use yours.';
+  $('#setting-tmdb-clear-row').hidden = !data.ownTmdbKey;
+  $('#setting-plex-name-row').hidden = !data.plex;
+  $('#setting-plex-url-row').hidden = data.plex;
+  $('#setting-plex-token-row').hidden = data.plex;
+  $('#settings-plex-detail').textContent = data.plex ? 'This machine runs Plex for your media folder.'
+    : 'A Plex server elsewhere, for Live’s now playing and watch history.';
+  form.plexName.value = data.plexName;
+  form.plexUrl.value = data.plexUrl;
+  $('#setting-plex-token-help').textContent = data.plexToken ? 'A token is saved. Paste another to replace it.'
+    : 'In Plex Web, open any title’s ⋯ → Get Info → View XML, and copy the value after X-Plex-Token= in the address.';
+  form.backupDir.value = data.backupDir;
+  $('#settings-vpn').hidden = !data.vpn;
+  setOptions(form.vpnLocation, data.choices.vpnLocations, data.vpnLocation);
+  form.vpnProtocol.value = data.vpnProtocol;
+  form.channel.value = data.channel;
+  form.hidden = false;
+  settingsData = data;
+  showSettingsChanges();
+}
+
+function settingsChanges() {
+  const form = $('#settings-form');
+  const data = settingsData;
+  const settings = {};
+  const secrets = {};
+  const discover = form.discover.checked ? 'on' : 'off';
+  if (discover !== data.discover) settings.discover = discover;
+  if (form.discoverRegion.value !== data.discoverRegion) settings.discoverRegion = form.discoverRegion.value;
+  const key = form.tmdbKey.value.trim();
+  if (key) secrets.tmdbKey = key;
+  else if (form.tmdbClear.checked) secrets.tmdbKey = '';
+  if (data.plex) {
+    if (form.plexName.value.trim() !== data.plexName) settings.plexName = form.plexName.value.trim();
+  } else {
+    if (form.plexUrl.value.trim().replace(/\/$/, '') !== data.plexUrl) settings.plexUrl = form.plexUrl.value.trim();
+    if (form.plexToken.value.trim()) secrets.plexToken = form.plexToken.value.trim();
+  }
+  if (form.backupDir.value.trim() !== data.backupDir) settings.backupDir = form.backupDir.value.trim();
+  if (data.vpn) {
+    if (form.vpnLocation.value !== data.vpnLocation) settings.vpnLocation = form.vpnLocation.value;
+    if (form.vpnProtocol.value !== data.vpnProtocol) settings.vpnProtocol = form.vpnProtocol.value;
+    if (form.vpnUser.value.trim() || form.vpnPassword.value) {
+      secrets.vpnUser = form.vpnUser.value.trim();
+      secrets.vpnPassword = form.vpnPassword.value;
+    }
+  }
+  if (form.channel.value !== data.channel) settings.channel = form.channel.value;
+  return {settings, secrets};
+}
+
+function settingsProblem({settings, secrets}) {
+  if ('plexName' in settings && !/^[\p{L}\p{N}_][\p{L}\p{N}_ .()'-]{0,49}$/u.test(settings.plexName)) return 'Use up to 50 letters, numbers, spaces, dots, dashes or brackets for the Plex server name.';
+  if ('plexUrl' in settings && !/^(https?:\/\/[A-Za-z0-9.\[\]:-]+(:[0-9]{1,5})?\/?)?$/.test(settings.plexUrl)) return 'Use the Plex server’s address, such as http://192.168.1.10:32400.';
+  if ('backupDir' in settings && (!settings.backupDir.startsWith('/') || settings.backupDir.includes(','))) return 'Use a full path for the backup folder, starting with /, without commas.';
+  if (secrets.tmdbKey && !/^[A-Za-z0-9._-]{20,1024}$/.test(secrets.tmdbKey)) return 'That doesn’t look like a TMDB API key. Copy it again from TMDB’s API settings.';
+  if (secrets.plexToken && !/^[A-Za-z0-9_-]{10,200}$/.test(secrets.plexToken)) return 'That doesn’t look like a Plex token.';
+  if ('vpnUser' in secrets && (!secrets.vpnUser || !secrets.vpnPassword || /\s/.test(secrets.vpnUser + secrets.vpnPassword))) return 'Enter both the new NordVPN service username and password.';
+  return '';
+}
+
+function showSettingsChanges() {
+  const changes = settingsChanges();
+  const names = [...new Set([...Object.keys(changes.settings), ...Object.keys(changes.secrets).map(name => name === 'vpnPassword' ? 'vpnUser' : name)])]
+    .map(name => SETTING_LABELS[name] || name);
+  const line = $('#settings-changes');
+  line.classList.remove('is-problem');
+  line.textContent = names.length ? `Changed: ${names.join(', ')}.` : 'No changes.';
+  $('#settings-save').disabled = !names.length;
+  $('.settings-bar').classList.toggle('has-changes', names.length > 0);
+  $('#settings-reset').disabled = !names.length;
+  return names;
+}
+
+async function loadSettings() {
+  try {
+    const data = await get('/api/settings');
+    if (!data.configured) return;
+    fillSettings(data);
+  } catch (error) {
+    $('#settings-notice').textContent = `Could not load the settings: ${error.message}`;
+    $('#settings-notice').hidden = false;
+  }
+}
+
+function setupSettings() {
+  const form = $('#settings-form');
+  form.addEventListener('input', showSettingsChanges);
+  form.addEventListener('change', showSettingsChanges);
+  form.addEventListener('reset', () => setTimeout(() => settingsData && fillSettings(settingsData)));
+  $('#release-check').addEventListener('click', async () => {
+    $('#release-check').disabled = true;
+    try {
+      await post('/api/system/check', {});
+    } catch (error) {
+      $('#settings-notice').textContent = error.message;
+      $('#settings-notice').hidden = false;
+    }
+    setTimeout(system, 1500);
+  });
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const changes = settingsChanges();
+    const names = showSettingsChanges();
+    if (!names.length) return;
+    const problem = settingsProblem(changes);
+    if (problem) {
+      $('#settings-changes').textContent = problem;
+      $('#settings-changes').classList.add('is-problem');
+      return;
+    }
+    const vpn = changes.settings.vpnLocation || changes.settings.vpnProtocol || changes.secrets.vpnUser;
+    askPin({title: 'Save these settings?', verb: 'Save', busy: 'Starting…', icon: 'check',
+      detail: `Setup runs again with the new ${names.join(', ').toLowerCase()}. ${vpn ? 'The VPN reconnects and downloads pause for a minute or so. ' : ''}It takes a minute or two; follow it here.`},
+    code => post('/api/settings', {pin: code, ...changes}),
+    () => {
+      form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = '';
+      following = true;
+      lastRunState = 'running';
+      system();
+    });
+  });
+}
+
 let refreshing = false;
 /** "Fri 12 Dec" for upcoming dates, the year for older ones. */
 function discoverDate(item) {
@@ -1157,6 +1447,7 @@ async function refresh() {
   if (page === 'discover') jobs.push(discover());
   if (page === 'live') jobs.push(live(), watchHistory());
   if (page === 'overview') jobs.push(transferSummary());
+  if (page === 'settings' && !following) jobs.push(system());
   if (page === 'overview' || page === 'library') {
     jobs.push(activity());
     for (const library of Object.values(libraries)) jobs.push(loadLibrary(library));
@@ -1167,8 +1458,12 @@ async function refresh() {
   refreshing = false;
 }
 
-if (page === 'services' || page === 'backups') setupControls();
+if (page === 'services' || page === 'backups' || page === 'settings') setupControls();
 if (page === 'live') setupSpeedChart();
+if (page === 'settings') {
+  setupSettings();
+  loadSettings();
+}
 // Live figures move faster than the rest: every five seconds on Live, ten on the Overview's summary.
 if (page === 'live') setInterval(() => { if (!document.hidden) live(); }, 5000);
 if (page === 'overview') setInterval(() => { if (!document.hidden) transferSummary(); }, 10000);

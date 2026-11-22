@@ -9,12 +9,21 @@ const defaults = {
 };
 const commands = options => wizard.buildCommands({...defaults, ...options});
 const flat = command => command.replace(/ \\\n  /g, ' ');
+const LAUNCH = 'docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME';
 
-test('a new installation uses the defaults', () => {
-  const [fetch, check, install] = commands({});
-  assert.match(fetch.command, /git clone --depth 1/);
-  assert.strictEqual(install.command, 'python3 deploy/bootstrap/install.py \\\n  --media-path=/mnt/media \\\n  --enable-prowlarr \\\n  --enable-flaresolverr \\\n  --download-network=direct');
+test('a new installation runs from the image with the defaults, with nothing to clone', () => {
+  const [check, install] = commands({});
+  assert.strictEqual(flat(install.command), `${LAUNCH} ghcr.io/descalzi/martinflix:${wizard.DEFAULT_CHANNEL} install ` +
+    '--media-path=/mnt/media --enable-prowlarr --enable-flaresolverr --download-network=direct');
+  assert.ok(install.command.startsWith('docker run --rm -it \\\n  -v /var/run/docker.sock'));
   assert.ok(check.command.endsWith('--check'));
+  assert.doesNotMatch(install.command + check.command, /git|python3/);
+});
+
+test('the release channel picks the image', () => {
+  assert.match(commands({channel: 'stable'})[1].command, /martinflix:stable install/);
+  assert.match(commands({mode: 'update', changes: {route: 'keep', channel: 'stable'}})[1].command, /martinflix:stable update/);
+  assert.match(flat(commands({mode: 'update', changes: {route: 'keep', channel: 'stable'}})[1].command), /update --channel=stable$/);
 });
 
 test('custom answers become flags, quoting only when needed', () => {
@@ -26,26 +35,26 @@ test('custom answers become flags, quoting only when needed', () => {
 });
 
 test('an update keeps saved settings and only names a custom state directory', () => {
-  const [fetch, check, run] = commands({mode: 'update', lan: true, address: 'ignored', state: '/srv/martinflix'});
-  assert.match(fetch.command, /git pull --ff-only/);
-  assert.strictEqual(flat(run.command), 'python3 deploy/bootstrap/install.py --update --state-dir=/srv/martinflix');
-  assert.strictEqual(flat(check.command), 'python3 deploy/bootstrap/install.py --update --state-dir=/srv/martinflix --check');
+  const [check, run] = commands({mode: 'update', lan: true, address: 'ignored', state: '/srv/martinflix'});
+  const image = `ghcr.io/descalzi/martinflix:${wizard.DEFAULT_CHANNEL}`;
+  assert.strictEqual(flat(run.command), `${LAUNCH} ${image} update --state-dir=/srv/martinflix`);
+  assert.strictEqual(flat(check.command), `${LAUNCH} ${image} update --state-dir=/srv/martinflix --check`);
 });
 
 test('an update passes only the changes that were made', () => {
-  const [, , plain] = commands({mode: 'update', changes: {access: 'keep', route: 'keep'}});
-  assert.strictEqual(flat(plain.command), 'python3 deploy/bootstrap/install.py --update');
-  const [, , changed] = commands({mode: 'update', changes: {access: 'lan', address: '192.168.4.166', vpn: true, exit: 'United Kingdom',
+  const [, plain] = commands({mode: 'update', changes: {access: 'keep', route: 'keep'}});
+  assert.match(flat(plain.command), / update$/);
+  const [, changed] = commands({mode: 'update', changes: {access: 'lan', address: '192.168.4.166', vpn: true, exit: 'United Kingdom',
     route: 'vpn', bazarr: true, media: '/mnt/media'}});
-  assert.strictEqual(flat(changed.command), "python3 deploy/bootstrap/install.py --update --dashboard-bind=192.168.4.166 " +
-    "--media-path=/mnt/media --enable-vpn --vpn-country='United Kingdom' --enable-bazarr --download-network=vpn");
+  assert.ok(flat(changed.command).endsWith(" update --dashboard-bind=192.168.4.166 " +
+    "--media-path=/mnt/media --enable-vpn --vpn-country='United Kingdom' --enable-bazarr --download-network=vpn"));
   assert.throws(() => commands({mode: 'update', changes: {access: 'lan', address: 'nope'}}), /LAN IPv4/);
 });
 
 test('a reset can be checked before anything is archived', () => {
-  const [, check, run] = commands({mode: 'reset'});
-  assert.match(flat(check.command), /--reset --check$/);
-  assert.match(run.command, /--reset$/);
+  const [check, run] = commands({mode: 'reset'});
+  assert.match(flat(check.command), / reset --media-path.* --check$/);
+  assert.match(flat(run.command), /martinflix:\w+ reset --media-path/);
 });
 
 test('invalid answers explain the fix', () => {
@@ -75,19 +84,19 @@ test('Discover is on by default; switching it off or using your own key become f
   const off = wizard.installArguments({...defaults, discover: false, ownKey: true, region: 'IE'});
   assert.deepStrictEqual(off.filter(arg => arg.includes('discover') || arg.includes('tmdb')), ['--discover=off']);
   const update = wizard.installArguments({mode: 'update', changes: {route: 'keep', page: 'on', discover: true, region: 'US'}});
-  assert.deepStrictEqual(update, ['--update', '--discover=on', '--set-tmdb-key', '--discover-region=US']);
+  assert.deepStrictEqual(update, ['--discover=on', '--set-tmdb-key', '--discover-region=US']);
 });
 
 test('a Plex address connects Plex and asks setup for its token', () => {
   const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, discover: true, plexUrl: 'http://192.168.5.204:32400'});
   assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--plex-url=http://192.168.5.204:32400', '--set-plex-token']);
-  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexToken: true}}), ['--update', '--set-plex-token']);
+  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexToken: true}}), ['--set-plex-token']);
 });
 
 test('Plex is installed with the media directory, and then no outside Plex address is used', () => {
   const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, plex: true, plexUrl: 'http://elsewhere:32400'});
   assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--enable-plex']);
-  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plex: true}}), ['--update', '--enable-plex']);
+  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plex: true}}), ['--enable-plex']);
 });
 
 test('a Plex name is passed only when it differs from martinflix', () => {
@@ -95,13 +104,13 @@ test('a Plex name is passed only when it differs from martinflix', () => {
   assert.deepStrictEqual(wizard.installArguments({...base, plexName: 'martinflix'}), ['--media-path=/mnt/media', '--enable-plex']);
   assert.ok(wizard.installArguments({...base, plexName: 'martinflix test'}).includes("--plex-name='martinflix test'"));
   assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexName: 'martinflix-test'}}),
-    ['--update', '--plex-name=martinflix-test']);
+    ['--plex-name=martinflix-test']);
 });
 
 test('a backup folder is passed on and must be an absolute path', () => {
   const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, backupDir: '/mnt/martinflix/Backups'});
   assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--backup-dir=/mnt/martinflix/Backups']);
   assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', backupDir: '/mnt/nas/Backups'}}),
-    ['--update', '--backup-dir=/mnt/nas/Backups']);
+    ['--backup-dir=/mnt/nas/Backups']);
   assert.throws(() => wizard.validateStep('options', {...defaults, backupDir: 'Backups'}), /Backup folder must be an absolute/);
 });

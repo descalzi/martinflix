@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Start or resume the first-run MartinFlix Compose project."""
+"""Set up, update or reset MartinFlix on this machine.
+
+This runs inside the MartinFlix image, started by its launcher (launch.py), which gives it this machine's folders at
+the same paths, this machine's network, and the Docker socket. Start it with docker run, as the launcher explains.
+"""
 import argparse
 import errno
 import getpass
@@ -29,7 +33,15 @@ from configure import (AppApi, BazarrApi, TransmissionRpc, configure_apps, confi
                        ensure_bazarr_login, seed_transmission_defaults)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
-REPO_DIR = COMPOSE_FILE.parents[2]
+APP_DIR = COMPOSE_FILE.parents[2]
+# This machine's /dev as setup sees it. The launcher mounts it read-only at this path.
+HOST_DEV = Path(os.environ.get('MARTINFLIX_HOST_DEV', '/dev'))
+IMAGE_REPO = os.environ.get('MARTINFLIX_IMAGE_REPO', 'ghcr.io/descalzi/martinflix')
+VERSION = os.environ.get('MARTINFLIX_VERSION', 'dev')
+REVISION = os.environ.get('MARTINFLIX_REVISION', '')
+# The image setup runs from, by its version. The dashboard and controller run from the same image.
+OWN_IMAGE = f'{IMAGE_REPO}:{VERSION}'
+CHANNELS = ('edge', 'stable')
 APPS = ('sonarr', 'radarr')
 DOCKER_INSTALL = 'https://docs.docker.com/engine/install/'
 COMPOSE_INSTALL = 'https://docs.docker.com/compose/install/linux/'
@@ -102,9 +114,8 @@ def compose_project(state, previous, fresh=False):
 
 def media_root(value, state):
     path = Path(value).expanduser().resolve()
-    repo = COMPOSE_FILE.parents[2]
-    if path.is_relative_to(state) or state.is_relative_to(path) or path.is_relative_to(repo) or repo.is_relative_to(path):
-        raise ValueError('Choose a dedicated media directory separate from the checkout and installer state.')
+    if path.is_relative_to(state) or state.is_relative_to(path):
+        raise ValueError('Choose a dedicated media directory separate from the installer state.')
     if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
         raise ValueError(f'The media directory must already exist and be writable: {path}')
     for name in (*MEDIA_FOLDERS, *DOWNLOAD_FOLDERS):
@@ -197,6 +208,56 @@ def prepare_control_pin(path, change=False):
     raise ValueError('No PIN was set. Rerun setup to choose one.')
 
 
+TMDB_KEY = re.compile(r'[A-Za-z0-9._-]{20,1024}')
+PLEX_TOKEN = re.compile(r'[A-Za-z0-9_-]{10,200}')
+VPN_CREDENTIAL = re.compile(r'[^\s]{1,200}')
+
+
+def read_settings_file(path):
+    """Secrets the dashboard sent along with changed settings, through the controller. The file is read once and
+    removed straight away, whatever is in it."""
+    if path is None:
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError('The settings from the dashboard could not be read. Save them again.') from exc
+    finally:
+        path.unlink(missing_ok=True)
+    if not isinstance(data, dict) or not all(isinstance(value, str) for value in data.values()):
+        raise ValueError('The settings from the dashboard are invalid. Save them again.')
+    for name, pattern, problem in (('tmdbKey', TMDB_KEY, 'That doesn’t look like a TMDB API key.'),
+                                   ('plexToken', PLEX_TOKEN, 'That doesn’t look like a Plex token.'),
+                                   ('vpnUser', VPN_CREDENTIAL, 'Enter the NordVPN service username.'),
+                                   ('vpnPassword', VPN_CREDENTIAL, 'Enter the NordVPN service password.')):
+        value = data.get(name)
+        if value and not pattern.fullmatch(value):
+            raise ValueError(problem)
+    if bool(data.get('vpnUser')) != bool(data.get('vpnPassword')):
+        raise ValueError('Enter both the NordVPN service username and password.')
+    return {key: value for key, value in data.items() if key in ('tmdbKey', 'plexToken', 'vpnUser', 'vpnPassword')}
+
+
+def apply_settings_secrets(given, secret_dir, vpn_dir):
+    """Store the secrets sent from the dashboard. Returns True when the VPN credentials changed."""
+    for name, path, kept, removed in (('tmdbKey', secret_dir / 'tmdb-key', 'Discover will use your TMDB key.',
+                                       'Discover will use MartinFlix’s TMDB key.'),
+                                      ('plexToken', secret_dir / 'plex-token', 'Plex token saved.', 'Plex disconnected.')):
+        if name in given:
+            if given[name]:
+                write_secret(path, given[name])
+            else:
+                path.unlink(missing_ok=True)
+            print(f'   {kept if given[name] else removed}', flush=True)
+    if given.get('vpnUser'):
+        private_directory(vpn_dir)
+        write_secret(vpn_dir / 'openvpn_user', given['vpnUser'], trailing_newline=False)
+        write_secret(vpn_dir / 'openvpn_password', given['vpnPassword'], trailing_newline=False)
+        print('   New NordVPN service credentials saved.', flush=True)
+        return True
+    return False
+
+
 TMDB_KEY_HELP = """
 Discover uses MartinFlix's own TMDB API key unless you give it yours. To get one, sign in at
 https://www.themoviedb.org, open Settings → API, request a Developer key, and copy the "API Key" (or the longer
@@ -209,7 +270,7 @@ def prepare_tmdb_key(path):
         raise ValueError('Run setup in a terminal to enter the TMDB API key.')
     print(TMDB_KEY_HELP, flush=True)
     key = getpass.getpass('TMDB API key or read access token (hidden as you type or paste): ').strip()
-    if key and not re.fullmatch(r'[A-Za-z0-9._-]{20,1024}', key):
+    if key and not TMDB_KEY.fullmatch(key):
         raise ValueError('That doesn’t look like a TMDB API key. Copy it again from TMDB’s API settings.')
     if key:
         write_secret(path, key)
@@ -229,7 +290,7 @@ def prepare_plex_token(path):
         raise ValueError('Run setup in a terminal to enter the Plex token.')
     print(PLEX_TOKEN_HELP, flush=True)
     token = getpass.getpass('Plex token (hidden as you type or paste): ').strip()
-    if token and not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', token):
+    if token and not PLEX_TOKEN.fullmatch(token):
         raise ValueError('That doesn’t look like a Plex token. Copy it again from the X-Plex-Token part of the address.')
     if token:
         write_secret(path, token)
@@ -244,7 +305,7 @@ TRANSIENT_PULL = re.compile(r'toomanyrequests|too many requests|i/o timeout|TLS 
                             re.IGNORECASE)
 PULL_PAUSES = (10, 30, 60)
 PULL_WORKERS = 4
-APP_LABELS = {'gluetun': 'Gluetun (VPN)', 'flaresolverr': 'FlareSolverr', 'transmission-auth': 'Transmission helper'}
+APP_LABELS = {'gluetun': 'Gluetun (VPN)', 'flaresolverr': 'FlareSolverr'}
 # A layer line from docker pull, such as "3f4ca61aafcd: Pull complete".
 LAYER_LINE = re.compile(r'^([0-9a-f]{12,64}): (.+)$')
 
@@ -439,7 +500,21 @@ PLEX_SETTINGS = {
     'PublishServerOnPlexOnlineKey': '1', 'ManualPortMappingMode': '0', 'IPNetworkType': 'dualstack',
 }
 PLEX_DEFAULT_NAME = 'martinflix'
-PREROLL_DIR = REPO_DIR / 'assets' / 'preroll'
+PREROLL_DIR = APP_DIR / 'assets' / 'preroll'
+
+
+def sync_prerolls(target, source=PREROLL_DIR):
+    """Plex plays pre-rolls from the state folder: the clips in this image, added, replaced or removed to match."""
+    private_directory(target)
+    wanted = {clip.name: clip for clip in source.glob('*.mp4')}
+    for clip in target.glob('*.mp4'):
+        if clip.name not in wanted:
+            clip.unlink()
+    for name, clip in wanted.items():
+        copy = target / name
+        if not copy.is_file() or copy.stat().st_size != clip.stat().st_size or \
+                hashlib.sha256(copy.read_bytes()).digest() != hashlib.sha256(clip.read_bytes()).digest():
+            shutil.copyfile(clip, copy)
 
 
 def preroll_list(folder=PREROLL_DIR):
@@ -539,7 +614,8 @@ def seed_plex_libraries(token, language='en-US', opener=LOCAL_OPENER.open):
 
 
 def docker_socket():
-    """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH."""
+    """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH.
+    The launcher gives setup this machine's socket at the usual path and says where it is on this machine."""
     host = os.environ.get('DOCKER_HOST', '')
     if not host:
         try:
@@ -551,7 +627,7 @@ def docker_socket():
         return None
     path = Path(host[len('unix://'):])
     try:
-        return path, path.stat().st_gid
+        return Path(os.environ.get('MARTINFLIX_DOCKER_SOCKET') or path), path.stat().st_gid
     except OSError:
         return None
 
@@ -855,9 +931,11 @@ def reset_installation(state, project):
             raise ValueError('The installation has already been reset.')
         environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state), MARTINFLIX_UID=str(os.getuid()),
                            MARTINFLIX_GID=str(os.getgid()), MARTINFLIX_DASHBOARD_BIND='127.0.0.1',
-                           MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878')
+                           MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878',
+                           MARTINFLIX_IMAGE=OWN_IMAGE, MARTINFLIX_BACKUP_DIR='/nonexistent',
+                           MARTINFLIX_BACKUP_HOST_DIR='/nonexistent')
         subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE),
-                        '--profile', 'control', 'down', '--remove-orphans'], env=environment, timeout=120, check=True)
+                        'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
         managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
                    'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun',
@@ -919,7 +997,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     vpn_city = args.vpn_city or ('' if args.vpn_country else previous.get('vpn_city'))
     if vpn_city is None:
         vpn_city = '' if vpn_country else os.environ.get('MARTINFLIX_VPN_CITY', 'Prague')
-    if vpn and not Path('/dev/net/tun').is_char_device():
+    if vpn and not (HOST_DEV / 'net/tun').is_char_device():
         raise ValueError('The VPN needs /dev/net/tun on this VM. Try sudo modprobe tun. If it is still unavailable, '
                          'enable TUN access in your VM settings and rerun setup.')
 
@@ -955,7 +1033,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
             compose += ['--profile', app]
     if plex:
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.plex.yaml')), '--profile', 'plex']
-        if Path('/dev/dri').is_dir():
+        if (HOST_DEV / 'dri').is_dir():
             # A GPU lets Plex transcode in hardware (with Plex Pass). The image gives Plex access to it.
             gpu_overlay = overlay_file.with_name('plex-gpu-compose.json')
             gpu_overlay.write_text(json.dumps({'services': {'plex': {'devices': ['/dev/dri:/dev/dri']}}}))
@@ -966,7 +1044,10 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     environment.update(MARTINFLIX_VPN_PROVIDER=args.vpn_provider, MARTINFLIX_VPN_COUNTRY=vpn_country, MARTINFLIX_VPN_CITY=vpn_city,
                        MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
-    environment['MARTINFLIX_REPO_DIR'] = str(REPO_DIR)
+    environment['MARTINFLIX_IMAGE'] = OWN_IMAGE
+    channel = args.channel or previous.get('channel') or (os.environ.get('MARTINFLIX_CHANNEL') if
+                                                          os.environ.get('MARTINFLIX_CHANNEL') in CHANNELS else 'edge')
+    options['channel'] = channel
     region = (args.discover_region or previous.get('discover_region') or 'GB').upper()
     if not re.fullmatch(r'[A-Z]{2}', region):
         raise ValueError('Use a two-letter country code for --discover-region, such as GB or US.')
@@ -986,11 +1067,10 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     options['plex_url'] = plex_url.rstrip('/')
     environment['MARTINFLIX_PLEX_URL'] = options['plex_url']
     control_socket = docker_socket()
-    if control_socket:
-        compose += ['--profile', 'control']
-        environment.update(MARTINFLIX_DOCKER_SOCKET=str(control_socket[0]), MARTINFLIX_DOCKER_GID=str(control_socket[1]))
-    elif 'transmission' in downloads:
-        compose += ['--profile', 'transmission-auth']
+    if not control_socket:
+        raise ValueError('Setup needs Docker on this machine’s local socket. Start it with the docker run command in '
+                         'the MartinFlix setup guide, which passes /var/run/docker.sock.')
+    environment.update(MARTINFLIX_DOCKER_SOCKET=str(control_socket[0]), MARTINFLIX_DOCKER_GID=str(control_socket[1]))
     app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS))
 
     for name in ('dashboard-secrets', 'dashboard-auth', *app_dirs):
@@ -1018,7 +1098,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'vpn': vpn, 'vpn_country': vpn_country, 'vpn_city': vpn_city, 'options': options, 'ports': ports,
         'bind': bind, 'compose': compose, 'environment': environment, 'app_dirs': app_dirs,
         'bootstrapping_arr': bootstrapping_arr, 'bootstrapping_prowlarr': bootstrapping_prowlarr, 'bindings': bindings,
-        'control': bool(control_socket), 'change_pin': bool(getattr(args, 'change_pin', False)),
+        'control': True, 'change_pin': bool(getattr(args, 'change_pin', False)),
         'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
         'set_plex_token': bool(getattr(args, 'set_plex_token', False)),
         'plex': plex,
@@ -1032,6 +1112,8 @@ def refuse_root():
 
 def install(args, overlay_file):
     refuse_root()
+    # Secrets from the dashboard are read, and their file removed, before anything else can stop setup.
+    given = read_settings_file(args.settings_file)
     print(BANNER, flush=True)
     print('1. Checking Docker, storage, and network ports…', flush=True)
     docker_root = preflight_docker()
@@ -1072,6 +1154,7 @@ def install(args, overlay_file):
                          'an existing, writable folder, such as a mounted NAS share. Setup creates TV Shows, Movies '
                          'and downloads inside it.')
     plan = plan_installation(args, target, previous, project, overlay_file, fresh_arr=args.reset)
+    plan['secrets'] = given
     check_ports(plan['bindings'], published)
     try:
         if shutil.disk_usage(docker_root).free < 2 * 1024**3:
@@ -1104,6 +1187,11 @@ def current_settings(options):
         'VPN': f'NordVPN · {options.get("vpn_city") or options.get("vpn_country") or "Automatic"}' if vpn else 'Not installed',
         'Download apps': ', '.join(apps) or 'None',
         'Download route': (options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')) if apps else 'None',
+        'Release channel': options.get('channel') or 'Not set',
+        'Discover': ('Off' if options.get('discover') == 'off' else f'On · {options.get("discover_region") or "GB"}'),
+        'Backup folder': options.get('backup_dir') or 'Not set',
+        **({'Plex server name': options.get('plex_name') or PLEX_DEFAULT_NAME} if options.get('plex') else {}),
+        **({'Plex address': options['plex_url']} if options.get('plex_url') else {}),
         **{f'{name.replace("_", " ").capitalize()} port': str(port) for name, port in (options.get('ports') or {}).items()},
     }
 
@@ -1123,6 +1211,8 @@ def keep_flags(options):
         flags += ['--discover', 'off']
     if options.get('plex_url'):
         flags += ['--plex-url', options['plex_url']]
+    if options.get('channel') in CHANNELS:
+        flags += ['--channel', options['channel']]
     if options.get('vpn'):
         flags.append('--enable-vpn')
         if options.get('vpn_city'):
@@ -1258,7 +1348,9 @@ def run_installation(plan, state, previous, mode='install'):
             write_secret(password, secrets.token_urlsafe(32))
         temporary_password = password.read_text().rstrip('\r\n')
         personal_password_set = (auth_dir / 'password-hash').is_file()
-        vpn_credentials_changed = prepare_vpn_secrets(state / 'download-secrets') if vpn else False
+        given = plan.get('secrets') or {}
+        forced = apply_settings_secrets(given, secret_dir, state / 'download-secrets') if given else False
+        vpn_credentials_changed = (prepare_vpn_secrets(state / 'download-secrets') if vpn else False) or (forced and vpn)
         if plan['set_tmdb_key']:
             prepare_tmdb_key(secret_dir / 'tmdb-key')
         if plan['set_plex_token']:
@@ -1297,8 +1389,8 @@ def run_installation(plan, state, previous, mode='install'):
         if bootstrapping_arr:
             arr_address = '127.0.0.1'
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
-        sidecars = ['transmission-auth'] if 'transmission' in downloads and not plan['control'] else []
-        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *sidecars, *(['plex'] if plan['plex'] else [])]
+        # MartinFlix's own image is the one setup runs from, so it is already here.
+        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *(['plex'] if plan['plex'] else [])]
         print('2. Downloading the latest app images. The first download may take a few minutes…', flush=True)
         if (details := pull_images(compose, environment, images)) is not None:
             if details:
@@ -1319,7 +1411,7 @@ def run_installation(plan, state, previous, mode='install'):
                          ['up', '-d', '--wait', '--wait-timeout', '120', *APPS])
         step = 4
         prowlarr_key = None
-        services = (['gluetun'] if vpn else []) + downloads + sidecars
+        services = (['gluetun'] if vpn else []) + downloads
         download_address = '127.0.0.1' if bootstrapping_prowlarr else str(bind)
         environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
         # New credentials only reach a new Gluetun container, and apps sharing its network must follow it.
@@ -1390,6 +1482,7 @@ def run_installation(plan, state, previous, mode='install'):
             step += 1
             plex_config = state / 'plex'
             private_directory(plex_config)
+            sync_prerolls(state / 'preroll')
             # Asked just before Plex starts, because a claim code expires after four minutes.
             claim = '' if plex_token(plex_config) else plex_claim_code()
             if claim:
@@ -1405,7 +1498,7 @@ def run_installation(plan, state, previous, mode='install'):
             if token:
                 # Live reads now playing and watch history with the server owner's token.
                 write_secret(secret_dir / 'plex-token', token)
-                # The name and pre-rolls follow setup's options and the clips in the repo, whenever they change.
+                # The name and pre-rolls follow setup's options and the clips in the image, whenever they change.
                 tracked = plex_tracked_settings(options.get('plex_name') or PLEX_DEFAULT_NAME)
                 if options.get('plex_tracked_settings') != tracked:
                     try:
@@ -1432,27 +1525,36 @@ def run_installation(plan, state, previous, mode='install'):
             else:
                 print('   Plex isn’t linked to a Plex account yet. Open Plex Web to claim it, then rerun setup with '
                       '--update to connect Live, apply the default settings and add the libraries.', flush=True)
-        web = ['dashboard']
-        if plan['control']:
-            # The controller runs Compose exactly as setup does, with the final addresses and ports.
-            write_secret(state / 'controller' / 'compose.json', json.dumps({
-                'project': project, 'compose': compose[1:], 'stateDir': str(state),
-                'backupDir': environment['MARTINFLIX_BACKUP_DIR'], 'host': socket.gethostname(),
-                'env': {key: value for key, value in environment.items() if key.startswith('MARTINFLIX_')},
-                **({'transmissionPasswordFile': str(state / 'download-secrets' / 'transmission_password')}
-                   if 'transmission' in downloads else {})}))
-            web.append('controller')
-            if 'transmission' in downloads:
-                # The controller applies password changes now, so the helper from earlier installs goes.
-                subprocess.run(compose + ['--profile', 'transmission-auth', 'rm', '--stop', '--force', 'transmission-auth'],
-                               env=environment, capture_output=True, timeout=120)
-        compose_step(f'{step + 1}. Dashboard. Building it from this copy of MartinFlix…', ['build', '--pull', '--quiet', *web])
+        web = ['dashboard', 'controller']
+        # The controller runs Compose exactly as setup does, with the final addresses and ports, and starts setup
+        # again, from a newer image, to update MartinFlix or apply settings changed in the dashboard.
+        home = Path(os.environ.get('HOME') or Path.home())
+        try:
+            previous_version = json.loads((state / 'controller' / 'compose.json').read_text()).get('version')
+        except (OSError, ValueError):
+            previous_version = None
+        write_secret(state / 'controller' / 'compose.json', json.dumps({
+            'project': project, 'compose': compose[1:], 'stateDir': str(state),
+            'backupDir': environment['MARTINFLIX_BACKUP_DIR'], 'host': socket.gethostname(),
+            'image': OWN_IMAGE, 'version': VERSION, 'revision': REVISION, 'channel': options['channel'],
+            'setup': {'home': str(home), 'runAs': f'{os.getuid()}:{os.getgid()}',
+                      'socket': environment['MARTINFLIX_DOCKER_SOCKET']},
+            'env': {key: value for key, value in environment.items() if key.startswith('MARTINFLIX_')},
+            **({'transmissionPasswordFile': str(state / 'download-secrets' / 'transmission_password')}
+               if 'transmission' in downloads else {})}))
+        # Containers from installs that ran the dashboard from a copy of the repo, or the Transmission helper.
+        subprocess.run(['docker', 'rm', '--force', f'{project}-transmission-auth-1'], env=environment,
+                       capture_output=True, timeout=60)
         before_build = container_states(project, environment)
-        compose_step('   Starting it if anything changed…', ['up', '-d', '--wait', '--wait-timeout', '90', *web])
+        compose_step(f'{step + 1}. MartinFlix {VERSION}: dashboard and controller…',
+                     ['up', '-d', '--wait', '--wait-timeout', '90', *web])
         after_build = container_states(project, environment)
+        # Images that older installs built from a copy of the repo.
+        subprocess.run(['docker', 'image', 'rm', f'{project}-dashboard', f'{project}-controller'], env=environment,
+                       capture_output=True, timeout=60)
         for name in sorted(web, key=lambda item: app_label(item).casefold()):
             outcome = restart_outcome(before_build.get(name), after_build.get(name), False)
-            if outcome == 'restarted with new settings':
+            if outcome == 'restarted with new settings' and previous_version != VERSION:
                 outcome = 'restarted with the new version'
             if outcome:
                 print(f'   {app_label(name):<20} {outcome}', flush=True)
@@ -1485,11 +1587,9 @@ for app in ('sonarr', 'radarr'):
         print(f'{listed} use admin and your dashboard password. Changing it in the dashboard updates every app.')
     else:
         print(f'{listed} use admin and the same temporary password. Setting your own password updates every app.')
-    if plan['control']:
-        print('\nRestart and update apps from the dashboard’s Services page with your PIN. '
-              'Change it under Change PIN in the dashboard; if you forget it, rerun setup with --change-pin.')
-    else:
-        print('\nRestarts and updates from the dashboard need Docker on a local socket, so they are off on this host.')
+    print('\nRestart and update apps from the dashboard’s Services page with your PIN. Update MartinFlix itself and '
+          'change its settings under Settings. Change the PIN under Change PIN in the dashboard; if you forget it, '
+          'run the update with --change-pin.')
     if vpn:
         print(f'NordVPN exit: {plan["vpn_city"] or plan["vpn_country"] or "Automatic"}')
     if downloads:
@@ -1543,6 +1643,10 @@ def build_parser():
                         help='Use your own TMDB API key for Discover instead of MartinFlix’s, or go back to it.')
     parser.add_argument('--discover-region',
                         help='Two-letter country for Discover’s cinema and streaming lists. Defaults to GB.')
+    parser.add_argument('--channel', choices=CHANNELS,
+                        help='Which MartinFlix releases the dashboard offers: stable (version tags) or edge (every '
+                             'change). Defaults to the channel of the image you ran.')
+    parser.add_argument('--settings-file', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--change-pin', action='store_true',
                         help='Choose a new PIN for restarting and updating apps from the dashboard.')
     parser.add_argument('--download-client', choices=['transmission'])
@@ -1567,18 +1671,13 @@ def build_parser():
     return parser
 
 
-def main():
+def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args()
-    if sys.platform != 'linux':
-        parser.exit(1, 'Run this installer on a Linux VM.\n')
-    if sys.version_info < (3, 9):
-        version = '.'.join(map(str, sys.version_info[:3]))
-        parser.exit(1, f'Python {version} is too old for this installer. Python 3.9 or newer is required.\n'
-                    'Run cat /etc/os-release to identify your Linux distribution. Install a newer Python 3 '
-                    'through its package manager, or upgrade the Linux release if it offers only older Python.\n'
-                    'Keep the system Python in place. If you installed a newer version alongside it, run it by name, '
-                    'for example: python3.11 deploy/bootstrap/install.py --check\n')
+    args = parser.parse_args(argv)
+    if os.environ.get('MARTINFLIX_STAGE') != 'run':
+        parser.exit(1, 'Setup now runs from the MartinFlix image, with no copy of the repo. Start it with:\n'
+                       '  docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
+                       '    ghcr.io/descalzi/martinflix:edge install --help\n')
     os.umask(0o077)
     try:
         with tempfile.TemporaryDirectory(prefix='martinflix-compose-') as directory:

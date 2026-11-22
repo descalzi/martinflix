@@ -14,7 +14,6 @@
     "nordvpn": {"name": "Gluetun", "role": "NordVPN gateway", "icon": "gluetun", "note": "No web page. It only carries the download apps’ traffic."},
     "dashboard": {"name": "Dashboard", "role": "This page", "icon": "martinflix-mark"},
     "controller": {"name": "Controller", "role": "Restarts and updates apps", "icon": "martinflix-mark", "note": "No web page. Only the dashboard can reach it."},
-    "transmission-auth": {"name": "Transmission login", "role": "Keeps Transmission’s password in step", "icon": "transmission", "note": "No web page. It applies your dashboard password to Transmission."},
     "transmission-daemon": {"name": "Transmission", "role": "Downloads", "icon": "transmission", "web": {"port": 9091}, "installer": {"env": "TRANSMISSION", "localOnly": true}},
     "flaresolverr": {"name": "FlareSolverr", "role": "Indexer support", "icon": "flaresolverr", "note": "No web page. Prowlarr calls it in the background."},
     "prowlarr": {"name": "Prowlarr", "role": "Indexer management", "icon": "prowlarr", "web": {"port": 9696}, "installer": {"env": "PROWLARR", "localOnly": true}},

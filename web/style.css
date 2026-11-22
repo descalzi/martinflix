@@ -497,8 +497,9 @@
     .brand-mark { width: 30px; height: 30px; }
     .rail-foot { grid-auto-flow: column; gap: var(--space-1); margin: 0 0 0 auto; padding: 0; border: 0; }
     .rail-foot a span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    .nav { order: 3; flex-basis: 100%; grid-auto-flow: column; grid-auto-columns: 1fr; }
-    .nav a { flex-direction: column; justify-content: center; gap: 2px; min-height: 52px; padding: var(--space-1); font-size: var(--text-xs); }
+    /* Seven pages fit across a phone: each as wide as its label, scrolling sideways only if they can't. */
+    .nav { order: 3; flex-basis: 100%; grid-auto-flow: column; grid-auto-columns: auto; justify-content: space-between; gap: 0; overflow-x: auto; scrollbar-width: none; }
+    .nav a { flex-direction: column; justify-content: center; gap: 2px; min-height: 52px; padding: var(--space-1) 3px; font-size: .75rem; white-space: nowrap; }
     .nav-flag { display: none; }
     .status-strip { grid-template-columns: minmax(0, 1fr); }
     .status-item { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--space-3); }
@@ -518,4 +519,69 @@
     .search, .search input { width: 100%; }
     .table th:nth-child(2), .table td:nth-child(2) { display: none; }
   }
+}
+
+@layer pages {
+  /* Overview: a newer MartinFlix is ready. */
+  .update-banner {
+    display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: var(--radius);
+    background: var(--tint); color: var(--fg); text-decoration: none;
+  }
+  .update-banner:hover { border-color: var(--accent); }
+  .update-banner > span { flex: 1; min-width: 0; }
+  .update-banner .icon { flex: none; color: var(--accent); }
+  .update-banner span span { color: var(--fg-muted); }
+  .nav-flag-new { background: var(--mint); color: var(--forest); }
+
+  /* Settings */
+  .settings { display: grid; gap: var(--space-5); }
+  .settings-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: var(--space-4) var(--space-5); align-items: start; }
+  .settings-fields > .switch { grid-column: 1 / -1; }
+  fieldset.field { border: 0; padding: 0; margin: 0; }
+  fieldset.field legend { padding: 0; margin-bottom: var(--space-1); font-weight: 600; font-size: var(--text-sm); }
+  .field input[type="text"], .field input[type="password"], .field input[type="url"] {
+    width: 100%; min-height: 44px; padding: 0 var(--space-3);
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  }
+  .field input:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 40%, transparent); outline-offset: 0; border-color: var(--accent); }
+  .optional { margin-left: var(--space-1); color: var(--fg-muted); font-weight: 400; }
+  .switch, .check { display: inline-flex; align-items: center; gap: var(--space-3); min-height: 44px; font-weight: 600; cursor: pointer; }
+  .check { min-height: 36px; font-weight: 500; font-size: var(--text-sm); }
+  .switch input { appearance: none; flex: none; position: relative; width: 44px; height: 26px; margin: 0; border-radius: var(--radius-pill); background: var(--border-strong); cursor: pointer; transition: background 160ms var(--ease-out); }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow); transition: transform 160ms var(--ease-out); }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { transform: translateX(18px); }
+  .switch input:focus-visible, .check input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  .choice-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: var(--space-3); border: 0; padding: 0; margin: 0; }
+  .choice { position: relative; display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3) var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); cursor: pointer; }
+  .choice input { margin: 3px 0 0; accent-color: var(--accent); }
+  .choice strong { display: block; }
+  .choice span { color: var(--fg-muted); font-size: var(--text-sm); }
+  .choice strong { color: var(--fg); font-size: var(--text-md); }
+  .choice:has(input:checked) { border-color: var(--accent); background: var(--tint); }
+  /* Stays in view while there are changes to save, so they are never left behind by scrolling. */
+  .settings-bar.has-changes { position: sticky; bottom: var(--space-3); z-index: 2; }
+  .settings-bar {
+    display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .settings-bar p { flex: 1 1 240px; color: var(--fg-muted); font-size: var(--text-sm); }
+  .settings-bar p.is-problem { color: var(--crit); font-weight: 500; }
+  .settings[inert] { opacity: .6; }
+
+  .release-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; padding: var(--space-4); border-radius: var(--radius-sm); background: var(--tint); }
+  .release-card h3 { font-size: var(--text-lg); }
+  .release-current { display: flex; align-items: center; gap: var(--space-2); color: var(--fg-muted); }
+  .release-current .icon { color: var(--ok); flex: none; }
+  .change-list { display: grid; gap: 0; margin: var(--space-4) 0 var(--space-2); }
+  .change-list li { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); font-size: var(--text-sm); }
+  .change-list li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+  .change-list li > .muted { flex: none; white-space: nowrap; }
+  .setup-log {
+    max-height: 420px; overflow: auto; margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
+    background: var(--forest); color: var(--rail-fg); font: .8125rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .setup-log:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 }

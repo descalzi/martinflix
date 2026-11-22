@@ -1,7 +1,11 @@
 'use strict';
 
-const REPOSITORY = 'https://github.com/descalzi/martinflix.git';
-const INSTALLER = 'python3 deploy/bootstrap/install.py';
+const IMAGE = 'ghcr.io/descalzi/martinflix';
+// The channel a new installation follows until it is changed in the dashboard. Stable is published from version tags;
+// until the first one exists, new installations follow edge.
+const DEFAULT_CHANNEL = 'edge';
+// Setup runs from the MartinFlix image. It needs the Docker socket, and your home folder for its state.
+const LAUNCH = ['docker run --rm -it', '-v /var/run/docker.sock:/var/run/docker.sock', '-v "$HOME:$HOME" -e HOME'];
 const portOptions = [
   ['dashboard', 'Dashboard', 8765],
   ['sonarr', 'Sonarr', 8989],
@@ -28,8 +32,7 @@ function shellQuote(value) {
 
 /** One flag per line keeps long commands readable; the backslashes keep them valid to paste. */
 function formatCommand(parts) {
-  const line = parts.join(' ');
-  return line.length <= 64 ? line : parts.join(' \\\n  ');
+  return parts.join(' \\\n  ');
 }
 
 function checkAddress(address) {
@@ -117,6 +120,7 @@ function changeArguments(change) {
   if (change.page && change.page !== 'keep') args.push('--discover=' + change.page);
   if (change.discover) args.push('--set-tmdb-key');
   if (change.region && change.region !== 'keep') args.push('--discover-region=' + change.region);
+  if (change.channel && change.channel !== 'keep') args.push('--channel=' + change.channel);
   return args;
 }
 
@@ -124,7 +128,6 @@ function installArguments(options) {
   const mode = options.mode || 'new';
   const args = [];
   if (mode === 'update') {
-    args.push('--update');
     validateStep('location', options);
     validateStep('changes', options);
     if (options.state) args.push('--state-dir=' + shellQuote(options.state));
@@ -154,32 +157,33 @@ function installArguments(options) {
   if (options.discover === false) args.push('--discover=off');
   if (options.discover !== false && options.ownKey) args.push('--set-tmdb-key');
   if (options.discover !== false && options.region && options.region !== 'GB') args.push('--discover-region=' + options.region);
-  if (mode === 'reset') args.push('--reset');
   return args;
+}
+
+function channelOf(options) {
+  const chosen = (options.mode || 'new') === 'update' ? options.changes?.channel : options.channel;
+  return chosen === 'stable' || chosen === 'edge' ? chosen : DEFAULT_CHANNEL;
 }
 
 /** The ordered commands for a task. Each has a title, an optional note, and the text to copy. */
 function buildCommands(options) {
   const mode = options.mode || 'new';
   const args = installArguments(options);
-  const install = formatCommand([INSTALLER, ...args]);
-  const checkCommand = formatCommand([INSTALLER, ...args, '--check']);
-  const fetch = mode === 'new'
-    ? {title: 'Get MartinFlix', note: 'Already have a checkout? Run git pull --ff-only inside it instead.',
-      command: `git clone --depth 1 ${REPOSITORY}\ncd martinflix`}
-    : {title: 'Get the latest version', note: 'Run inside the checkout you installed from.', command: 'cd martinflix\ngit pull --ff-only'};
+  const launch = [...LAUNCH, `${IMAGE}:${channelOf(options)} ${{new: 'install', update: 'update', reset: 'reset'}[mode]}`];
+  const install = formatCommand([...launch, ...args]);
+  const checkCommand = formatCommand([...launch, ...args, '--check']);
   const check = {title: 'Check', command: checkCommand,
     note: mode === 'reset' ? 'Validates the new setup. Nothing is stopped or archived yet.'
       : 'Changes nothing. Fix anything it reports and run it again.'};
   const run = {
     new: {title: 'Install', command: install, note: 'Safe to rerun with the same options to resume.'},
-    update: {title: 'Update', command: install, note: 'Containers may restart briefly. App data, passwords and anything you didn’t change are kept.'},
+    update: {title: 'Apply the changes', command: install, note: 'Containers may restart briefly. App data, passwords and anything you didn’t change are kept.'},
     reset: {title: 'Reset and install', command: install, note: 'Type RESET when the installer asks.'},
   }[mode];
-  return [fetch, check, run];
+  return [check, run];
 }
 
-if (typeof module !== 'undefined') module.exports = {installArguments, buildCommands, validateStep, shellQuote, STEPS};
+if (typeof module !== 'undefined') module.exports = {installArguments, buildCommands, validateStep, shellQuote, STEPS, DEFAULT_CHANNEL};
 
 if (typeof document !== 'undefined') {
   const byId = id => document.getElementById(id);
@@ -231,6 +235,7 @@ if (typeof document !== 'undefined') {
       ownKey: byId('tmdb-own').checked,
       plexUrl: byId('plex-url').value.trim().replace(/\/+$/, ''),
       region: byId('discover-region').value,
+      channel: byId('channel').value,
       state: (update ? byId('state-update') : byId('state')).value.trim(),
       backupDir: byId('backup-dir').value.trim(),
       ports: Object.fromEntries(portOptions.map(([name]) => [name, byId(name + '-port').value.trim()])),
@@ -251,6 +256,7 @@ if (typeof document !== 'undefined') {
         plexUrl: byId('u-plex-url').value.trim().replace(/\/+$/, ''),
         plexToken: byId('u-plex-token').checked,
         region: byId('u-discover-region').value,
+        channel: byId('u-channel').value,
         media: byId('u-media').value.trim(),
         backupDir: byId('u-backup-dir').value.trim(),
       },
@@ -365,6 +371,7 @@ if (typeof document !== 'undefined') {
       if (change.page !== 'keep') summary.push(['Discover page', change.page === 'on' ? 'Show it' : 'Hide it']);
       if (change.discover) summary.push(['TMDB key', 'Use my own']);
       if (change.region !== 'keep') summary.push(['Discover region', byId('u-discover-region').selectedOptions[0].textContent]);
+      if (change.channel !== 'keep') summary.push(['Release channel', change.channel === 'stable' ? 'Stable' : 'Edge']);
       if (summary.length === 2) summary.push(['Changes', 'None · reapply the latest version with your current settings']);
       else summary.push(['Everything else', 'Kept as it is']);
     } else {
@@ -380,6 +387,7 @@ if (typeof document !== 'undefined') {
       summary.push(['Plex', options.plex ? `Installed here as ${options.plexName || 'martinflix'} · setup asks for a claim code`
         : options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not installed']);
       summary.push(['Backups', `${options.backupDir || 'Default folder on this VM'} · nightly at 01:00`]);
+      summary.push(['Release channel', channelOf(options) === 'stable' ? 'Stable · released versions' : 'Edge · every change']);
       summary.push(['State directory', options.state || 'Default location']);
       for (const [name, label, fallback] of enabledPorts(options)) {
         const port = options.ports[name];
@@ -442,9 +450,9 @@ if (typeof document !== 'undefined') {
     byId('transmission-port').parentElement.hidden = !options.downloader;
     byId('transmission-peer-port').parentElement.hidden = !options.downloader;
     byId('bazarr-port').parentElement.hidden = !options.bazarr;
-    byId('commands-lede').textContent = options.mode === 'new'
-      ? 'Run these on the Linux host as your normal user, not with sudo.'
-      : 'Run these in your existing MartinFlix checkout, as the account that installed it.';
+    byId('commands-lede').textContent = options.mode === 'update'
+      ? 'Run these on the Linux host as the account that installed MartinFlix, not with sudo. To update MartinFlix itself, or change Discover, Plex, backups or the VPN, use Settings in the dashboard instead.'
+      : 'Run these on the Linux host as your normal user, not with sudo. Docker is all it needs: it downloads MartinFlix by itself, with no copy of the code to keep.';
     byId('step-error').hidden = true;
     if (steps()[activeIndex] === 'review') renderReview(options);
     renderCommands(options);

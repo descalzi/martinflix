@@ -15,8 +15,8 @@ services:
     volumes:
       # Everything Plex knows (libraries, watch history, settings) lives here, so a backup of this folder is Plex.
       - "${MARTINFLIX_STATE_DIR}/plex:/config"
-      # Pre-roll clips from this copy of MartinFlix.
-      - "${MARTINFLIX_REPO_DIR}/assets/preroll:/preroll:ro"
+      # Pre-roll clips, copied from the MartinFlix image by setup.
+      - "${MARTINFLIX_STATE_DIR}/preroll:/preroll:ro"
       # Plex only reads the media; Sonarr and Radarr own it.
       - type: bind
         source: ${MARTINFLIX_MEDIA_PATH}

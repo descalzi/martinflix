@@ -237,7 +237,7 @@ class RouteTests(unittest.TestCase):
         return sent.get('status'), handler.wfile.getvalue()
 
     def test_each_page_has_a_route(self):
-        for page in ('library', 'services', 'backups'):
+        for page in ('library', 'services', 'backups', 'settings'):
             status, body = self.request('/' + page)
             self.assertEqual(status, 200)
             self.assertIn(f'data-page="{page}"'.encode(), body)
@@ -394,6 +394,57 @@ class ControlTests(unittest.TestCase):
                          'helper sidecars stay out of the list')
         self.assertEqual((services[1]['state'], services[1]['status']), ('exited', 'Exited (exit code 137)'))
         self.assertEqual(services[2]['startedAt'], '2026-11-20T09:00:00Z', 'an app\'s own start time wins')
+
+
+class SystemTests(unittest.TestCase):
+    post = ControlTests.post
+    request = RouteTests.request
+
+    def test_updating_and_saving_settings_need_the_pin_and_go_to_the_controller(self):
+        with patch.object(server, 'controller_request', return_value={'ok': True, 'started': True}) as controller:
+            self.assertEqual(self.post('/api/system/update', {'pin': '2468'})[0], 200)
+            controller.assert_called_with('/release/update', {'pin': '2468'}, timeout=60)
+            status, _ = self.post('/api/settings', {'pin': '2468', 'settings': {'discover': 'off'}, 'secrets': {'tmdbKey': 'k' * 32}})
+            self.assertEqual(status, 200)
+            controller.assert_called_with('/settings', {'pin': '2468', 'settings': {'discover': 'off'},
+                                                        'secrets': {'tmdbKey': 'k' * 32}}, timeout=60)
+            self.assertEqual(self.post('/api/system/check', {})[0], 200)
+            controller.assert_called_with('/release/check', {}, timeout=60)
+        with patch.object(server, 'controller_request') as controller:
+            self.assertEqual(self.post('/api/system/update', {'pin': 'abc'})[0], 400)
+            self.assertEqual(self.post('/api/settings', {'pin': '2468'}, origin='http://evil.example')[0], 403)
+            controller.assert_not_called()
+        with patch.object(server, 'controller_request', side_effect=server.ControllerError(409, 'MartinFlix is already updating.')):
+            self.assertEqual(self.post('/api/system/update', {'pin': '2468'}), (409, {'error': 'MartinFlix is already updating.'}))
+
+    def test_the_version_page_lists_what_changed_from_github(self):
+        release = {'current': {'version': '1', 'revision': 'a' * 40, 'channel': 'edge'},
+                   'available': {'version': '2', 'revision': 'b' * 40}, 'updater': None}
+        compare = {'status': 'ahead', 'total_commits': 2, 'html_url': 'https://github.com/descalzi/martinflix/compare/x',
+                   'commits': [{'sha': 'c' * 40, 'commit': {'message': 'First change\n\nDetails', 'committer': {'date': '2026-11-21T10:00:00Z'}}},
+                               {'sha': 'd' * 40, 'commit': {'message': 'Second change', 'committer': {'date': '2026-11-22T10:00:00Z'}}}]}
+        response = MagicMock()
+        response.__enter__.return_value = io.BytesIO(json.dumps(compare).encode())
+        server.CHANGES_CACHE.clear()
+        with patch.object(server, 'controller_request', return_value=release), \
+                patch.object(server.ARR_OPENER, 'open', return_value=response) as opened:
+            status, body = self.request('/api/system')
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual([commit['title'] for commit in data['changes']['commits']], ['Second change', 'First change'])
+        self.assertIn(f'compare/{"a" * 40}...{"b" * 40}', opened.call_args[0][0].full_url)
+        self.assertIsNone(server.release_changes('not-a-commit', 'b' * 40))
+
+    def test_sign_ins_survive_a_restart_until_the_password_changes(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        state = Path(folder.name) / 'password-hash'
+        first = server.load_session_key(state)
+        self.assertEqual(server.load_session_key(state), first)
+        self.assertEqual(oct((Path(folder.name) / 'session-key').stat().st_mode & 0o777), '0o600')
+        self.assertNotEqual(server.new_session_key(state), first)
+        self.assertNotEqual(server.load_session_key(state), first)
+        self.assertEqual(len(server.load_session_key(None)), 32)
 
 
 class DiscoverTests(unittest.TestCase):
