@@ -1560,6 +1560,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/' or path.strip('/') in PAGES:
             page = path.strip('/') or 'overview'
             body = (WEB / 'index.html').read_bytes().replace(b'data-page="overview"', f'data-page="{page}"'.encode(), 1)
+            # Menu items that depend on settings are shown from the start, so they don't blink in once the page loads.
+            for item, shown in ((b'nav-discover', bool(tmdb_key()) or page == 'discover'), (b'nav-password', form_login),
+                                (b'nav-pin', form_login and controller_configured())):
+                if shown:
+                    body = body.replace(b'id="' + item + b'" hidden', b'id="' + item + b'"', 1)
             self.send_web_file('index.html', 'text/html', body=body)
         elif path in ('/app.js', '/style.css'):
             self.send_web_file(path[1:], 'text/javascript' if path == '/app.js' else 'text/css')

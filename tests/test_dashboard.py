@@ -263,6 +263,12 @@ class RouteTests(unittest.TestCase):
         status, body = self.request('/')
         self.assertIn(b'data-page="overview"', body)
 
+    def test_the_discover_menu_item_is_in_the_page_from_the_start(self):
+        with patch.object(server, 'tmdb_key', return_value='key'):
+            self.assertNotIn(b'id="nav-discover" hidden', self.request('/library')[1])
+        with patch.object(server, 'tmdb_key', return_value=''):
+            self.assertIn(b'id="nav-discover" hidden', self.request('/library')[1])
+
     def test_fonts_are_served_and_unknown_paths_are_not(self):
         self.assertEqual(self.request('/fonts/figtree.woff2')[0], 200)
         self.assertEqual(self.request('/fonts/../server.py')[0], 404)
