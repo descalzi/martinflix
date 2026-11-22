@@ -435,6 +435,20 @@ class SystemTests(unittest.TestCase):
         self.assertIn(f'compare/{"a" * 40}...{"b" * 40}', opened.call_args[0][0].full_url)
         self.assertIsNone(server.release_changes('not-a-commit', 'b' * 40))
 
+    def test_the_backups_page_says_why_there_is_no_schedule(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        with patch.dict(os.environ, {'MARTINFLIX_BACKUP_DIR': folder.name}):
+            with patch.object(server, 'controller_request', return_value={'services': {}, 'backups': {'next': 'x'}}):
+                self.assertEqual(server.backup_status()['schedule'], {'next': 'x'})
+                self.assertIsNone(server.backup_status()['scheduleProblem'])
+            with patch.object(server, 'controller_request', return_value={'services': {}}):
+                self.assertIn('older than backups', server.backup_status()['scheduleProblem'])
+            with patch.object(server, 'controller_request', side_effect=server.ControllerError(502, 'Docker status is unavailable.')):
+                self.assertIn('Docker status is unavailable.', server.backup_status()['scheduleProblem'])
+            with patch.object(server, 'controller_request', return_value=None):
+                self.assertIn('doesn’t have', server.backup_status()['scheduleProblem'])
+
     def test_sign_ins_survive_a_restart_until_the_password_changes(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)

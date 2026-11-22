@@ -1015,13 +1015,18 @@ def backup_status():
                                'size': data.get('size') if type(data.get('size')) is int else None})
             except (OSError, ValueError):
                 result.append({'id': path.parent.name, 'errors': ['Manifest unreadable']})
-        schedule = None
+        schedule, problem = None, None
         try:
-            control = controller_request('/status', timeout=4)
-            schedule = control.get('backups') if isinstance(control, dict) else None
-        except ControllerError:
-            pass
-        return {'directory': str(directory), 'snapshots': result, 'schedule': schedule}
+            control = controller_request('/status', timeout=10)
+            if control is None:
+                problem = 'Scheduled backups need the controller, which this installation doesn’t have.'
+            else:
+                schedule = control.get('backups') if isinstance(control, dict) else None
+                if schedule is None:
+                    problem = 'The controller is older than backups. Update MartinFlix to add them.'
+        except ControllerError as exc:
+            problem = f'The controller didn’t answer: {exc}'
+        return {'directory': str(directory), 'snapshots': result, 'schedule': schedule, 'scheduleProblem': problem}
     except OSError:
         return {'directory': str(directory), 'snapshots': [], 'error': 'Cannot read backup directory.'}
 

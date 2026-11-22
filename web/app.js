@@ -248,12 +248,12 @@ function renderOverview(docker, services, backups, probes) {
 const BACKUP_APPS = {sonarr: 'Sonarr', radarr: 'Radarr', prowlarr: 'Prowlarr', bazarr: 'Bazarr', transmission: 'Transmission',
   plex: 'Plex', martinflix: 'MartinFlix'};
 
-function renderBackups(backups, schedule) {
+function renderBackups(backups, schedule, problem) {
   const running = schedule?.running;
   $('#backup-now').hidden = !schedule;
   $('#backup-now').disabled = Boolean(running);
   const next = schedule?.next ? new Date(schedule.next) : null;
-  $('#backup-schedule').textContent = !schedule ? 'Scheduled backups need the controller. Rerun setup to add it.'
+  $('#backup-schedule').textContent = !schedule ? (problem || 'Scheduled backups need the controller.')
     : running ? `Backing up now, started ${new Date(running).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})}…`
     : `Next backup ${next ? next.toLocaleString(undefined, {weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : 'tonight'} · Saved in ${schedule.folder}`;
   if (schedule?.lastError && !running) {
@@ -270,7 +270,7 @@ function renderBackups(backups, schedule) {
           ? `<span class="badge warn">Incomplete</span> <span class="muted">${esc(problems.join('; '))}</span>`
           : '<span class="badge ok">Complete</span>'}</td></tr>`;
       }).join('')}</tbody></table>`
-    : `<div class="empty-state"><h3>No backups yet</h3><p>${schedule ? 'The first one runs tonight at 01:00, or use Back up now.' : 'Backups start once the controller is set up.'}</p></div>`;
+    : `<div class="empty-state"><h3>No backups yet</h3><p>${esc(schedule ? 'The first one runs tonight at 01:00, or use Back up now.' : problem || 'Backups start once the controller answers.')}</p></div>`;
   // While a backup runs, check back until it's done.
   clearTimeout(renderBackups.timer);
   if (running) renderBackups.timer = setTimeout(status, 5000);
@@ -485,7 +485,7 @@ async function status() {
     } else if (page === 'overview') {
       renderOverview(docker, services, data.backups.snapshots, probes);
     } else if (page === 'backups') {
-      renderBackups(data.backups.snapshots, data.backups.schedule);
+      renderBackups(data.backups.snapshots, data.backups.schedule, data.backups.scheduleProblem);
     }
     $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
   } catch {
