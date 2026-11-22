@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -239,30 +240,123 @@ TRANSIENT_PULL = re.compile(r'toomanyrequests|too many requests|i/o timeout|TLS 
                             r'unexpected EOF|context deadline exceeded|50[234] (?:Bad Gateway|Service Unavailable|Gateway)',
                             re.IGNORECASE)
 PULL_PAUSES = (10, 30, 60)
+PULL_WORKERS = 4
+APP_LABELS = {'gluetun': 'Gluetun (VPN)', 'flaresolverr': 'FlareSolverr', 'transmission-auth': 'Transmission helper'}
+# A layer line from docker pull, such as "3f4ca61aafcd: Pull complete".
+LAYER_LINE = re.compile(r'^([0-9a-f]{12,64}): (.+)$')
 
 
-def pull_images(compose, environment, services, sleep=time.sleep):
-    """Download the newest images, retrying when the registry is busy. If it stays busy and every image is already
-    on this VM, carry on with those. Returns None when done, or the Docker output to show when setup must stop."""
-    details = ''
+class ImagePull:
+    """One image's progress, shown as a line while setup downloads."""
+
+    def __init__(self, service, image):
+        self.service = service
+        self.image = image
+        self.label = APP_LABELS.get(service, service.replace('-', ' ').title())
+        self.state = 'waiting'
+        self.note = ''
+        self.layers = {}
+        self.output = ''
+
+    def line(self, width=72):
+        done = sum(1 for status in self.layers.values() if status in ('Pull complete', 'Already exists'))
+        text = {
+            'waiting': 'waiting',
+            'checking': 'checking for updates…',
+            'downloading': f'downloading ({done} of {len(self.layers)} layers)',
+            'updated': 'updated',
+            'downloaded': 'downloaded',
+            'current': 'up to date',
+            'kept': 'kept the version already here (registry busy)',
+            'failed': 'could not download',
+        }.get(self.state, self.note)
+        return f'   {self.label:<20} {text}'[:width]
+
+    @property
+    def finished(self):
+        return self.state in ('updated', 'downloaded', 'current', 'kept', 'failed')
+
+
+def image_id(image, environment, run=subprocess.run):
+    result = run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image], env=environment, capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def pull_one(pull, environment, sleep=time.sleep, popen=subprocess.Popen, run=subprocess.run):
+    """Download one image, retrying when the registry is busy, and record whether it changed."""
+    before = image_id(pull.image, environment, run)
     for pause in (*PULL_PAUSES, None):
-        result = subprocess.run(compose + ['pull', '--quiet', *services], env=environment, capture_output=True, text=True)
-        if result.returncode == 0:
-            return None
-        details = ((result.stdout or '') + (result.stderr or '')).strip()[-12000:]
-        if pause is None or not TRANSIENT_PULL.search(details):
+        pull.state, pull.layers = 'checking', {}
+        lines = []
+        process = popen(['docker', 'pull', pull.image], env=environment, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            lines.append(line)
+            if match := LAYER_LINE.match(line.strip()):
+                pull.layers[match.group(1)] = match.group(2)
+                if match.group(2) not in ('Already exists',):
+                    pull.state = 'downloading'
+        if process.wait() == 0:
+            after = image_id(pull.image, environment, run)
+            pull.state = 'downloaded' if before is None else 'current' if after == before else 'updated'
+            return
+        pull.output = ''.join(lines).strip()[-4000:]
+        if pause is None or not TRANSIENT_PULL.search(pull.output):
             break
-        print(f'   The image registry is busy. Trying again in {pause} seconds…', flush=True)
+        pull.state, pull.note = 'retrying', f'registry busy, trying again in {pause} seconds'
         sleep(pause)
-    listed = subprocess.run(compose + ['config', '--images', *services], env=environment, capture_output=True, text=True)
-    names = listed.stdout.split() if listed.returncode == 0 else []
-    missing = [name for name in names
-               if subprocess.run(['docker', 'image', 'inspect', name], capture_output=True).returncode != 0]
-    if names and not missing:
-        print('   Some newer images could not be downloaded, so setup is using the ones already on this VM. '
-              'Rerun setup later to update them.', flush=True)
-        return None
-    return details
+    # An update can carry on with the version already here; a first download cannot.
+    pull.state = 'kept' if before else 'failed'
+
+
+def pull_images(compose, environment, services, sleep=time.sleep, popen=subprocess.Popen, run=subprocess.run,
+                output=None):
+    """Download the newest image for each service, showing each app's progress. Returns None when setup can carry on,
+    or the Docker output to show when it must stop."""
+    output = output or sys.stdout
+    listed = run(compose + ['config', '--format', 'json'], env=environment, capture_output=True, text=True)
+    if listed.returncode != 0:
+        return (listed.stderr or listed.stdout or '').strip()[-4000:] or 'Compose could not read the stack.'
+    specs = json.loads(listed.stdout).get('services', {})
+    pulls, seen = [], set()
+    for service in services:
+        image = (specs.get(service) or {}).get('image')
+        if image and image not in seen:
+            seen.add(image)
+            pulls.append(ImagePull(service, image))
+    live = output.isatty()
+    width = shutil.get_terminal_size((80, 20)).columns - 1
+    shown = 0
+    reported = set()
+
+    def draw(final=False):
+        nonlocal shown
+        if live:
+            if shown:
+                output.write(f'\x1b[{shown}F')
+            for pull in pulls:
+                output.write('\x1b[2K' + pull.line(width) + '\n')
+            shown = len(pulls)
+        else:
+            for pull in pulls:
+                if pull.finished and pull.service not in reported:
+                    reported.add(pull.service)
+                    output.write(pull.line(width) + '\n')
+        output.flush()
+
+    with ThreadPoolExecutor(max_workers=PULL_WORKERS) as pool:
+        jobs = [pool.submit(pull_one, pull, environment, sleep, popen, run) for pull in pulls]
+        while not all(job.done() for job in jobs):
+            draw()
+            time.sleep(0.25 if live else 1)
+        for job in jobs:
+            job.result()
+    draw(final=True)
+    if kept := [pull.label for pull in pulls if pull.state == 'kept']:
+        output.write(f'   The image registry stayed busy, so setup is using the versions of {", ".join(kept)} already on '
+                     'this VM. Rerun setup later to update them.\n')
+    failed = [pull for pull in pulls if pull.state == 'failed']
+    return '\n\n'.join(f'{pull.label}:\n{pull.output}' for pull in failed) if failed else None
 
 
 def docker_socket():

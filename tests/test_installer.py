@@ -352,41 +352,76 @@ class RouteChangeTests(unittest.TestCase):
 
 
 class PullTests(unittest.TestCase):
-    def run_pull(self, outcomes, present=()):
-        calls, pauses = [], []
-        replies = iter(outcomes)
-        def fake(command, **kwargs):
-            calls.append(command)
-            if command[:3] == ['docker', 'image', 'inspect']:
-                return SimpleNamespace(returncode=0 if command[3] in present else 1)
+    """docker pull is replaced by scripted replies; image IDs show whether anything changed."""
+
+    SPECS = {'services': {'sonarr': {'image': 'lscr.io/linuxserver/sonarr:latest'},
+                          'radarr': {'image': 'lscr.io/linuxserver/radarr:latest'},
+                          'gluetun': {'image': 'qmcgaw/gluetun:v3.41.3'}}}
+
+    def run_pull(self, scripts, ids_before, ids_after=None, services=('sonarr', 'radarr', 'gluetun')):
+        ids_after = ids_after if ids_after is not None else ids_before
+        pulled, pauses = set(), []
+        attempts = {}
+
+        def run(command, **kwargs):
             if 'config' in command:
-                return SimpleNamespace(returncode=0, stdout='lscr.io/linuxserver/sonarr:latest\nqmcgaw/gluetun:v3.41.3\n', stderr='')
-            code, text = next(replies)
-            return SimpleNamespace(returncode=code, stdout='', stderr=text)
-        with patch.object(install.subprocess, 'run', side_effect=fake), redirect_stdout(io.StringIO()) as output:
-            result = install.pull_images(['docker', 'compose'], {}, ['sonarr', 'gluetun'], sleep=pauses.append)
-        return result, pauses, output.getvalue(), calls
+                return SimpleNamespace(returncode=0, stdout=json.dumps(self.SPECS), stderr='')
+            image = command[-1]
+            current = (ids_after if image in pulled else ids_before).get(image)
+            return SimpleNamespace(returncode=0 if current else 1, stdout=current or '', stderr='')
+
+        def popen(command, **kwargs):
+            image = command[-1]
+            attempt = attempts.get(image, 0)
+            attempts[image] = attempt + 1
+            code, text = scripts[image][min(attempt, len(scripts[image]) - 1)]
+            if code == 0:
+                pulled.add(image)
+            return SimpleNamespace(stdout=io.StringIO(text), wait=lambda: code)
+
+        output = io.StringIO()
+        with patch.object(install.time, 'sleep'):
+            result = install.pull_images(['docker', 'compose'], {}, list(services), sleep=pauses.append,
+                                         popen=popen, run=run, output=output)
+        return result, pauses, output.getvalue()
+
+    def test_each_app_says_whether_it_changed(self):
+        layers = 'latest: Pulling from linuxserver/radarr\n3f4ca61aafcd: Pulling fs layer\n3f4ca61aafcd: Pull complete\n'
+        result, _, output = self.run_pull(
+            {'lscr.io/linuxserver/sonarr:latest': [(0, 'Status: Image is up to date\n')],
+             'lscr.io/linuxserver/radarr:latest': [(0, layers)],
+             'qmcgaw/gluetun:v3.41.3': [(0, '')]},
+            ids_before={'lscr.io/linuxserver/sonarr:latest': 'sha256:a', 'lscr.io/linuxserver/radarr:latest': 'sha256:b'},
+            ids_after={'lscr.io/linuxserver/sonarr:latest': 'sha256:a', 'lscr.io/linuxserver/radarr:latest': 'sha256:c',
+                       'qmcgaw/gluetun:v3.41.3': 'sha256:d'})
+        self.assertIsNone(result)
+        lines = {line.split()[0]: ' '.join(line.split()[1:]) for line in output.splitlines()}
+        self.assertEqual(lines, {'Sonarr': 'up to date', 'Radarr': 'updated', 'Gluetun': '(VPN) downloaded'})
 
     def test_a_busy_registry_is_retried(self):
-        busy = 'toomanyrequests: retry-after: 1.133859ms, allowed: 44000/minute'
-        result, pauses, output, _ = self.run_pull([(1, busy), (1, busy), (0, '')])
+        busy = (1, 'toomanyrequests: retry-after: 1.133859ms, allowed: 44000/minute')
+        result, pauses, output = self.run_pull({'lscr.io/linuxserver/sonarr:latest': [busy, busy, (0, '')]},
+                                               ids_before={'lscr.io/linuxserver/sonarr:latest': 'sha256:a'},
+                                               services=('sonarr',))
         self.assertIsNone(result)
         self.assertEqual(pauses, [10, 30])
-        self.assertIn('registry is busy', output)
+        self.assertIn('up to date', output)
 
     def test_other_failures_are_not_retried(self):
-        result, pauses, _, _ = self.run_pull([(1, 'manifest unknown')])
-        self.assertEqual((result, pauses), ('manifest unknown', []))
+        result, pauses, _ = self.run_pull({'qmcgaw/gluetun:v3.41.3': [(1, 'manifest unknown')]}, ids_before={},
+                                          services=('gluetun',))
+        self.assertIn('manifest unknown', result)
+        self.assertEqual(pauses, [])
 
     def test_an_update_carries_on_with_images_already_here(self):
-        busy = 'toomanyrequests: retry-after: 1ms'
-        everything = ('lscr.io/linuxserver/sonarr:latest', 'qmcgaw/gluetun:v3.41.3')
-        result, pauses, output, _ = self.run_pull([(1, busy)] * 4, present=everything)
-        self.assertIsNone(result)
-        self.assertEqual(pauses, [10, 30, 60])
-        self.assertIn('already on this VM', output)
-        result, _, _, _ = self.run_pull([(1, busy)] * 4, present=everything[:1])
-        self.assertIn('toomanyrequests', result, 'a missing image still stops setup')
+        busy = (1, 'toomanyrequests: retry-after: 1ms')
+        result, pauses, output = self.run_pull(
+            {'lscr.io/linuxserver/sonarr:latest': [busy], 'qmcgaw/gluetun:v3.41.3': [busy]},
+            ids_before={'lscr.io/linuxserver/sonarr:latest': 'sha256:a'}, services=('sonarr', 'gluetun'))
+        self.assertIn('kept the version already here', output)
+        self.assertIn('Gluetun (VPN):\ntoomanyrequests', result, 'an image never downloaded still stops setup')
+        self.assertEqual(sorted(pauses), [10, 10, 30, 30, 60, 60])
+
 
 class VpnDiagnosisTests(unittest.TestCase):
     def diagnose(self, log):
