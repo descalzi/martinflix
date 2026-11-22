@@ -32,6 +32,19 @@ New Radarr installations start with a maximum release size of 4,500 MB, an avail
 
 The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
 
+### Plex
+
+Add `--enable-plex` (on by default in the wizard) to install Plex Media Server for your media directory. Plex runs on the host's network, as LinuxServer recommends, so TVs and phones on your LAN find it by themselves and it listens on port 32400 on every address of the VM. It reads the media directory but can't change it; Sonarr and Radarr own the files.
+
+Just before Plex starts for the first time, setup asks for a **claim code**, which links the new server to your Plex account. Sign in at [plex.tv/claim](https://plex.tv/claim) and paste the code it shows; it lasts four minutes, so get it when setup asks. Once the server is claimed, setup:
+
+- adds **TV Shows** and **Movies** libraries over the media folders, and tells Plex to pick up new files as soon as Sonarr and Radarr move them in (only on a server with no libraries yet);
+- connects the dashboard's Live page to Plex, with no token to copy.
+
+If you skip the claim code, open Plex Web (`http://<VM address>:32400/web`) from a device on the same network to claim the server, then rerun setup with `--update` to add the libraries and connect Live. If the VM has a GPU (`/dev/dri`), setup gives Plex access to it for hardware transcoding, which Plex uses with a Plex Pass.
+
+Everything Plex keeps (libraries, watch history, settings) is in the `plex` folder of the state directory, so backing up that folder backs up Plex.
+
 ### Live
 
 The **Live** page shows what's happening now, updating every five seconds:
@@ -43,7 +56,7 @@ The **Live** page shows what's happening now, updating every five seconds:
 
 The Overview shows a compact version: current speeds and downloads, with the last hour's download speed drawn faintly behind them.
 
-Plex is optional and doesn't need Tautulli. Rerun setup with `--plex-url` (for example `--plex-url http://192.168.5.204:32400`) and `--set-plex-token`, then paste your Plex token when asked. To find the token, open Plex Web, choose any film or episode, open **⋯ → Get Info → View XML**, and copy the value after `X-Plex-Token=` in the address bar. The token stays private on the VM. Plex keeps its own watch history, but older entries may be pruned over time; Tautulli keeps a permanent record, so check how far back Live's history goes before retiring Tautulli.
+With Plex installed by setup, Live connects to it automatically. For a Plex server elsewhere, rerun setup with `--plex-url` (for example `--plex-url http://192.168.5.204:32400`) and `--set-plex-token`, then paste your Plex token when asked. To find the token, open Plex Web, choose any film or episode, open **⋯ → Get Info → View XML**, and copy the value after `X-Plex-Token=` in the address bar. The token stays private on the VM. Plex keeps its own watch history, but older entries may be pruned over time; Tautulli keeps a permanent record, so check how far back Live's history goes before retiring Tautulli.
 
 ### Discover
 

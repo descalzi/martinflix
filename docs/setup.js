@@ -106,6 +106,7 @@ function changeArguments(change) {
   if (change.prowlarr) args.push('--enable-prowlarr');
   if (change.flaresolverr) args.push('--enable-flaresolverr');
   if (change.bazarr) args.push('--enable-bazarr');
+  if (change.plex) args.push('--enable-plex');
   if (change.route && change.route !== 'keep') args.push('--download-network=' + change.route);
   if (change.plexUrl) args.push('--plex-url=' + shellQuote(change.plexUrl));
   if (change.plexToken || change.plexUrl) args.push('--set-plex-token');
@@ -137,12 +138,13 @@ function installArguments(options) {
   if (options.prowlarr) args.push('--enable-prowlarr');
   if (options.prowlarr && options.flaresolverr) args.push('--enable-flaresolverr');
   if (options.bazarr) args.push('--enable-bazarr');
+  if (options.plex) args.push('--enable-plex');
   if (options.downloader || options.prowlarr || options.bazarr) args.push('--download-network=' + (options.behindVpn ? 'vpn' : 'direct'));
   for (const [name, , fallback] of enabledPorts(options)) {
     const raw = options.ports[name] ?? '';
     if (raw !== '' && Number(raw) !== fallback) args.push('--' + name + '-port=' + Number(raw));
   }
-  if (options.plexUrl) args.push('--plex-url=' + shellQuote(options.plexUrl), '--set-plex-token');
+  if (options.plexUrl && !options.plex) args.push('--plex-url=' + shellQuote(options.plexUrl), '--set-plex-token');
   if (options.discover === false) args.push('--discover=off');
   if (options.discover !== false && options.ownKey) args.push('--set-tmdb-key');
   if (options.discover !== false && options.region && options.region !== 'GB') args.push('--discover-region=' + options.region);
@@ -215,6 +217,8 @@ if (typeof document !== 'undefined') {
       flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
       // Bazarr needs the media directory, so it only counts once one is set.
       bazarr: byId('bazarr').checked && Boolean(byId('media').value.trim()),
+      // Plex shows the media directory, so like Bazarr it only counts once one is set.
+      plex: byId('plex').checked && Boolean(byId('media').value.trim()),
       behindVpn: byId('vpn').checked && preferVpnRoute,
       discover: byId('discover').checked,
       ownKey: byId('tmdb-own').checked,
@@ -232,6 +236,7 @@ if (typeof document !== 'undefined') {
         prowlarr: byId('u-prowlarr').checked,
         flaresolverr: byId('u-flaresolverr').checked,
         bazarr: byId('u-bazarr').checked,
+        plex: byId('u-plex').checked,
         discover: byId('u-discover').checked,
         page: byId('u-discover-page').value,
         plexUrl: byId('u-plex-url').value.trim().replace(/\/+$/, ''),
@@ -339,7 +344,7 @@ if (typeof document !== 'undefined') {
       if (change.access === 'lan') summary.push(['Open apps from', change.address]);
       if (change.vpn) summary.push(['Add', `VPN gateway · ${byId('u-vpn-exit').selectedOptions[0].textContent.replace(' (default)', '')}`]);
       const added = [change.transmission && 'Transmission', change.prowlarr && 'Prowlarr', change.flaresolverr && 'FlareSolverr',
-        change.bazarr && 'Bazarr'].filter(Boolean);
+        change.bazarr && 'Bazarr', change.plex && 'Plex'].filter(Boolean);
       if (added.length) summary.push(['Add apps', added.join(', ')]);
       if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
       if (change.media) summary.push(['Media directory', change.media]);
@@ -360,7 +365,8 @@ if (typeof document !== 'undefined') {
       summary.push(['Download apps', apps.join(', ') || 'None yet']);
       if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
       summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
-      summary.push(['Plex', options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not connected']);
+      summary.push(['Plex', options.plex ? 'Installed here · setup asks for a claim code'
+        : options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not installed']);
       summary.push(['State directory', options.state || 'Default location']);
       for (const [name, label, fallback] of enabledPorts(options)) {
         const port = options.ports[name];
@@ -402,6 +408,11 @@ if (typeof document !== 'undefined') {
     byId('bazarr-help').textContent = options.media
       ? 'Finds subtitles in English, French, Brazilian Portuguese and Spanish, and saves them beside your videos.'
       : 'Needs the media directory from the Media step.';
+    byId('plex').disabled = !options.media;
+    byId('plex-help').textContent = options.media
+      ? 'Streams your library to TVs, phones and browsers. Setup asks for a claim code from plex.tv/claim to link it to your account.'
+      : 'Needs the media directory from the Media step.';
+    byId('plex-url').closest('.field').hidden = options.plex;
     byId('flaresolverr').disabled = !options.prowlarr;
     byId('download-client').disabled = !options.media;
     byId('client-help').textContent = options.media

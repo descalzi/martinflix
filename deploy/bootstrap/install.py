@@ -16,6 +16,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from xml.etree import ElementTree
@@ -395,6 +398,73 @@ def restart_outcome(before, after, new_image):
     return 'running, unchanged'
 
 
+PLEX_PORT = 32400
+PLEX_CLAIM_HELP = """
+Link the new Plex server to your Plex account with a claim code: sign in at https://plex.tv/claim and copy the
+code it shows. It only lasts four minutes, so get it now. Leave it blank to claim the server later in Plex Web."""
+PLEX_PREFERENCES = Path('Library/Application Support/Plex Media Server/Preferences.xml')
+# Agents and scanners of Plex's current film and TV libraries.
+PLEX_LIBRARIES = (
+    ('TV Shows', 'show', 'tv.plex.agents.series', 'Plex TV Series', '/data/TV Shows'),
+    ('Movies', 'movie', 'tv.plex.agents.movie', 'Plex Movie', '/data/Movies'),
+)
+
+
+def plex_token(config):
+    """The account token Plex saves once the server is claimed. Empty until then."""
+    try:
+        return ElementTree.parse(config / PLEX_PREFERENCES).getroot().get('PlexOnlineToken', '').strip()
+    except (FileNotFoundError, ElementTree.ParseError):
+        return ''
+
+
+def plex_claim_code():
+    if not sys.stdin.isatty():
+        return ''
+    print(PLEX_CLAIM_HELP, flush=True)
+    code = input('Plex claim code (starts with claim-): ').strip()
+    if code and not re.fullmatch(r'claim-[A-Za-z0-9_-]{10,60}', code):
+        raise ValueError('That doesn’t look like a Plex claim code. Get a new one at https://plex.tv/claim.')
+    return code
+
+
+def wait_for_plex_token(config, seconds=60):
+    for _ in range(seconds):
+        if token := plex_token(config):
+            return token
+        time.sleep(1)
+    return ''
+
+
+# Plex is on this VM, so its requests never go through a proxy.
+LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def plex_request(token, method, path, params=None, opener=LOCAL_OPENER.open):
+    query = f'?{urllib.parse.urlencode(params)}' if params else ''
+    request = urllib.request.Request(f'http://127.0.0.1:{PLEX_PORT}{path}{query}', method=method,
+                                     headers={'X-Plex-Token': token, 'Accept': 'application/json'})
+    with opener(request, timeout=20) as response:
+        body = response.read()
+    return json.loads(body) if body.strip().startswith(b'{') else {}
+
+
+def seed_plex_libraries(token, language, opener=LOCAL_OPENER.open):
+    """Add the TV Shows and Movies libraries over the media folders, unless Plex already has libraries."""
+    sections = plex_request(token, 'GET', '/library/sections', opener=opener).get('MediaContainer', {}).get('Directory') or []
+    if sections:
+        print('   Plex: libraries already exist; left as they are.', flush=True)
+        return
+    for name, kind, agent, scanner, location in PLEX_LIBRARIES:
+        plex_request(token, 'POST', '/library/sections', {'name': name, 'type': kind, 'agent': agent,
+                                                          'scanner': scanner, 'language': language,
+                                                          'location': location}, opener=opener)
+        print(f'   Plex: {name} library added.', flush=True)
+    # New files appear in Plex as soon as Sonarr and Radarr move them in, without waiting for a scheduled scan.
+    plex_request(token, 'PUT', '/:/prefs', {'FSEventLibraryUpdatesEnabled': 1, 'FSEventLibraryPartialScanEnabled': 1},
+                 opener=opener)
+
+
 def docker_socket():
     """The Docker socket the controller mounts, with its group, or None when Docker is reached over TCP or SSH."""
     host = os.environ.get('DOCKER_HOST', '')
@@ -718,7 +788,7 @@ def reset_installation(state, project):
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
         managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
                    'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun',
-                   'controller')
+                   'controller', 'plex', 'plex-gpu-compose.json')
         moved = []
         try:
             for name in managed:
@@ -759,6 +829,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         raise ValueError('To install Transmission, specify your dedicated media directory with --media-path.')
     if 'bazarr' in enabled and not media:
         raise ValueError('Bazarr saves subtitles beside your videos. Specify your media directory with --media-path.')
+    plex = bool(args.enable_plex or previous.get('plex'))
+    if plex and not media:
+        raise ValueError('Plex shows your media directory. Specify it with --media-path.')
     if args.download_network and not downloads:
         raise ValueError('Select a download app before choosing its network route.')
     previous_network = previous.get('download_network') or ('vpn' if previous.get('downloads') else None)
@@ -792,7 +865,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     options = {**previous, 'media_path': str(media) if media else None, 'downloads': bool(downloads),
                'download_apps': downloads, 'project': project, 'dashboard_bind': str(bind), 'ports': ports}
     options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, vpn_protocol=vpn_protocol,
-                   download_network=download_network)
+                   download_network=download_network, plex=plex)
 
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
@@ -804,6 +877,13 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.downloads.yaml')), '-f', str(overlay_file)]
         for app in downloads:
             compose += ['--profile', app]
+    if plex:
+        compose += ['-f', str(COMPOSE_FILE.with_name('compose.plex.yaml')), '--profile', 'plex']
+        if Path('/dev/dri').is_dir():
+            # A GPU lets Plex transcode in hardware (with Plex Pass). The image gives Plex access to it.
+            gpu_overlay = overlay_file.with_name('plex-gpu-compose.json')
+            gpu_overlay.write_text(json.dumps({'services': {'plex': {'devices': ['/dev/dri:/dev/dri']}}}))
+            compose += ['-f', str(gpu_overlay)]
     environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state),
                        MARTINFLIX_UID=str(os.getuid()), MARTINFLIX_GID=str(os.getgid()),
                        MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_MEDIA_PATH=str(media) if media else '')
@@ -819,6 +899,8 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     options['discover'] = args.discover or previous.get('discover') or 'on'
     environment['MARTINFLIX_DISCOVER'] = options['discover']
     plex_url = args.plex_url if args.plex_url is not None else previous.get('plex_url', '')
+    if plex and args.plex_url:
+        raise ValueError('This installation runs its own Plex, which the dashboard finds by itself. Leave out --plex-url.')
     if plex_url and not re.fullmatch(r'https?://[A-Za-z0-9.\[\]:-]+(:[0-9]{1,5})?/?', plex_url):
         raise ValueError('Use the Plex server’s address for --plex-url, such as http://192.168.1.10:32400.')
     options['plex_url'] = plex_url.rstrip('/')
@@ -844,6 +926,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     bindings = [(service, str(bind), port) for service, port in ports.items() if service != 'transmission_peer']
     if 'transmission_peer' in ports and download_network != 'vpn':
         bindings.append(('transmission_peer', '0.0.0.0', ports['transmission_peer']))
+    if plex and not (state / 'plex').exists():
+        # Plex uses the host's network, so its port must be free on every address. Ours already holds it on updates.
+        bindings.append(('plex', '0.0.0.0', PLEX_PORT))
     if bootstrapping_arr and str(bind) != '127.0.0.1':
         bindings.extend((app, '127.0.0.1', ports[app]) for app in APPS)
     if bootstrapping_prowlarr and str(bind) != '127.0.0.1':
@@ -856,6 +941,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'control': bool(control_socket), 'change_pin': bool(getattr(args, 'change_pin', False)),
         'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
         'set_plex_token': bool(getattr(args, 'set_plex_token', False)),
+        'plex': plex,
     }
 
 
@@ -972,6 +1058,8 @@ def keep_flags(options):
         flags.append('--enable-flaresolverr')
     if 'bazarr' in apps:
         flags.append('--enable-bazarr')
+    if options.get('plex'):
+        flags.append('--enable-plex')
     if apps:
         flags += ['--download-network', options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')]
     for name, port in (options.get('ports') or {}).items():
@@ -1118,7 +1206,7 @@ def run_installation(plan, state, previous, mode='install'):
             arr_address = '127.0.0.1'
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
         sidecars = ['transmission-auth'] if 'transmission' in downloads and not plan['control'] else []
-        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *sidecars]
+        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *sidecars, *(['plex'] if plan['plex'] else [])]
         print('2. Downloading the latest app images. The first download may take a few minutes…', flush=True)
         if (details := pull_images(compose, environment, images)) is not None:
             if details:
@@ -1206,6 +1294,31 @@ def run_installation(plan, state, previous, mode='install'):
         if seed_indexers or seed_radarr_indexers or seed_prowlarr or enable_prowlarr_indexers or setup_flaresolverr:
             options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
+        if plan['plex']:
+            step += 1
+            plex_config = state / 'plex'
+            private_directory(plex_config)
+            # Asked just before Plex starts, because a claim code expires after four minutes.
+            claim = '' if plex_token(plex_config) else plex_claim_code()
+            if claim:
+                environment['MARTINFLIX_PLEX_CLAIM'] = claim
+            started_step(f'{step}. Plex…', ['up', '-d', '--wait', '--wait-timeout', '180', 'plex'], ['plex'])
+            environment.pop('MARTINFLIX_PLEX_CLAIM', None)
+            token = wait_for_plex_token(plex_config, 60 if claim else 1)
+            if token:
+                # Live reads now playing and watch history with the server owner's token.
+                write_secret(secret_dir / 'plex-token', token)
+                if not options.get('plex_libraries_applied'):
+                    try:
+                        seed_plex_libraries(token, 'en-GB' if options.get('discover_region', 'GB') == 'GB' else 'en-US')
+                        options['plex_libraries_applied'] = True
+                        write_secret(state / 'install-options.json', json.dumps(options))
+                    except (OSError, ValueError) as exc:
+                        print(f'   Plex: could not add the TV Shows and Movies libraries ({exc}). Add them in Plex Web.',
+                              flush=True)
+            else:
+                print('   Plex isn’t linked to a Plex account yet. Open Plex Web to claim it, then rerun setup with '
+                      '--update to connect Live and add the TV Shows and Movies libraries.', flush=True)
         web = ['dashboard']
         if plan['control']:
             # The controller runs Compose exactly as setup does, with the final addresses and ports.
@@ -1270,6 +1383,9 @@ for app in ('sonarr', 'radarr'):
     for app in app_dirs:
         address = bind
         print(f'{app.capitalize():13} http://{address}:{ports[app]}')
+    if plan['plex']:
+        lan = bind if str(bind) != '127.0.0.1' else 'this-vm-address'
+        print(f'{"Plex":13} http://{lan}:{PLEX_PORT}/web  (Plex listens on every address of this VM)')
     if 'prowlarr' in enabled:
         print('Manage indexers in Prowlarr. The installer connected both library apps.')
     if 'flaresolverr' in enabled:
@@ -1295,6 +1411,8 @@ def build_parser():
     parser.add_argument('--vpn-protocol', choices=['udp', 'tcp'],
                         help='OpenVPN transport. UDP is faster; TCP gets through networks that block VPN traffic over UDP.')
     parser.add_argument('--download-network', choices=['vpn', 'direct'])
+    parser.add_argument('--enable-plex', action='store_true',
+                        help='Install Plex Media Server for your media directory. Requires --media-path.')
     parser.add_argument('--plex-url',
                         help='Address of your Plex server, such as http://192.168.1.10:32400, for Live’s now playing '
                              'and watch history. An empty value disconnects it.')

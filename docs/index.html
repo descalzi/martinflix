@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-17">
-  <script src="./setup.js?v=wizard-17" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-18">
+  <script src="./setup.js?v=wizard-18" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -131,6 +131,10 @@
               <label class="toggle"><input id="flaresolverr" type="checkbox" checked aria-describedby="flaresolverr-help"><span><strong>FlareSolverr <span class="tag">Default</span></strong><span id="flaresolverr-help">Helps Prowlarr reach indexers behind browser checks. Needs Prowlarr.</span></span></label>
             </fieldset>
             <fieldset class="toggles">
+              <legend>Media server</legend>
+              <label class="toggle"><input id="plex" type="checkbox" checked aria-describedby="plex-help"><span><strong>Plex <span class="tag">Default</span></strong><span id="plex-help">Streams your library to TVs, phones and browsers. Setup asks for a claim code from plex.tv/claim to link it to your account. Needs the media directory.</span></span></label>
+            </fieldset>
+            <fieldset class="toggles">
               <legend>Subtitles</legend>
               <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
             </fieldset>
@@ -140,7 +144,7 @@
               <label class="toggle"><input id="tmdb-own" type="checkbox"><span><strong>Use my own TMDB key</strong><span>Setup asks for it. Get a free key in your TMDB account under Settings → API.</span></span></label>
             </fieldset>
             <div class="field">
-              <label for="plex-url">Plex server <small>Optional</small></label>
+              <label for="plex-url">Plex server elsewhere <small>Optional, if you don’t install Plex here</small></label>
               <input id="plex-url" type="url" placeholder="http://192.168.1.10:32400" spellcheck="false" aria-describedby="plex-url-help">
               <small id="plex-url-help">Shows what’s playing and the watch history on the Live page. Setup then asks for your Plex token.</small>
             </div>
@@ -211,6 +215,7 @@
               <label class="toggle"><input id="u-transmission" type="checkbox"><span><strong>Transmission</strong><span>Download client. Needs a media directory.</span></span></label>
               <label class="toggle"><input id="u-prowlarr" type="checkbox"><span><strong>Prowlarr</strong><span>Manages indexers and syncs them to Sonarr and Radarr.</span></span></label>
               <label class="toggle"><input id="u-flaresolverr" type="checkbox"><span><strong>FlareSolverr</strong><span>Helps Prowlarr reach indexers behind browser checks. Needs Prowlarr.</span></span></label>
+              <label class="toggle"><input id="u-plex" type="checkbox"><span><strong>Plex</strong><span>Media server. Setup asks for a claim code from plex.tv/claim. Needs a media directory.</span></span></label>
               <label class="toggle"><input id="u-bazarr" type="checkbox"><span><strong>Bazarr</strong><span>Subtitles in English, French, Brazilian Portuguese and Spanish. Needs a media directory.</span></span></label>
             </fieldset>
             <fieldset class="toggles">

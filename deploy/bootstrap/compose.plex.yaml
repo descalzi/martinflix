@@ -1,0 +1,37 @@
+services:
+  # Plex uses the host's network, as LinuxServer recommends: clients on the LAN find it by themselves, and remote
+  # access works without extra port mapping. It listens on port 32400 on every address of this VM.
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    profiles: [plex]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PUID: "${MARTINFLIX_UID:?Run the bootstrap script}"
+      PGID: "${MARTINFLIX_GID:?Run the bootstrap script}"
+      VERSION: docker
+      # Only set for the first start, to link this server to a Plex account. A claim code expires after four minutes.
+      PLEX_CLAIM: "${MARTINFLIX_PLEX_CLAIM:-}"
+    volumes:
+      # Everything Plex knows (libraries, watch history, settings) lives here, so a backup of this folder is Plex.
+      - "${MARTINFLIX_STATE_DIR}/plex:/config"
+      # Plex only reads the media; Sonarr and Radarr own it.
+      - type: bind
+        source: ${MARTINFLIX_MEDIA_PATH}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:32400/identity]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 30s
+
+  dashboard:
+    # The dashboard reaches Plex on the host's network for Live's now playing and watch history.
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      MARTINFLIX_PLEX_URL: http://host.docker.internal:32400
+      MARTINFLIX_PLEX_INSTALLED: "1"

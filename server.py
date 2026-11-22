@@ -209,6 +209,9 @@ def container_status():
         probes['flaresolverr'] = (f'http://{"gluetun" if behind_vpn else "flaresolverr"}:8191/', 200)
     if 'bazarr' in downloads:
         probes['bazarr'] = (f'http://{"gluetun" if behind_vpn else "bazarr"}:6767/api/system/ping', 200)
+    # Plex runs on the host's network, so it is checked at its host address. /identity needs no token.
+    if os.environ.get('MARTINFLIX_PLEX_INSTALLED') == '1' and os.environ.get('MARTINFLIX_PLEX_URL'):
+        probes['plex'] = (os.environ['MARTINFLIX_PLEX_URL'].rstrip('/') + '/identity', 200)
     services = []
     for name, (url, expected) in probes.items():
         try:
@@ -224,8 +227,11 @@ def container_status():
             'state': 'reachable' if reachable else 'unreachable',
             'status': 'Responded to health check' if reachable else 'Health check did not respond',
         })
-    return {'available': True, 'source': 'app-probes', 'downloadsBehindVpn': bool(downloads) and behind_vpn,
-            'groups': [{'name': 'Downloads & automation' if downloads else 'Library apps', 'services': services}]}
+    media_server = [service for service in services if service['name'] == 'plex']
+    others = [service for service in services if service['name'] != 'plex']
+    groups = [{'name': 'Media server', 'services': media_server}] if media_server else []
+    groups.append({'name': 'Downloads & automation' if downloads else 'Library apps', 'services': others})
+    return {'available': True, 'source': 'app-probes', 'downloadsBehindVpn': bool(downloads) and behind_vpn, 'groups': groups}
 
 
 def arr_connection(kind, *, prowlarr_via_vpn=False):

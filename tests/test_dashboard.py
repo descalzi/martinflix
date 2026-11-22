@@ -461,6 +461,23 @@ class DiscoverTests(unittest.TestCase):
                 server.search_titles('sonarr', 'tmdb:1396')
 
 
+
+class PlexProbeTests(unittest.TestCase):
+    def test_an_installed_plex_gets_its_own_section(self):
+        environment = {'MARTINFLIX_ARR_COMPOSE_NETWORK': '1', 'MARTINFLIX_DOWNLOAD_APPS': '', 'MARTINFLIX_DOWNLOAD_GATEWAY': '',
+                       'MARTINFLIX_PLEX_INSTALLED': '1', 'MARTINFLIX_PLEX_URL': 'http://host.docker.internal:32400'}
+        seen = []
+        def fake(url, timeout):
+            seen.append(url)
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            return response
+        with patch.dict('os.environ', environment, clear=True), patch.object(server.ARR_OPENER, 'open', side_effect=fake):
+            status = server.container_status()
+        self.assertIn('http://host.docker.internal:32400/identity', seen)
+        self.assertEqual([group['name'] for group in status['groups']], ['Media server', 'Library apps'])
+        self.assertEqual([service['name'] for service in status['groups'][0]['services']], ['plex'])
+
 class LiveTests(unittest.TestCase):
     def setUp(self):
         server.QUEUE_CACHE.update(at=0.0, value={})

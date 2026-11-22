@@ -83,3 +83,9 @@ test('a Plex address connects Plex and asks setup for its token', () => {
   assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--plex-url=http://192.168.5.204:32400', '--set-plex-token']);
   assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plexToken: true}}), ['--update', '--set-plex-token']);
 });
+
+test('Plex is installed with the media directory, and then no outside Plex address is used', () => {
+  const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, plex: true, plexUrl: 'http://elsewhere:32400'});
+  assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--enable-plex']);
+  assert.deepStrictEqual(wizard.installArguments({mode: 'update', changes: {route: 'keep', plex: true}}), ['--update', '--enable-plex']);
+});

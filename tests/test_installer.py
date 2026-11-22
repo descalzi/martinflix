@@ -8,7 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy/bootstrap'))
 import configure  # noqa: E402
@@ -84,6 +84,19 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(self.plan()['environment']['MARTINFLIX_DISCOVER'], 'on')
         self.assertEqual(self.plan(discover='off')['options']['discover'], 'off')
         self.assertEqual(self.plan({'discover': 'off'})['environment']['MARTINFLIX_DISCOVER'], 'off', 'the choice is kept')
+
+    def test_plex_is_installed_with_the_media_directory(self):
+        with self.assertRaisesRegex(ValueError, 'media directory'):
+            self.plan(enable_plex=True)
+        media = self.root / 'media'
+        media.mkdir()
+        plan = self.plan(enable_plex=True, media_path=str(media))
+        self.assertTrue(plan['plex'] and plan['options']['plex'])
+        self.assertIn(str(install.COMPOSE_FILE.with_name('compose.plex.yaml')), plan['compose'])
+        self.assertIn(('plex', '0.0.0.0', install.PLEX_PORT), plan['bindings'])
+        self.assertTrue(self.plan({'plex': True, 'media_path': str(media)})['plex'], 'an update keeps Plex')
+        with self.assertRaisesRegex(ValueError, 'its own Plex'):
+            self.plan(enable_plex=True, media_path=str(media), plex_url='http://elsewhere:32400')
 
     def test_plex_address_is_checked_and_remembered(self):
         self.assertEqual(self.plan()['environment']['MARTINFLIX_PLEX_URL'], '')
@@ -447,6 +460,56 @@ class RestartReportTests(unittest.TestCase):
                  'State': {'Running': False, 'StartedAt': 't0'}}]))
         self.assertEqual(install.container_states('martinflix-x', {}, run=run),
                          {'sonarr': ('abc', True, 't1'), 'gluetun': ('def', False, 't0')})
+
+
+class PlexTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.config = Path(folder.name)
+
+    def test_the_token_is_read_once_the_server_is_claimed(self):
+        self.assertEqual(install.plex_token(self.config), '')
+        preferences = self.config / install.PLEX_PREFERENCES
+        preferences.parent.mkdir(parents=True)
+        preferences.write_text('<?xml version="1.0"?><Preferences MachineIdentifier="x" PlexOnlineToken="abcDEF123-_x"/>')
+        self.assertEqual(install.plex_token(self.config), 'abcDEF123-_x')
+
+    def test_claim_codes_are_checked(self):
+        with patch.object(install.sys.stdin, 'isatty', return_value=True), redirect_stdout(io.StringIO()):
+            with patch('builtins.input', return_value='claim-AbCdEf123456_-xy'):
+                self.assertEqual(install.plex_claim_code(), 'claim-AbCdEf123456_-xy')
+            with patch('builtins.input', return_value=''):
+                self.assertEqual(install.plex_claim_code(), '')
+            with patch('builtins.input', return_value='not a claim'), self.assertRaisesRegex(ValueError, 'plex.tv/claim'):
+                install.plex_claim_code()
+
+    def opener(self, sections):
+        requests = []
+        def open_(request, timeout):
+            requests.append((request.get_method(), request.full_url, request.get_header('X-plex-token')))
+            body = json.dumps({'MediaContainer': {'Directory': sections}}).encode() if request.get_method() == 'GET' else b''
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = body
+            return response
+        return open_, requests
+
+    def test_new_servers_get_tv_and_film_libraries_over_the_media_folders(self):
+        open_, requests = self.opener([])
+        with redirect_stdout(io.StringIO()):
+            install.seed_plex_libraries('token', 'en-GB', opener=open_)
+        posts = [url for method, url, _ in requests if method == 'POST']
+        self.assertEqual(len(posts), 2)
+        self.assertIn('location=%2Fdata%2FTV+Shows', posts[0])
+        self.assertIn('agent=tv.plex.agents.movie', posts[1])
+        self.assertTrue(any(method == 'PUT' and 'FSEventLibraryUpdatesEnabled=1' in url for method, url, _ in requests))
+        self.assertTrue(all(token == 'token' for _, _, token in requests))
+
+    def test_existing_libraries_are_left_alone(self):
+        open_, requests = self.opener([{'key': '1', 'title': 'Films'}])
+        with redirect_stdout(io.StringIO()):
+            install.seed_plex_libraries('token', 'en-GB', opener=open_)
+        self.assertEqual([method for method, _, _ in requests], ['GET'])
 
 class VpnDiagnosisTests(unittest.TestCase):
     def diagnose(self, log):
