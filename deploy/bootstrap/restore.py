@@ -49,10 +49,77 @@ def checksum(path):
     return digest.hexdigest()
 
 
+# Large reads: over a NAS, many small ones are slow.
+READ_BUFFER = 4 * 1024 * 1024
+
+
+class Progress:
+    """Shows how far through a large archive a long read has got: in place on a terminal, otherwise a line every
+    tenth. Small archives show nothing."""
+
+    LARGE = 200 * 1000 * 1000
+
+    def __init__(self, label, total, output=None):
+        self.label, self.total, self.output = label, total, output or __import__('sys').stdout
+        self.done = 0
+        self.shown = -1
+        self.live = self.output.isatty()
+
+    def add(self, count):
+        self.done += count
+        if self.total < self.LARGE:
+            return
+        percent = min(100, self.done * 100 // self.total)
+        step = percent if self.live else percent // 10 * 10
+        if step != self.shown:
+            self.shown = step
+            self.output.write(f'\r   {self.label} {step}%' if self.live else f'   {self.label} {step}%\n')
+            self.output.flush()
+
+    def finish(self):
+        if self.total >= self.LARGE and self.live:
+            self.output.write('\r\x1b[2K')
+            self.output.flush()
+
+
+class HashingReader:
+    """A file read once from start to end, hashed on the way, for tarfile's stream mode."""
+
+    def __init__(self, raw, digest, progress):
+        self.raw, self.digest, self.progress = raw, digest, progress
+
+    def read(self, size=-1):
+        data = self.raw.read(size)
+        self.digest.update(data)
+        self.progress.add(len(data))
+        return data
+
+
+def scan(path, label, output=None):
+    """An archive's SHA-256 and the names in it, from one read through the file: over a NAS, reading a large
+    archive twice, or jumping about in it, takes many minutes."""
+    digest = hashlib.sha256()
+    progress = Progress(f'Checking {label}', path.stat().st_size, output)
+    with open(path, 'rb', buffering=READ_BUFFER) as raw:
+        reader = HashingReader(raw, digest, progress)
+        if path.suffix == '.zip':
+            while reader.read(1024 * 1024):
+                pass
+            with zipfile.ZipFile(path) as archive:
+                names = archive.namelist()
+        else:
+            with tarfile.open(fileobj=reader, mode='r|*') as archive:
+                names = [member.name for member in archive]
+            while reader.read(1024 * 1024):
+                pass
+    progress.finish()
+    return digest.hexdigest(), names
+
+
 class Backup:
     """One backup folder, checked: every archive its manifest lists is present and unchanged."""
 
-    def __init__(self, folder):
+    def __init__(self, folder, output=None):
         self.folder = Path(folder)
         try:
             self.manifest = json.loads((self.folder / 'manifest.json').read_text())
@@ -69,28 +136,19 @@ class Backup:
             path = self.folder / PurePosixPath(entry.get('file', '')).name
             if not path.is_file():
                 raise RestoreError(f'{LABELS[app]}’s archive, {path.name}, is missing from the backup.')
-            if checksum(path) != entry.get('sha256'):
+            try:
+                digest, names = scan(path, f'{LABELS[app]}’s archive', output)
+            except (OSError, zipfile.BadZipFile, tarfile.TarError) as exc:
+                raise RestoreError(f'{LABELS[app]}’s archive, {path.name}, cannot be read ({exc}).') from None
+            if digest != entry.get('sha256'):
                 raise RestoreError(f'{LABELS[app]}’s archive, {path.name}, doesn’t match its checksum: it changed or '
                                    'was damaged after the backup. Restore another backup.')
+            # Every name is checked before anything is restored, so a bad one stops the restore up front.
+            for name in names:
+                safe_name(name)
             self.apps[app] = path
-            self.check_paths(app, path)
         if not self.apps:
             raise RestoreError('This backup holds no app data to restore.')
-
-    @staticmethod
-    def check_paths(app, path):
-        """Read every name in an archive before anything is restored, so a bad one stops the restore up front."""
-        try:
-            if path.suffix == '.zip':
-                with zipfile.ZipFile(path) as archive:
-                    names = archive.namelist()
-            else:
-                with tarfile.open(path) as archive:
-                    names = archive.getnames()
-        except (OSError, zipfile.BadZipFile, tarfile.TarError) as exc:
-            raise RestoreError(f'{LABELS[app]}’s archive, {path.name}, cannot be read ({exc}).') from None
-        for name in names:
-            safe_name(name)
 
     @property
     def exported(self):
@@ -238,7 +296,9 @@ class Restorer:
         folder = self.state / 'plex'
         server = folder / PLEX_SERVER
         identity = plex_identity(folder / PLEX_PREFERENCES) if self.keep_plex_identity else None
-        with tarfile.open(archive_path) as archive:
+        progress = Progress('Restoring Plex', Path(archive_path).stat().st_size)
+        with open(archive_path, 'rb', buffering=READ_BUFFER) as raw, \
+                tarfile.open(fileobj=HashingReader(raw, hashlib.sha256(), progress), mode='r|*') as archive:
             for member in archive:
                 name = safe_name(member.name)
                 if str(name) == 'Preferences.xml' and member.isfile():
@@ -261,6 +321,7 @@ class Restorer:
                             os.symlink(member.linkname, target)
                     else:
                         self.write(archive.extractfile(member), target)
+        progress.finish()
 
     def restore(self, backup):
         for app in ORDER:
