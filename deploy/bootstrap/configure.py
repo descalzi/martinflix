@@ -24,9 +24,17 @@ PROWLARR_INDEXERS = {
 # reference host, since any of them can turn the check on.
 FLARESOLVERR_INDEXERS = tuple(PROWLARR_INDEXERS)
 FLARESOLVERR_TAG = 'flaresolverr'
-# The site address each indexer uses, from the reference host, when Prowlarr still offers it. Others get the first
-# address Prowlarr lists, as its own Add dialog would, rather than none.
-PROWLARR_BASE_URLS = {}
+# The site address each indexer uses on the reference host, when Prowlarr still offers it. Others (World-torrent has
+# none there) get the first address Prowlarr lists, as its own Add dialog would, which Prowlarr uses anyway.
+PROWLARR_BASE_URLS = {
+    '1337x': 'https://1337x.to/',
+    'eztv': 'https://eztvx.to/',
+    'kickasstorrents-ws': 'https://kickass.ws/',
+    'limetorrents': 'https://www.limetorrents.lol/',
+    'thepiratebay': 'https://thepiratebay.host/',
+    'torrentdownloads': 'https://www.torrentdownloads.pro/',
+    'yts': 'https://yts.mx/',
+}
 
 
 def chosen_base_url(item):
