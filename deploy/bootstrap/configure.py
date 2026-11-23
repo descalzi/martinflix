@@ -24,6 +24,26 @@ PROWLARR_INDEXERS = {
 # reference host, since any of them can turn the check on.
 FLARESOLVERR_INDEXERS = tuple(PROWLARR_INDEXERS)
 FLARESOLVERR_TAG = 'flaresolverr'
+# The site address each indexer uses, from the reference host, when Prowlarr still offers it. Others get the first
+# address Prowlarr lists, as its own Add dialog would, rather than none.
+PROWLARR_BASE_URLS = {}
+
+
+def chosen_base_url(item):
+    """The address an indexer should use, or None when Prowlarr lists none for it."""
+    offered = [url for url in item.get('indexerUrls') or [] if isinstance(url, str)]
+    preferred = PROWLARR_BASE_URLS.get(item.get('definitionName'))
+    return preferred if preferred in offered else (offered[0] if offered else None)
+
+
+def with_base_url(item):
+    """The indexer with its base URL filled in when it has none. Returns None when nothing changes."""
+    url = chosen_base_url(item)
+    fields = item.get('fields') or []
+    field = next((field for field in fields if field.get('name') == 'baseUrl'), None)
+    if url is None or field is None or field.get('value'):
+        return None
+    return {**item, 'fields': [{**entry, 'value': url} if entry is field else entry for entry in fields]}
 # The reference host's Transmission choices, applied once to installs that started before setup shipped them.
 # New installs get the same values from transmission-settings.json before Transmission first starts.
 TRANSMISSION_SESSION = {
@@ -433,17 +453,20 @@ def indexer_tags(definition, flaresolverr_tag, tags=()):
 
 
 def update_seeded_prowlarr_indexers(api, *, enable, flaresolverr_tag):
-    """Turn on the indexers earlier setups added disabled, and route the Cloudflare ones through FlareSolverr."""
+    """Put right the indexers earlier setups added: turn them on (`enable`), give them a site address if they have
+    none, and route them through FlareSolverr (`flaresolverr_tag`)."""
     for item in api.request('indexer'):
         definition = item.get('definitionName')
         if definition not in PROWLARR_INDEXERS:
             continue
         tags = indexer_tags(definition, flaresolverr_tag, item.get('tags') or [])
-        if (enable and not item.get('enable')) or tags != (item.get('tags') or []):
-            api.request(f'indexer/{item["id"]}?forceSave=true', {**item, 'enable': item.get('enable') or enable, 'tags': tags},
-                        method='PUT')
-            print(f'   Prowlarr: {item["name"]} is enabled{" and uses FlareSolverr" if flaresolverr_tag in tags else ""}.',
-                  flush=True)
+        addressed = with_base_url(item)
+        if (enable and not item.get('enable')) or tags != (item.get('tags') or []) or addressed:
+            api.request(f'indexer/{item["id"]}?forceSave=true',
+                        {**(addressed or item), 'enable': item.get('enable') or enable, 'tags': tags}, method='PUT')
+            print(f'   Prowlarr: {item["name"]} updated'
+                  f'{f" to use {chosen_base_url(item)}" if addressed else ""}'
+                  f'{", through FlareSolverr" if flaresolverr_tag is not None and flaresolverr_tag in tags else ""}.', flush=True)
 
 
 def seed_prowlarr_indexers(api, flaresolverr_tag=None):
@@ -463,6 +486,7 @@ def seed_prowlarr_indexers(api, flaresolverr_tag=None):
             continue
         entry = templates[definition].copy()
         entry.pop('id', None)
+        entry = with_base_url(entry) or entry
         entry.update(name=name, priority=priority, appProfileId=profile['id'], enable=True,
                      tags=indexer_tags(definition, flaresolverr_tag))
         # Save without Prowlarr's connection test: an indexer that is down today still belongs in the list, and
@@ -480,7 +504,7 @@ def seed_prowlarr_indexers(api, flaresolverr_tag=None):
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
                    seed_indexers=False, seed_radarr_indexers=False, seed_prowlarr=False, arr_address='127.0.0.1',
                    downloads_behind_vpn=True, prowlarr_address='127.0.0.1', setup_flaresolverr=False,
-                   enable_prowlarr_indexers=False):
+                   enable_prowlarr_indexers=False, address_prowlarr_indexers=False):
     transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
     prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=prowlarr_address) if prowlarr_key else None
@@ -521,7 +545,7 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
         tag = ensure_flaresolverr_proxy(prowlarr, downloads_behind_vpn) if setup_flaresolverr else None
         if seed_prowlarr:
             seed_prowlarr_indexers(prowlarr, tag)
-        elif enable_prowlarr_indexers or tag is not None:
+        elif enable_prowlarr_indexers or address_prowlarr_indexers or tag is not None:
             update_seeded_prowlarr_indexers(prowlarr, enable=enable_prowlarr_indexers, flaresolverr_tag=tag)
     # Health warnings, such as a missing download folder, otherwise linger until the apps' next scheduled check.
     for api in (*(AppApi(name, ports[app], arr_keys[app], address=arr_address) for app, name in ARR_NAMES.items()),

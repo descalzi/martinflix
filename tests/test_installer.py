@@ -404,6 +404,19 @@ class RouteChangeTests(unittest.TestCase):
         self.assertEqual(configure.ensure_flaresolverr_proxy(prowlarr, True), 4)
         self.assertEqual(self.posts + self.puts, [])
 
+    def test_indexers_get_a_site_address_when_they_have_none(self):
+        prowlarr = self.prowlarr({'indexer': [
+            {'id': 1, 'name': 'YTS', 'definitionName': 'yts', 'enable': True, 'tags': [],
+             'indexerUrls': ['https://yts.mx/', 'https://yts.lt/'], 'fields': [{'name': 'baseUrl', 'value': None}]},
+            {'id': 2, 'name': 'EZTV', 'definitionName': 'eztv', 'enable': False, 'tags': [],
+             'indexerUrls': ['https://eztvx.to/'], 'fields': [{'name': 'baseUrl', 'value': 'https://eztvx.to/'}]}]})
+        with patch.dict(configure.PROWLARR_BASE_URLS, {'yts': 'https://yts.lt/'}), redirect_stdout(io.StringIO()):
+            configure.update_seeded_prowlarr_indexers(prowlarr, enable=False, flaresolverr_tag=None)
+        self.assertEqual(len(self.puts), 1, 'one already set, and disabled indexers stay disabled')
+        route, entry = self.puts[0]
+        self.assertEqual((route, entry['fields'][0]['value'], entry['enable']), ('indexer/1?forceSave=true', 'https://yts.lt/', True))
+        self.assertEqual(configure.chosen_base_url({'definitionName': 'yts', 'indexerUrls': ['https://a/', 'https://b/']}), 'https://a/')
+
     def test_earlier_disabled_indexers_are_turned_on_once(self):
         prowlarr = self.prowlarr({'indexer': [
             {'id': 1, 'name': '1337x', 'definitionName': '1337x', 'enable': False, 'tags': []},
