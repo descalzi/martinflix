@@ -499,8 +499,12 @@ def describe_state(found, follows=None):
 
 class StepProgress:
     """Each app's progress while a step waits for it to be healthy, so a long wait never looks frozen. On a
-    terminal the lines update in place with the time waited; otherwise, as in the dashboard's updates, a line is
-    printed each time an app's state changes."""
+    terminal the lines update in place with the time waited. Otherwise, as in the dashboard's updates, only an app
+    that is taking a while gets a line, now and then: the step's outcome for each app follows anyway."""
+
+    # Without a terminal: quiet for this long, then a line per waiting app at most this often, or when it changes.
+    QUIET_SECONDS = 15
+    REPEAT_SECONDS = 30
 
     def __init__(self, project, names, environment, follows=None, output=None, run=subprocess.run,
                  clock=time.monotonic):
@@ -528,9 +532,11 @@ class StepProgress:
                 text = 'running'
             if self.live:
                 lines.append(f'   {app_label(name):<20} {text}' + ('' if finished else f' {waited // 60}:{waited % 60:02d}'))
-            elif self.reported.get(name) != text:
-                self.reported[name] = text
-                lines.append(f'   {app_label(name):<20} {text}')
+            elif not finished and waited >= self.QUIET_SECONDS:
+                last = self.reported.get(name)
+                if last is None or last[0] != text or waited - last[1] >= self.REPEAT_SECONDS:
+                    self.reported[name] = (text, waited)
+                    lines.append(f'   {app_label(name):<20} {text} {waited // 60}:{waited % 60:02d}')
         if self.live:
             self.clear()
             width = shutil.get_terminal_size((80, 20)).columns - 1

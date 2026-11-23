@@ -827,7 +827,7 @@ class StepProgressTests(unittest.TestCase):
         return install.StepProgress('martinflix-test', ['transmission', 'prowlarr'], {}, follows='gluetun',
                                     output=output, run=run, clock=clock), output
 
-    def test_without_a_terminal_each_change_is_a_line(self):
+    def test_without_a_terminal_only_a_slow_app_gets_a_line(self):
         progress, output = self.progress(False, ['transmission\tcreated\tCreated\nprowlarr\tcreated\tCreated\n',
                                                  'transmission\tcreated\tCreated\nprowlarr\trunning\tUp 4 seconds (health: starting)\n',
                                                  'transmission\trunning\tUp 9 seconds (healthy)\nprowlarr\trunning\tUp 9 seconds (healthy)\n'])
@@ -835,10 +835,10 @@ class StepProgressTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), '', 'nothing in the first seconds')
         for _ in range(3):
             progress.update()
+        # The step's outcome follows for each app, so "ready" gets no line of its own.
         self.assertEqual(output.getvalue().splitlines(), [
-            '   Prowlarr             waiting for Gluetun (VPN)', '   Transmission         waiting for Gluetun (VPN)',
-            '   Prowlarr             starting…',
-            '   Prowlarr             ready', '   Transmission         ready'])
+            '   Prowlarr             waiting for Gluetun (VPN) 1:15', '   Transmission         waiting for Gluetun (VPN) 1:15',
+            '   Prowlarr             starting… 1:20'])
 
     def test_on_a_terminal_the_lines_update_in_place_with_the_time_waited(self):
         progress, output = self.progress(True, ['prowlarr\trunning\tUp 4 seconds (health: starting)\n',
@@ -889,15 +889,16 @@ class ProjectNameTests(unittest.TestCase):
 class ReplacedContainerTests(unittest.TestCase):
     def test_a_container_about_to_be_replaced_is_running_not_ready(self):
         output = io.StringIO()
-        output.isatty = lambda: False
+        output.isatty = lambda: True
         lines = iter(['sonarr\trunning\tUp 2 hours (healthy)\told1\n',
                       'sonarr\trunning\tUp 2 hours (healthy)\told1\n',
                       'sonarr\trunning\tUp 9 seconds (healthy)\tnew2\n'])
         progress = install.StepProgress('p', ['sonarr'], {}, output=output, clock=iter([0, 5, 9]).__next__,
                                         run=lambda command, **kwargs: SimpleNamespace(returncode=0, stdout=next(lines)))
         progress.update()
+        self.assertIn('Sonarr               running\n', output.getvalue())
         progress.update()
-        self.assertEqual(output.getvalue().splitlines(), ['   Sonarr               running', '   Sonarr               ready'])
+        self.assertTrue(output.getvalue().endswith('Sonarr               ready\n'))
 
 
 class SummaryTests(unittest.TestCase):
