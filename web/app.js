@@ -153,23 +153,71 @@ function serviceCard(service, groupServices) {
 }
 
 /** Restart and Update, when the controller can act on this app. */
-function controlButtons(service) {
+function controlButtons(service, extra = '') {
   if (!service.control) return '';
   const name = esc(service.name);
   return `<div class="service-actions">
+    ${extra}
     <button class="button button-quiet button-small" type="button" data-control="restart" data-service="${name}">${icon('refresh')}${serviceIsUp(service) ? 'Restart' : 'Start'}</button>
     ${service.control.canUpdate === false ? '' : `<button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>`}
   </div>`;
 }
 
+/* The VPN test: where the downloads really leave from, and whether that is through the VPN. */
+let vpnCheck = null;
+let vpnChecking = false;
+
+function placeName(place) {
+  if (!place) return '';
+  let country = place.country || '';
+  try { country = new Intl.DisplayNames(undefined, {type: 'region'}).of(country) || country; } catch { /* keep the code */ }
+  return [place.city, country].filter(Boolean).join(', ');
+}
+
+function vpnResult() {
+  if (vpnChecking) return `<div class="vpn-result" role="status">${icon('refresh')}<span>Checking where downloads go out…</span></div>`;
+  if (!vpnCheck) return '';
+  const check = vpnCheck;
+  // The controller names Compose services; the catalog knows two of them by their older names.
+  const catalogName = name => ({gluetun: 'nordvpn', transmission: 'transmission-daemon'})[name] || name;
+  const app = appInfo(catalogName(check.probe)).name;
+  const when = new Date(check.checkedAt).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+  const exit = check.exit;
+  const home = check.home ? `your own connection${check.home.ip ? ` (${check.home.ip}${check.home.org ? `, ${check.home.org.replace(/^AS\d+ /, '')}` : ''})` : ''}` : 'your own connection';
+  const direct = check.direct?.length ? ` ${check.direct.map(name => appInfo(catalogName(name)).name).join(' and ')} ${check.direct.length === 1 ? 'goes' : 'go'} out directly, as chosen at setup.` : '';
+  const lines = {
+    protected: ['ok', 'tick', `Protected: ${app} goes out through the VPN from ${placeName(exit)} (${exit?.ip}${exit?.org ? `, ${exit.org.replace(/^AS\d+ /, '')}` : ''}), not ${home}.${direct}`],
+    exposed: ['crit', 'alert', `Not protected: ${app} goes out on ${home}, not through the VPN. Stop downloads and restart Gluetun.`],
+    down: ['warn', 'alert', `The VPN is down: ${check.problem || 'Gluetun isn’t connected.'} Downloads behind it are blocked until it reconnects, so nothing goes out unprotected.`],
+  }[check.verdict] || ['warn', 'alert', check.error || 'The VPN check didn’t finish.'];
+  return `<div class="vpn-result tone-${lines[0]}" role="status">${icon(lines[1])}<span>${esc(lines[2])} <span class="muted">Checked ${esc(when)}.</span></span></div>`;
+}
+
+async function testVpn() {
+  vpnChecking = true;
+  document.querySelectorAll('.vpn-slot').forEach(slot => { slot.innerHTML = vpnResult(); });
+  document.querySelectorAll('[data-vpn-test]').forEach(button => { button.disabled = true; });
+  try {
+    vpnCheck = await post('/api/vpn-test', {});
+  } catch (error) {
+    vpnCheck = {verdict: null, error: error.message, checkedAt: new Date().toISOString()};
+  }
+  vpnChecking = false;
+  document.querySelectorAll('.vpn-slot').forEach(slot => { slot.innerHTML = vpnResult(); });
+  document.querySelectorAll('[data-vpn-test]').forEach(button => { button.disabled = false; });
+}
+
 /** The service that others share, such as Gluetun for the VPN apps: a card spanning the section it heads. */
 function gatewayBar(service) {
   const app = appInfo(service.name);
+  const vpn = service.name === 'nordvpn' && service.control;
+  const test = vpn ? `<button class="button button-quiet button-small" type="button" data-vpn-test${vpnChecking ? ' disabled' : ''}>${icon('shield')}Test VPN</button>` : '';
   return `<div class="gateway service-card tone-${serviceState(service).tone}">
     ${appIcon(service.name)}
     <div class="gateway-name"><h4>${esc(app.name)}</h4><p>${esc(app.role)}</p></div>
     ${statusChip(service)}
-    ${controlButtons(service)}
+    ${controlButtons(service, test)}
+    ${vpn ? `<div class="vpn-slot">${vpnResult()}</div>` : ''}
   </div>`;
 }
 
@@ -359,6 +407,10 @@ function setupControls() {
   const pin = $('#control-pin');
   const error = $('#control-error');
   document.addEventListener('click', event => {
+    if (event.target.closest('[data-vpn-test]:not(:disabled)')) {
+      testVpn();
+      return;
+    }
     const button = event.target.closest('[data-control]');
     if (!button || button.disabled) return;
     const action = button.dataset.control;

@@ -186,6 +186,36 @@ CHANGES_CACHE = {}
 CHANGES_CACHE_SECONDS = 3600
 
 
+HOME_ADDRESS = {'at': 0.0, 'value': None}
+
+
+def home_address():
+    """This network's own public address, as everything outside the VPN uses it. The dashboard isn't behind the VPN,
+    so it sees the address the VPN should be hiding."""
+    if time.time() - HOME_ADDRESS['at'] < 600 and HOME_ADDRESS['value']:
+        return HOME_ADDRESS['value']
+    try:
+        request = urllib.request.Request('https://ipinfo.io/json', headers={'Accept': 'application/json',
+                                                                            'User-Agent': 'MartinFlix dashboard'})
+        with ARR_OPENER.open(request, timeout=10) as response:
+            data = json.load(response)
+        value = {key: data.get(key) for key in ('ip', 'city', 'country', 'org')} if isinstance(data.get('ip'), str) else None
+    except (OSError, ValueError, AttributeError):
+        value = None
+    HOME_ADDRESS.update(at=time.time(), value=value)
+    return value
+
+
+def vpn_verdict(check, home):
+    """Protected, exposed or down, from the controller's check and this network's own address."""
+    exit_point = check.get('exit')
+    if not exit_point:
+        return 'down'
+    if home and home.get('ip') == exit_point.get('ip'):
+        return 'exposed'
+    return 'protected'
+
+
 def release_brief():
     """This MartinFlix version and any newer one on its channel, as the controller last saw them."""
     try:
@@ -1592,6 +1622,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == '/api/backup':
             self.backup_request()
+            return
+        if path == '/api/vpn-test':
+            if self.json_body(64) is None:
+                return
+            try:
+                check = controller_request('/vpn-test', {}, timeout=90)
+            except ControllerError as exc:
+                self.send_json({'error': str(exc)}, 502)
+                return
+            if check is None:
+                self.send_json({'error': 'The VPN check needs the controller.'}, 503)
+                return
+            home = home_address() if check.get('installed') else None
+            self.send_json({**check, 'home': home, 'verdict': vpn_verdict(check, home) if check.get('installed') else None,
+                            'checkedAt': datetime.now(timezone.utc).isoformat(timespec='seconds')})
             return
         if path in ('/api/system/check', '/api/system/update', '/api/settings', '/api/restore'):
             self.system_request(path)

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from backups import NAME, BackupError, Backups
 from releases import Releases, UpdateError, secret_values, setup_arguments
+import vpncheck
 
 # Restarting these ends the request that asked for it, so the controller answers first and restarts them after.
 SELF = frozenset({'dashboard', 'controller'})
@@ -312,6 +313,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': exc.args[0]}, 404)
             except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
                 self.send_json({'error': str(exc) or 'Transmission could not be restarted.'}, 502)
+            return
+        if self.path == '/vpn-test':
+            # Only looks, so it needs no PIN.
+            try:
+                self.send_json(vpncheck.check(self.server.stack))
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+                self.send_json({'error': str(exc) or 'The VPN check could not run.'}, 502)
             return
         if self.path == '/release/check':
             # Only downloads an image, so it needs no PIN.

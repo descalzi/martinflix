@@ -484,6 +484,18 @@ class SystemTests(unittest.TestCase):
             with patch.object(server, 'controller_request', return_value=None):
                 self.assertIn('doesn’t have', server.backup_status()['scheduleProblem'])
 
+    def test_the_vpn_test_compares_the_exit_with_this_networks_own_address(self):
+        check = {'installed': True, 'probe': 'transmission', 'exit': {'ip': '185.242.6.10', 'city': 'Prague'}, 'problem': None}
+        with patch.object(server, 'controller_request', return_value=check) as controller, \
+                patch.object(server, 'home_address', return_value={'ip': '86.1.2.3', 'org': 'AS5089 Virgin Media'}):
+            status, body = self.post('/api/vpn-test', {})
+        self.assertEqual(status, 200)
+        self.assertEqual(body['verdict'], 'protected')
+        controller.assert_called_with('/vpn-test', {}, timeout=90)
+        self.assertEqual(server.vpn_verdict(check, {'ip': '185.242.6.10'}), 'exposed')
+        self.assertEqual(server.vpn_verdict({'exit': None, 'problem': 'x'}, {'ip': '86.1.2.3'}), 'down')
+        self.assertEqual(server.vpn_verdict(check, None), 'protected', 'the VPN is up even if our own address is unknown')
+
     def test_sign_ins_survive_a_restart_until_the_password_changes(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
