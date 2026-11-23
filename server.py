@@ -847,25 +847,27 @@ def arr_problems(kind, connection, now):
     return {'missing': missing}
 
 
-def arr_items(kind, raw, now, episodes=None, problems=None):
+def arr_items(kind, raw, now, episodes=None, problems=None, everything=False):
+    """The titles worth showing: by default those coming up or with something missing; with `everything`, all of them."""
     last_day = calendar.monthrange(now.year + 1, now.month)[1]
     deadline = now.replace(year=now.year + 1, day=min(now.day, last_day))
     problems = problems or {}
     items = []
     for item in raw:
-        if not item.get('monitored'):
+        monitored = bool(item.get('monitored'))
+        if not monitored and not everything:
             continue
         airing = None
         status = item.get('status') or ''
-        missing = (problems.get('missing') or {}).get(item.get('id')) if kind == 'sonarr' else None
+        missing = (problems.get('missing') or {}).get(item.get('id')) if kind == 'sonarr' and monitored else None
         if kind == 'sonarr':
             airing = next_airing(item.get('nextAiring'))
-            upcoming = status.casefold() in ('upcoming', 'continuing') and airing and now <= airing <= deadline
+            upcoming = monitored and status.casefold() in ('upcoming', 'continuing') and airing and now <= airing <= deadline
             if not upcoming:
                 airing = None
-            if not upcoming and not missing:
+            if not upcoming and not missing and not everything:
                 continue
-        elif item.get('hasFile') is not False:
+        elif item.get('hasFile') is not False and not everything:
             continue
 
         media_id = item.get('id')
@@ -873,13 +875,25 @@ def arr_items(kind, raw, now, episodes=None, problems=None):
         poster = (f'/api/posters/{kind}/{media_id}'
                   if type(media_id) is int and 0 < media_id <= 2147483647 and has_poster else None)
         entry = {
+            'id': media_id if type(media_id) is int and 0 < media_id <= 2147483647 else None,
             'title': item.get('title') or 'Untitled',
             'year': item.get('year'),
             'status': status,
+            'monitored': monitored,
             'nextAiring': airing.isoformat() if airing else None,
             'releaseDate': movie_release(item) if kind == 'radarr' else None,
             'poster': poster,
         }
+        if everything:
+            # What deleting it would free, and what it holds.
+            statistics = item.get('statistics') if isinstance(item.get('statistics'), dict) else {}
+            size = statistics.get('sizeOnDisk') if kind == 'sonarr' else item.get('sizeOnDisk')
+            entry['size'] = size if type(size) is int and size > 0 else 0
+            if kind == 'sonarr':
+                files, total = statistics.get('episodeFileCount'), statistics.get('totalEpisodeCount')
+                entry['episodes'] = {'files': files if type(files) is int else 0, 'total': total if type(total) is int else 0}
+            else:
+                entry['downloaded'] = bool(item.get('hasFile'))
         if kind == 'sonarr' and episodes and media_id in episodes:
             entry['nextEpisode'] = episodes[media_id]
         if missing:
@@ -890,10 +904,13 @@ def arr_items(kind, raw, now, episodes=None, problems=None):
             entry['availability'] = availability
             entry['downloading'] = media_id in (problems.get('downloading') or ())
             # Past the day Radarr could get it, with nothing downloading: worth a look.
-            if availability['available'] and not entry['downloading'] and (
+            if monitored and item.get('hasFile') is False and availability['available'] and not entry['downloading'] and (
                     availability['date'] is None or date.fromisoformat(availability['date']) <= now.date() - MISSING_GRACE):
                 entry['overdue'] = True
         items.append(entry)
+    if everything:
+        # The whole library, as the apps list it, by title.
+        return sorted(items, key=lambda item: (item['title'].casefold().removeprefix('the '), item['year'] or 0))
     if kind == 'radarr':
         # As Radarr's Missing list, with overdue films first, then those available now, then the rest by date.
         return sorted(items, key=lambda item: (not item.get('overdue'), not item['availability']['available'],
@@ -904,7 +921,7 @@ def arr_items(kind, raw, now, episodes=None, problems=None):
                                            item['title'].casefold()))
 
 
-def arr_data(kind):
+def arr_data(kind, everything=False):
     try:
         connection = arr_connection(kind)
     except ValueError as exc:
@@ -930,7 +947,7 @@ def arr_data(kind):
             problems = arr_problems(kind, connection, now)
         except (OSError, ValueError, TypeError, AttributeError):
             problems = None
-        return {'configured': True, 'items': arr_items(kind, raw, now, episodes, problems)}
+        return {'configured': True, 'items': arr_items(kind, raw, now, episodes, problems, everything)}
     except (OSError, ValueError, TypeError, AttributeError):
         return {'configured': True, 'error': 'Could not reach the service or its API rejected the key.', 'items': []}
 
@@ -1466,6 +1483,34 @@ def add_title(kind, request):
     return {'added': True, 'title': (added or item).get('title') or item.get('title'), 'searching': search}
 
 
+def delete_title(kind, request):
+    """Remove one series or film from Sonarr or Radarr, and with `files`, its folder and everything in it."""
+    identifier, files = request.get('id'), request.get('files', False)
+    if type(identifier) is not int or not 0 < identifier <= 2147483647:
+        raise AddError('Choose a title to delete.')
+    if type(files) is not bool:
+        raise AddError('Invalid choice for the files.')
+    connection = arr_connection(kind)
+    if connection is None:
+        raise AddError(f'Connect {kind.capitalize()} to the dashboard first.')
+    collection = '/api/v3/series' if kind == 'sonarr' else '/api/v3/movie'
+    try:
+        item = arr_json(connection, f'{collection}/{identifier}', timeout=15)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code == 404:
+            raise AddError(f'That title is no longer in {kind.capitalize()}.') from None
+        raise
+    if not isinstance(item, dict) or item.get('id') != identifier:
+        raise AddError(f'That title is no longer in {kind.capitalize()}.')
+    # Sonarr and Radarr name the exclusion option differently; neither adds one, so the title can be added again.
+    exclusion = 'addImportListExclusion' if kind == 'sonarr' else 'addImportExclusion'
+    query = urllib.parse.urlencode({'deleteFiles': str(files).lower(), exclusion: 'false'})
+    # Deleting files can take a while on a network share.
+    arr_json(connection, f'{collection}/{identifier}?{query}', method='DELETE', timeout=120)
+    return {'deleted': True, 'title': item.get('title') or 'The title', 'files': files}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
@@ -1563,7 +1608,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/activity':
             self.send_json(dashboard_activity())
         elif path in ('/api/sonarr', '/api/radarr'):
-            self.send_json(arr_data(path.rsplit('/', 1)[1]))
+            everything = urllib.parse.parse_qs(url.query).get('show') == ['all']
+            self.send_json(arr_data(path.rsplit('/', 1)[1], everything))
         elif search := re.fullmatch(r'/api/search/(sonarr|radarr)', path):
             term = ' '.join(urllib.parse.parse_qs(url.query).get('term', [''])[0].split())
             if not 1 <= len(term) <= 100:
@@ -1614,8 +1660,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
-        if add := re.fullmatch(r'/api/add/(sonarr|radarr)', path):
-            self.add_request(add.group(1))
+        if add := re.fullmatch(r'/api/(add|delete)/(sonarr|radarr)', path):
+            self.add_request(add.group(2), add.group(1))
             return
         if control := re.fullmatch(r'/api/control/(restart|update)', path):
             self.control_request(control.group(1))
@@ -1792,7 +1838,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json({'ok': True, 'message': control_message(result)})
 
-    def add_request(self, kind):
+    def add_request(self, kind, action='add'):
         if not self.same_origin():
             self.send_json({'error': 'Open the dashboard and try again.'}, 403)
             return
@@ -1811,6 +1857,17 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError
         except (OSError, ValueError):
             self.send_json({'error': 'Invalid request.'}, 400)
+            return
+        if action == 'delete':
+            try:
+                self.send_json(delete_title(kind, request))
+            except AddError as exc:
+                self.send_json({'error': str(exc)}, 409)
+            except urllib.error.HTTPError as exc:
+                exc.close()
+                self.send_json({'error': f'{kind.capitalize()} refused to delete this title. Check its logs for the reason.'}, 502)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                self.send_json({'error': f'Could not reach {kind.capitalize()}. Check whether the title is still there, then try again.'}, 502)
             return
         try:
             if 'id' not in request and type(request.get('tmdb')) is int and 0 < request['tmdb'] <= 2147483647:

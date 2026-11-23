@@ -811,6 +811,19 @@ function posterProblem(item, kind) {
   return null;
 }
 
+/** In the whole-library view: what each title holds on disk, which is what deleting it frees. */
+function libraryDetails(item, kind) {
+  const quiet = item.monitored ? '' : 'Not monitored';
+  if (kind === 'sonarr') {
+    const {files = 0, total = 0} = item.episodes || {};
+    const held = files ? `${files} of ${total} episode${total === 1 ? '' : 's'} · ${bytesLabel(item.size)}` : 'No episodes downloaded';
+    return {meta: held, extra: [item.status && item.status[0].toUpperCase() + item.status.slice(1), quiet].filter(Boolean).join(' · ')};
+  }
+  if (item.downloaded) return {meta: `Downloaded · ${bytesLabel(item.size)}`, extra: quiet};
+  const {meta, extra} = posterDetails(item, kind);
+  return {meta, extra: [quiet, extra].filter(Boolean).join(' · ')};
+}
+
 function posterDetails(item, kind) {
   if (kind === 'sonarr') {
     const airing = item.nextAiring && new Date(item.nextAiring);
@@ -830,15 +843,19 @@ function posterDetails(item, kind) {
   return {meta: 'Release date unknown', extra: ''};
 }
 
-function posterCard(item, kind) {
-  const {meta, extra} = posterDetails(item, kind);
+function posterCard(item, kind, {all = false, deletable = false} = {}) {
+  const {meta, extra} = all ? libraryDetails(item, kind) : posterDetails(item, kind);
   const problem = posterProblem(item, kind);
   const title = item.year ? `${item.title} (${item.year})` : item.title;
+  const remove = deletable && item.id
+    ? `<button class="poster-delete" type="button" data-delete="${esc(kind)}" data-id="${esc(item.id)}" aria-label="Delete ${esc(title)}" title="Delete">${icon('trash')}</button>`
+    : '';
   return `<li class="poster-card${problem ? ' has-problem' : ''}">
     <div class="poster-art">
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" width="250" height="375">` : ''}
       ${problem ? `<span class="poster-flag">${icon('alert')}${esc(problem.flag)}</span>` : ''}
+      ${remove}
     </div>
     <h3 class="poster-title">${esc(title)}</h3>
     ${problem ? `<p class="poster-problem">${esc(problem.text)}</p>` : ''}
@@ -850,7 +867,7 @@ function posterCard(item, kind) {
 /** The Overview shows what's coming up; the Library shows everything monitored, with problems first. */
 function libraryItems(library) {
   const items = library.data?.items || [];
-  if (!library.upcomingOnly) return items;
+  if (!library.upcomingOnly || library.show === 'all') return items;
   return library.kind === 'sonarr'
     ? items.filter(item => item.nextAiring).sort((a, b) => a.nextAiring.localeCompare(b.nextAiring))
     : items.filter(item => !item.availability?.available && item.availability?.date)
@@ -878,6 +895,10 @@ function renderLibraryCount(library) {
     count.textContent = (kind === 'sonarr' ? `${total} ${total === 1 ? 'series airs' : 'series air'} in the next 12 months`
       : `${total} ${total === 1 ? 'film has' : 'films have'} a release ahead`) + flagged + queue;
     count.classList.toggle('has-problem', problems > 0);
+  } else if (library.show === 'all') {
+    const size = libraryItems(library).reduce((sum, item) => sum + (item.size || 0), 0);
+    count.textContent = `${total} ${kind === 'sonarr' ? 'series' : total === 1 ? 'film' : 'films'} · ${bytesLabel(size)} on disk`;
+    count.classList.remove('has-problem');
   } else {
     const problems = problemCount(library);
     const flagged = problems ? ` · ${problems} need${problems === 1 ? 's' : ''} a look` : '';
@@ -893,6 +914,11 @@ function libraryMessage(kind, data) {
 }
 
 function emptyLibrary(library) {
+  if (library.show === 'all') {
+    return library.kind === 'sonarr'
+      ? '<div class="empty-state"><h3>No series yet</h3><p>Sonarr has no series.</p><a class="text-link" href="/add">Add a series</a></div>'
+      : '<div class="empty-state"><h3>No films yet</h3><p>Radarr has no films.</p><a class="text-link" href="/add?kind=radarr">Add a film</a></div>';
+  }
   if (library.kind === 'sonarr') {
     return '<div class="empty-state"><h3>Nothing airing soon</h3><p>No monitored series have an episode due in the next 12 months.</p><a class="text-link" href="/add">Add a series</a></div>';
   }
@@ -913,7 +939,8 @@ function renderLibrary(library) {
   let items = libraryItems(library).filter(item => item.title.toLowerCase().includes(search));
   if (library.limit) items = items.slice(0, library.limit);
   content.innerHTML = items.length
-    ? `<ul class="poster-grid${library.limit ? ' is-rail' : ''}">${items.map(item => posterCard(item, kind)).join('')}</ul>`
+    ? `<ul class="poster-grid${library.limit ? ' is-rail' : ''}">${items.map(item => posterCard(item, kind,
+      {all: library.show === 'all', deletable: !library.limit})).join('')}</ul>`
     : search ? `<p class="empty">No titles match “${esc(filter.value.trim())}”.</p>` : emptyLibrary(library);
 }
 
@@ -924,8 +951,12 @@ function hidePosterOnError(content) {
 }
 
 async function loadLibrary(library) {
+  const show = library.show;
   try {
-    library.data = await get('/api/' + library.kind);
+    const data = await get('/api/' + library.kind + (show === 'all' ? '?show=all' : ''));
+    // A newer choice of view wins over an older answer still on its way.
+    if (library.show !== show) return;
+    library.data = data;
     renderLibrary(library);
   } catch {
     library.data = null;
@@ -943,16 +974,103 @@ function overviewLibrary(kind, content, count, extra = {}) {
 if (page === 'library') {
   for (const section of document.querySelectorAll('[data-library]')) {
     const content = section.querySelector('.library-content');
-    const filter = section.querySelector('input');
-    const library = {kind: section.dataset.library, content, filter, count: section.querySelector('.library-count')};
+    const filter = section.querySelector('[data-library-filter]');
+    const library = {kind: section.dataset.library, content, filter, count: section.querySelector('.library-count'), show: 'attention'};
     hidePosterOnError(content);
     filter.addEventListener('input', () => renderLibrary(library));
+    for (const choice of section.querySelectorAll('.library-show input')) {
+      choice.addEventListener('change', () => {
+        library.show = choice.value;
+        for (const intro of section.querySelectorAll('[data-show-intro]')) intro.hidden = intro.dataset.showIntro !== library.show;
+        library.data = null;
+        library.count.textContent = '';
+        content.innerHTML = `<p class="empty">Loading ${library.kind === 'sonarr' ? 'series' : 'films'}…</p>`;
+        loadLibrary(library);
+      });
+    }
     libraries[library.kind] = library;
   }
+  setupDelete();
 } else if (page === 'overview') {
   libraries.sonarr = overviewLibrary('sonarr', $('#next-series'), $('#next-series-count'));
   libraries.sonarr.upcomingOnly = true;
   libraries.radarr = overviewLibrary('radarr', $('#next-films'), $('#next-films-count'), {upcomingOnly: true});
+}
+
+/* Library: delete a series or film from Sonarr or Radarr, and its files only when asked. */
+function setupDelete() {
+  const dialog = $('#delete-dialog');
+  const files = $('#delete-files');
+  const warning = $('#delete-warning');
+  const error = $('#delete-error');
+  const confirm = $('#delete-confirm');
+  let target = null;
+  let busy = false;
+
+  const describe = () => {
+    const {kind, item} = target;
+    const app = kind === 'sonarr' ? 'Sonarr' : 'Radarr';
+    $('#delete-detail').textContent = files.checked
+      ? `Removes it from ${app} and deletes its folder from your media.`
+      : `Removes it from ${app}, which stops monitoring and downloading it. Its files stay in your media folder, and Plex keeps showing them.`;
+    warning.hidden = !files.checked;
+    // What's on disk is only known in the All view; otherwise say it plainly.
+    const saved = kind === 'sonarr' ? item.episodes?.files : item.downloaded === undefined ? undefined : Number(item.downloaded);
+    const held = saved === 0 ? null : kind === 'sonarr'
+      ? (saved ? `${saved} downloaded episode${saved === 1 ? '' : 's'}` : 'every downloaded episode')
+      : 'the downloaded film';
+    warning.querySelector('span').textContent = held
+      ? `This deletes ${held}${item.size ? ` (${bytesLabel(item.size)})` : ''} for good. It can’t be undone.`
+      : 'Nothing has been downloaded for it, so only its folder goes. It can’t be undone.';
+    confirm.innerHTML = `${icon(busy ? 'refresh' : 'trash')}${busy ? 'Deleting…' : files.checked ? 'Delete with files' : 'Delete'}`;
+  };
+  const setBusy = state => {
+    busy = state;
+    files.disabled = state;
+    $('#delete-cancel').disabled = state;
+    confirm.setAttribute('aria-disabled', String(state));
+    confirm.classList.toggle('is-busy', state);
+    describe();
+  };
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-delete]');
+    if (!button) return;
+    const library = libraries[button.dataset.delete];
+    const item = library?.data?.items?.find(entry => String(entry.id) === button.dataset.id);
+    if (!item) return;
+    target = {library, kind: library.kind, item};
+    $('#delete-title').textContent = `Delete ${item.year ? `${item.title} (${item.year})` : item.title}?`;
+    files.checked = false;
+    error.hidden = true;
+    setBusy(false);
+    dialog.showModal();
+    $('#delete-cancel').focus();
+  });
+  files.addEventListener('change', describe);
+  $('#delete-cancel').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+  $('#delete-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (busy || !target) return;
+    const {library, kind, item} = target;
+    error.hidden = true;
+    setBusy(true);
+    try {
+      const data = await post(`/api/delete/${kind}`, {id: item.id, files: files.checked});
+      busy = false;
+      dialog.close();
+      library.data.items = library.data.items.filter(entry => entry.id !== item.id);
+      renderLibrary(library);
+      const notice = $('#library-notice');
+      notice.textContent = `${data.title} was deleted from ${kind === 'sonarr' ? 'Sonarr' : 'Radarr'}${data.files ? ', with its files' : '. Its files are still in your media folder'}.`;
+      notice.hidden = false;
+    } catch (failure) {
+      setBusy(false);
+      error.textContent = failure.message;
+      error.hidden = false;
+    }
+  });
 }
 
 /* Add page: search Sonarr or Radarr's own lookup, then add a title with the defaults or the admin's choices. */

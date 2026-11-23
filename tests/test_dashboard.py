@@ -194,6 +194,39 @@ class AddTitleTests(unittest.TestCase):
             self.add('radarr', {'id': 99, 'availability': 'tomorrow'}, {'title': 'Hamnet', 'tmdbId': 99})
 
 
+class DeleteTitleTests(unittest.TestCase):
+    def delete(self, kind, request, item):
+        calls = []
+
+        def fake_json(connection, endpoint, payload=None, method=None, timeout=5):
+            calls.append((endpoint, method))
+            return None if method == 'DELETE' else item
+        with patch.object(server, 'arr_connection', return_value=('base', 'key')), \
+                patch.object(server, 'arr_json', side_effect=fake_json):
+            return server.delete_title(kind, request), calls
+
+    def test_keeps_files_unless_asked(self):
+        result, calls = self.delete('sonarr', {'id': 7}, {'id': 7, 'title': 'Slow Horses'})
+        self.assertEqual(calls[-1], ('/api/v3/series/7?deleteFiles=false&addImportListExclusion=false', 'DELETE'))
+        self.assertEqual(result, {'deleted': True, 'title': 'Slow Horses', 'files': False})
+
+    def test_deletes_a_films_files_when_asked(self):
+        result, calls = self.delete('radarr', {'id': 3, 'files': True}, {'id': 3, 'title': 'Hamnet'})
+        self.assertEqual(calls[-1], ('/api/v3/movie/3?deleteFiles=true&addImportExclusion=false', 'DELETE'))
+        self.assertTrue(result['files'])
+
+    def test_refuses_bad_requests_and_missing_titles(self):
+        for request in ({'id': 'x'}, {'id': 0}, {'id': 7, 'files': 'yes'}):
+            with self.assertRaises(server.AddError, msg=request):
+                self.delete('sonarr', request, {'id': 7})
+        with self.assertRaises(server.AddError):
+            self.delete('sonarr', {'id': 7}, {'id': 8})
+        gone = urllib.error.HTTPError('u', 404, 'Not Found', {}, io.BytesIO())
+        with patch.object(server, 'arr_connection', return_value=('base', 'key')), \
+                patch.object(server, 'arr_json', side_effect=gone), self.assertRaises(server.AddError):
+            server.delete_title('radarr', {'id': 3})
+
+
 class UptimeTests(unittest.TestCase):
     def test_docker_status_gives_uptime(self):
         self.assertEqual(server.docker_uptime('Up 3 days (healthy)'), '3 days')

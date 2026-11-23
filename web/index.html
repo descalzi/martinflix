@@ -30,6 +30,7 @@
     <symbol id="i-tunnel" viewBox="0 0 24 24"><path d="M12 3.5 5 6.5v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9v-5z"/><path d="m9 12 2 2 4-4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 6.5h15M9.5 6.5V4.5h5v2M6.5 6.5l1 13h9l1-13M10.5 10.5v6M13.5 10.5v6"/></symbol>
     <symbol id="i-tick" viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></symbol>
@@ -167,26 +168,37 @@
 
       <div class="page" data-for="library">
         <div class="library-bar">
-          <nav class="subnav" aria-label="Library sections"><a href="#series">Series</a><a href="#films">Missing films</a></nav>
+          <nav class="subnav" aria-label="Library sections"><a href="#series">Series</a><a href="#films">Films</a></nav>
           <a class="button button-primary" href="/add"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add a series or film</a>
         </div>
+        <p class="control-notice" id="library-notice" role="status" hidden></p>
         <section id="series" class="panel library" data-library="sonarr" aria-labelledby="series-title">
           <div class="panel-head">
-            <div><h2 id="series-title">Series</h2><p>Monitored series with an episode in the next 12 months, and any with episodes that aired but weren’t downloaded, first.</p></div>
+            <div><h2 id="series-title">Series</h2><p data-show-intro="attention">Monitored series with an episode in the next 12 months, and any with episodes that aired but weren’t downloaded, first.</p><p data-show-intro="all" hidden>Every series in Sonarr, by title, with what it takes up on disk.</p></div>
           </div>
           <div class="library-controls">
+            <fieldset class="segmented library-show">
+              <legend class="sr-only">Show</legend>
+              <label><input type="radio" name="series-show" value="attention" checked><span>Coming up</span></label>
+              <label><input type="radio" name="series-show" value="all"><span>All series</span></label>
+            </fieldset>
             <p class="library-count"></p>
-            <label class="search"><span class="sr-only">Find a series</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" placeholder="Find a series" autocomplete="off"></label>
+            <label class="search"><span class="sr-only">Find a series</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" data-library-filter placeholder="Find a series" autocomplete="off"></label>
           </div>
           <div class="library-content" aria-live="polite"><p class="empty">Loading series…</p></div>
         </section>
         <section id="films" class="panel library" data-library="radarr" aria-labelledby="films-title">
           <div class="panel-head">
-            <div><h2 id="films-title">Missing films</h2><p>Monitored films not downloaded yet, as in Radarr’s Missing list. Films past the day Radarr could get them come first, then the rest by when it can, from each film’s minimum availability.</p></div>
+            <div><h2 id="films-title">Films</h2><p data-show-intro="attention">Monitored films not downloaded yet, as in Radarr’s Missing list. Films past the day Radarr could get them come first, then the rest by when it can, from each film’s minimum availability.</p><p data-show-intro="all" hidden>Every film in Radarr, by title, with what it takes up on disk.</p></div>
           </div>
           <div class="library-controls">
+            <fieldset class="segmented library-show">
+              <legend class="sr-only">Show</legend>
+              <label><input type="radio" name="films-show" value="attention" checked><span>Missing</span></label>
+              <label><input type="radio" name="films-show" value="all"><span>All films</span></label>
+            </fieldset>
             <p class="library-count"></p>
-            <label class="search"><span class="sr-only">Find a film</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" placeholder="Find a film" autocomplete="off"></label>
+            <label class="search"><span class="sr-only">Find a film</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" data-library-filter placeholder="Find a film" autocomplete="off"></label>
           </div>
           <div class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
         </section>
@@ -356,6 +368,20 @@
           <div class="control-actions">
             <button class="button button-quiet" type="button" id="control-cancel">Cancel</button>
             <button class="button button-primary" type="submit" id="control-confirm">Restart</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog class="control-dialog delete-dialog" id="delete-dialog" aria-labelledby="delete-title">
+        <form id="delete-form" novalidate>
+          <h2 id="delete-title">Delete?</h2>
+          <p class="control-detail" id="delete-detail"></p>
+          <label class="check"><input type="checkbox" id="delete-files"><span>Delete files too</span></label>
+          <p class="delete-warning" id="delete-warning" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span></span></p>
+          <p class="error error-inline" id="delete-error" role="alert" hidden></p>
+          <div class="control-actions">
+            <button class="button button-quiet" type="button" id="delete-cancel">Cancel</button>
+            <button class="button button-danger" type="submit" id="delete-confirm">Delete</button>
           </div>
         </form>
       </dialog>

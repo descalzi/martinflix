@@ -90,6 +90,22 @@ class CoreTests(unittest.TestCase):
         ]
         self.assertEqual([item['title'] for item in server.arr_items('radarr', raw, now)], ['Missing'])
 
+    def test_the_whole_library_lists_every_title_by_name_with_its_size(self):
+        now = datetime(2026, 11, 18, tzinfo=timezone.utc)
+        films = [
+            {'id': 1, 'title': 'The Zone', 'monitored': True, 'hasFile': True, 'sizeOnDisk': 4_000_000_000},
+            {'id': 2, 'title': 'Arrival', 'monitored': False, 'hasFile': False},
+        ]
+        items = server.arr_items('radarr', films, now, everything=True)
+        self.assertEqual([(item['id'], item['downloaded'], item['size'], item['monitored']) for item in items],
+                         [(2, False, 0, False), (1, True, 4_000_000_000, True)])
+        self.assertNotIn('overdue', items[0])
+        series = [{'id': 5, 'title': 'Ended Show', 'monitored': True, 'status': 'ended',
+                   'statistics': {'sizeOnDisk': 9, 'episodeFileCount': 3, 'totalEpisodeCount': 10}}]
+        item = server.arr_items('sonarr', series, now, everything=True)[0]
+        self.assertEqual((item['size'], item['episodes']), (9, {'files': 3, 'total': 10}))
+        self.assertEqual(server.arr_items('sonarr', series, now), [])
+
     def test_films_follow_radarrs_missing_list_by_their_minimum_availability(self):
         now = datetime(2026, 11, 18, tzinfo=timezone.utc)
         missing = {'monitored': True, 'hasFile': False}

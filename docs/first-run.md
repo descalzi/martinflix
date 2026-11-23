@@ -67,6 +67,8 @@ With Plex installed by setup, Live connects to it automatically. For a Plex serv
 
 ### Discover
 
+The **Library** page lists series with episodes coming up or missing, and films still to download. Switch a section to **All series** or **All films** to see everything in Sonarr or Radarr, with what each title takes up on disk. The bin button on a poster deletes that title: on its own it only removes the title from Sonarr or Radarr, which stop monitoring and downloading it, and its files stay where they are. Tick **Delete files too** to delete its folder from your media as well; that can't be undone.
+
 The **Discover** page shows trending films and series, what's coming to cinemas, and what's new on streaming in your region, whether or not it's in your library. Titles you already have say **In library**; **Add** opens the Add page on that exact title with its options ready.
 
 The lists come from [TMDB](https://www.themoviedb.org/), using MartinFlix's own TMDB API key, so Discover works without any setup. To use your own key instead, get a free one in your TMDB account under **Settings → API** (the **API Key**, or the longer **API Read Access Token**), then paste it under **Settings → Discover** in the dashboard (or run setup with `--set-tmdb-key`); it's stored privately on the VM. The same section hides the page, and chooses the country for the cinema and streaming lists, the UK by default (`--discover off` and `--discover-region US` from a terminal). The lists are cached for an hour.
