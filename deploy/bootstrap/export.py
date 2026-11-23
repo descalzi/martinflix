@@ -234,7 +234,7 @@ class Exporter(backups.Backups):
         self.backup_dir = Path(backup_dir)
         self.log = log
         self.adoption = {}
-        self.skipped = 0
+        self.skipped = []
         self.plex_files = 0
 
     # The old stack's own places, instead of setup's state folder.
@@ -324,14 +324,21 @@ class Exporter(backups.Backups):
             else:
                 tops.append(item)
         for top in tops:
-            for folder, names, files in os.walk(top, onerror=lambda error: self.skip()):
+            for folder, names, files in os.walk(top, onerror=lambda error: self.skip(error.filename, error, server)):
                 names.sort()
                 for name in sorted(files) + [name for name in names if (Path(folder) / name).is_symlink()]:
                     self.add_file(archive, Path(folder) / name, server)
         self.locations(databases)
 
-    def skip(self):
-        self.skipped += 1
+    def skip(self, path, error, server):
+        """Note a file or folder that couldn't be copied, and why."""
+        try:
+            relative = str(Path(path).relative_to(server))
+        except (TypeError, ValueError):
+            relative = str(path)
+        reason = 'gone by the time it was copied' if isinstance(error, FileNotFoundError) else \
+            'no permission to read it' if isinstance(error, PermissionError) else error.strerror or str(error)
+        self.skipped.append((relative, reason))
 
     def add_file(self, archive, path, server):
         relative = str(path.relative_to(server))
@@ -358,8 +365,8 @@ class Exporter(backups.Backups):
             else:
                 return
             self.plex_files += 1
-        except OSError:
-            self.skipped += 1
+        except OSError as exc:
+            self.skip(path, exc, server)
 
     def locations(self, databases):
         """Plex's library folders, so the export can say whether the new Plex will find them."""
@@ -480,7 +487,17 @@ def main(argv):
         return 1
     folder = exporter.root() / manifest['created'][:19].replace('T', '_').replace(':', '')
     if exporter.skipped:
-        print(f'   Plex: {exporter.skipped} file{"s" if exporter.skipped != 1 else ""} could not be read and were left out.')
+        count = len(exporter.skipped)
+        print(f'   Plex: {count} file{"s" if count != 1 else ""} could not be copied and {"were" if count != 1 else "was"} '
+              f'left out. The first few:')
+        for relative, reason in exporter.skipped[:8]:
+            print(f'      {relative}: {reason}')
+        try:
+            listing = folder / 'plex-skipped.txt'
+            listing.write_text(''.join(f'{relative}\t{reason}\n' for relative, reason in exporter.skipped))
+            print(f'   Every one is listed in {listing}')
+        except OSError:
+            pass
     plex_folders = adoption.get('plexFolders') or []
     alias = adoption.get('plexMedia')
     outside = [path for path in plex_folders if not alias or not (path == alias or path.startswith(alias.rstrip('/') + '/'))]
