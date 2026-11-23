@@ -1321,6 +1321,9 @@ def install(args, overlay_file):
         print(f'The fresh installation moves to {target}. The archive of the current one stays in {state}.\n', flush=True)
     backup = None
     if args.restore:
+        print(f'Checking the backup in {args.restore}: every archive is read against its checksum'
+              + (f' ({size})' if (size := restore.backup_size(args.restore)) else '') + '. A large one takes a few minutes…',
+              flush=True)
         backup = restore.Backup(args.restore)
         print('Restore\n' + backup.describe() + '\n', flush=True)
         if args.keep_plex_identity and 'plex' in backup.apps:

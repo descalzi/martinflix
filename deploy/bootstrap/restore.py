@@ -122,6 +122,20 @@ class Backup:
         return '\n'.join(lines)
 
 
+def backup_size(folder):
+    """The backup's size from its manifest, in words, or '' if it can't be read."""
+    try:
+        size = json.loads((Path(folder) / 'manifest.json').read_text()).get('size')
+    except (OSError, ValueError, AttributeError):
+        return ''
+    if not isinstance(size, int) or size <= 0:
+        return ''
+    for unit in ('bytes', 'KB', 'MB', 'GB', 'TB'):
+        if size < 1000 or unit == 'TB':
+            return f'{size} bytes' if unit == 'bytes' else f'{size:.1f} {unit}'
+        size /= 1000
+
+
 def safe_name(name):
     """An archive member's path, refused if it could reach outside the folder it is restored into."""
     path = PurePosixPath(name)
