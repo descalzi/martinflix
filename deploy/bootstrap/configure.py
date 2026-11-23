@@ -313,7 +313,9 @@ def field_value(entry, name):
     return next((field.get('value') for field in entry['fields'] if field['name'] == name), None)
 
 
-def ensure_connection(api, route, name, implementation, match_field, values, **settings):
+def ensure_connection(api, route, name, implementation, match_field, values, optional=None, **settings):
+    """Add a connection unless one with this name, or to the same place, exists. `optional` values are set when the
+    app's version has those settings."""
     for item in api.request(route):
         if item['name'] == name:
             return
@@ -325,6 +327,7 @@ def ensure_connection(api, route, name, implementation, match_field, values, **s
     available = {field['name'] for field in entry['fields']}
     if missing := values.keys() - available:
         raise ValueError(f'{api.name}: missing {implementation} settings: {", ".join(sorted(missing))}.')
+    values = {**values, **{key: value for key, value in (optional or {}).items() if key in available}}
     entry.pop('id', None)
     entry.update(name=name, enable=True, **settings)
     for field in entry['fields']:
@@ -357,7 +360,7 @@ def sync_transmission_client(api, host, password):
     for item in api.request('downloadclient'):
         if item['implementation'] != 'Transmission':
             continue
-        if item['name'] != 'MartinFlix Transmission' and field_value(item, 'host') not in ROUTE_HOSTS['transmission']:
+        if item['name'] != 'MartinFlix Transmission' and field_value(item, 'host') not in (*ROUTE_HOSTS['transmission'], '127.0.0.1'):
             continue
         # Stored passwords come back masked, so set the password on every run.
         for field in item['fields']:
@@ -505,6 +508,14 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
             }, syncLevel='fullSync')
     if prowlarr:
         sync_prowlarr_routes(prowlarr, prowlarr_host, downloads_behind_vpn)
+    if prowlarr and transmission_password:
+        # So a release can also be sent to Transmission straight from Prowlarr's search. Behind the VPN, Prowlarr and
+        # Transmission share Gluetun's network, so Transmission is on Prowlarr's own localhost.
+        prowlarr_transmission = '127.0.0.1' if downloads_behind_vpn else 'transmission'
+        ensure_connection(prowlarr, 'downloadclient', 'MartinFlix Transmission', 'Transmission', 'host', {
+            'host': prowlarr_transmission, 'port': 9091, 'username': TRANSMISSION_USER, 'password': transmission_password,
+        }, optional={'category': 'prowlarr'})
+        sync_transmission_client(prowlarr, prowlarr_transmission, transmission_password)
     if prowlarr:
         tag = ensure_flaresolverr_proxy(prowlarr, downloads_behind_vpn) if setup_flaresolverr else None
         if seed_prowlarr:

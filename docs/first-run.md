@@ -34,7 +34,7 @@ Radarr gets **No OPUS** and **No HEVC**, both disabled to match the reference se
 
 New Radarr installations start with a maximum release size of 4,500 MB, an availability delay of 1 day, and an RSS sync interval of 120 minutes. Rerunning setup preserves your Radarr indexer settings.
 
-The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr and Radarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
+The installer finishes with an **Open your dashboard** section. Sign in as `admin` using the temporary password shown by the command in that section. Sonarr, Radarr, Prowlarr, Transmission, and Bazarr use the username `admin` and the same temporary password. When you set your password on first sign-in or use **Change password** in the dashboard, MartinFlix updates every app, including the Transmission connection inside Sonarr, Radarr and Prowlarr. The apps need to be running. If one can’t be reached, the dashboard keeps its current password; submit the same new password again once the app is back. The dashboard stores the chosen password as a salted hash in the private `dashboard-auth` directory.
 
 ### Plex
 
@@ -147,7 +147,7 @@ The VPN option requires `/dev/net/tun` and your NordVPN **service credentials**,
   Installations created before these defaults get the same choices applied once. Changes you make later in Transmission are kept.
 - Transmission accepts peers on port 51155 (`--transmission-peer-port` to change it). With direct downloads the port is published on every address, so forward it on your router if you want incoming connections. Behind the VPN it isn’t published, because NordVPN doesn’t forward ports.
 - Sonarr and Radarr use separate `sonarr` and `radarr` Transmission categories and map Transmission’s `/downloads` path to the shared `/data/downloads` folder for imports.
-- Prowlarr is registered with both library apps using Full Sync. Add your own indexers in Prowlarr. When FlareSolverr is installed, setup adds it as Prowlarr’s proxy for the `flaresolverr` tag. Add that tag to any indexer that fails behind Cloudflare’s browser check. Setup leaves indexer credentials and searches under your control.
+- Prowlarr is registered with both library apps using Full Sync. With Transmission installed, Prowlarr also gets Transmission as its download client, with the `prowlarr` category, so a release found in Prowlarr's own search can be sent straight to it; its login follows dashboard password changes. Add your own indexers in Prowlarr. When FlareSolverr is installed, setup adds it as Prowlarr’s proxy for the `flaresolverr` tag. Add that tag to any indexer that fails behind Cloudflare’s browser check. Setup leaves indexer credentials and searches under your control.
 
 ### Subtitles with Bazarr
 

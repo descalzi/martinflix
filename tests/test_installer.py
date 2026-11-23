@@ -327,6 +327,19 @@ class RouteChangeTests(unittest.TestCase):
                 return records.get(route, [])
         return SimpleNamespace(name='App', request=request)
 
+    def test_prowlarr_gets_transmission_on_its_own_localhost_behind_the_vpn(self):
+        schema = [{'implementation': 'Transmission', 'fields': [{'name': name, 'value': None} for name in (
+            'host', 'port', 'useSsl', 'urlBase', 'username', 'password', 'category', 'priority', 'addPaused')]}]
+        api = self.api({'downloadclient': [], 'downloadclient/schema': schema})
+        configure.ensure_connection(api, 'downloadclient', 'MartinFlix Transmission', 'Transmission', 'host', {
+            'host': '127.0.0.1', 'port': 9091, 'username': 'admin', 'password': 'shared'}, optional={'category': 'prowlarr', 'unknown': 1})
+        route, payload = self.posts[-1]
+        self.assertEqual(route, 'downloadclient')
+        fields = {field['name']: field['value'] for field in payload['fields']}
+        self.assertEqual((fields['host'], fields['port'], fields['category']), ('127.0.0.1', 9091, 'prowlarr'))
+        self.assertNotIn('unknown', fields, 'settings this version lacks are left out')
+        self.assertEqual(self.posts[0][0], 'downloadclient/test')
+
     def test_transmission_connection_and_mapping_follow_the_route(self):
         api = self.api({
             'downloadclient': [{'id': 3, 'name': 'MartinFlix Transmission', 'implementation': 'Transmission', 'fields': [

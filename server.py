@@ -355,9 +355,11 @@ def sync_app_passwords(password):
                 raise ValueError('Invalid Bazarr settings')
     clients = []
     if 'transmission' in apps:
-        for kind in ARR_COMPOSE_ADDRESSES:
-            connection = arr_connection(kind)
-            with arr_open(connection, '/api/v3/downloadclient') as response:
+        # Sonarr, Radarr and Prowlarr each keep the Transmission login, to send releases to it.
+        for kind in (*ARR_COMPOSE_ADDRESSES, *(['prowlarr'] if 'prowlarr' in apps else [])):
+            connection = arr_connection(kind, prowlarr_via_vpn=behind_vpn) if kind == 'prowlarr' else arr_connection(kind)
+            version = 'v1' if kind == 'prowlarr' else 'v3'
+            with arr_open(connection, f'/api/{version}/downloadclient') as response:
                 entries = json.load(response)
             for entry in entries if isinstance(entries, list) else []:
                 if entry.get('implementation') == 'Transmission' and entry.get('name') == SHARED_TRANSMISSION_CLIENT:
@@ -366,7 +368,7 @@ def sync_app_passwords(password):
                             field['value'] = ADMIN_APP_USER
                         elif field.get('name') == 'password':
                             field['value'] = password
-                    clients.append((connection, f'/api/v3/downloadclient/{entry["id"]}?forceSave=true', entry))
+                    clients.append((connection, f'/api/{version}/downloadclient/{entry["id"]}?forceSave=true', entry))
     for connection, endpoint, payload in hosts:
         with arr_open(connection, endpoint, payload=payload, method='PUT'):
             pass

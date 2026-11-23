@@ -107,7 +107,8 @@ class PasswordSyncTests(unittest.TestCase):
         clients = [(base, endpoint, payload) for base, endpoint, payload in writes if 'downloadclient' in endpoint]
         self.assertEqual([(base, endpoint) for base, endpoint, _ in clients], [
             ('http://sonarr:8989', '/api/v3/downloadclient/7?forceSave=true'),
-            ('http://radarr:7878', '/api/v3/downloadclient/7?forceSave=true')])
+            ('http://radarr:7878', '/api/v3/downloadclient/7?forceSave=true'),
+            ('http://prowlarr:9696', '/api/v1/downloadclient/7?forceSave=true')])
         self.assertEqual({field['name']: field['value'] for field in clients[0][2]['fields']},
                          {'username': 'admin', 'password': 'new shared password'})
 
