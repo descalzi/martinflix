@@ -5,7 +5,7 @@ const IMAGE = 'ghcr.io/descalzi/martinflix';
 // until the first one exists, new installations follow edge.
 const DEFAULT_CHANNEL = 'edge';
 // Setup runs from the MartinFlix image. It needs the Docker socket, and your home folder for its state.
-const LAUNCH = ['docker run --rm -it', '-v /var/run/docker.sock:/var/run/docker.sock', '-v "$HOME:$HOME" -e HOME'];
+const LAUNCH = ['docker run --rm -it --pull always', '-v /var/run/docker.sock:/var/run/docker.sock', '-v "$HOME:$HOME" -e HOME'];
 const portOptions = [
   ['dashboard', 'Dashboard', 8765],
   ['sonarr', 'Sonarr', 8989],

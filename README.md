@@ -25,16 +25,16 @@ Every installation needs a media directory: an existing, writable folder for you
 **If your browser is on the VM**, use the defaults:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --check
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media
 ```
 
 **If your browser is on another machine**, add the VM’s LAN IPv4 address. Replace the example address with your VM’s address:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --dashboard-bind 192.168.1.50
 ```
 
@@ -71,7 +71,7 @@ MartinFlix updates itself. The dashboard checks for a new version every six hour
 To add apps or change the address or ports, rerun setup with `update` in place of `install`, adding only the options that change:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge update --enable-bazarr
 ```
 

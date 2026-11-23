@@ -1963,7 +1963,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if os.environ.get('MARTINFLIX_STAGE') != 'run':
         parser.exit(1, 'Setup now runs from the MartinFlix image, with no copy of the repo. Start it with:\n'
-                       '  docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
+                       '  docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
                        '    ghcr.io/descalzi/martinflix:edge install --help\n')
     os.umask(0o077)
     try:

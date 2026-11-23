@@ -5,9 +5,9 @@ Start with a Linux host and an account that can run Docker Engine and Docker Com
 Run:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --check
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media
 ```
 
@@ -101,7 +101,7 @@ Run your installer command again and add `--reset`. Include the state directory,
 To run an isolated trial alongside another stack, use a separate state directory and different host ports:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install \
   --state-dir ~/.local/state/martinflix-trial --media-path /mnt/media-trial \
   --dashboard-port 18765 --sonarr-port 18989 --radarr-port 17878
@@ -130,9 +130,9 @@ Use a dedicated directory for your media. It can be a mounted NAS share or a dir
 For library folders without the download services, pass only `--media-path`. To install the download services too, run the following in a terminal. Replace the sample path and use your usual `--dashboard-bind` option if you access the dashboard from another device.
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --enable-downloads --check
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --enable-downloads
 ```
 

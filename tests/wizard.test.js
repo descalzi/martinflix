@@ -9,13 +9,13 @@ const defaults = {
 };
 const commands = options => wizard.buildCommands({...defaults, ...options});
 const flat = command => command.replace(/ \\\n  /g, ' ');
-const LAUNCH = 'docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME';
+const LAUNCH = 'docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME';
 
 test('a new installation runs from the image with the defaults, with nothing to clone', () => {
   const [check, install] = commands({});
   assert.strictEqual(flat(install.command), `${LAUNCH} ghcr.io/descalzi/martinflix:${wizard.DEFAULT_CHANNEL} install ` +
     '--media-path=/mnt/media --enable-prowlarr --enable-flaresolverr --download-network=direct');
-  assert.ok(install.command.startsWith('docker run --rm -it \\\n  -v /var/run/docker.sock'));
+  assert.ok(install.command.startsWith('docker run --rm -it --pull always \\\n  -v /var/run/docker.sock'));
   assert.ok(check.command.endsWith('--check'));
   assert.doesNotMatch(install.command + check.command, /git|python3/);
 });

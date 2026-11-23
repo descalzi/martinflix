@@ -16,7 +16,7 @@ BOOTSTRAP = APP / 'deploy' / 'bootstrap'
 SOCKET = Path('/var/run/docker.sock')
 # This machine's /dev, read-only, so setup can check for the VPN's tunnel device and a GPU for Plex.
 HOST_DEV = '/host/dev'
-START = ('docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
+START = ('docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
          '  {image} {command}')
 
 USAGE = """MartinFlix {version}

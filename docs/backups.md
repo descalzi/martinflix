@@ -32,14 +32,14 @@ Everything the restore replaces is moved, not deleted, into a `before-restore-<d
 **From a terminal**, add `--restore` with the backup's folder to setup. On the same machine:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge update --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
 ```
 
 **Onto a new machine**, the same option with `install` rebuilds the whole stack from a backup in one go, with no claim code, PIN or credentials to enter, because they come from the backup. Pass the media folder as for any new install; backups carry on into the folder the backup came from unless you pass `--backup-dir`:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge install --media-path /mnt/martinflix --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
 ```
 
@@ -52,7 +52,7 @@ A media stack setup didn't install, such as the reference host's own Compose sta
 **1. Export**, on the machine running the old stack. The old apps keep running; nothing in them changes. The export finds them by their container names (`sonarr`, `radarr`, `prowlarr`, `bazarr`, `transmission-daemon`, `plex`; `--container app=name` for another name), asks each for a fresh backup, copies Plex's databases with Plex's own SQLite along with its artwork, video previews and agent data, and keeps Transmission's preferences but not its torrents, so let downloads finish first. It writes a normal backup into a `<host>-export` folder in the backup folder:
 
 ```sh
-docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
   ghcr.io/descalzi/martinflix:edge export --backup-dir /mnt/martinflix/Backups
 ```
 
