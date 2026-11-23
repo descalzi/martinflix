@@ -20,8 +20,9 @@ PROWLARR_INDEXERS = {
     'world-torrent': ('World-torrent', 26),
     'yts': ('YTS', 25),
 }
-# Indexers behind Cloudflare's browser check, which answer only through FlareSolverr.
-FLARESOLVERR_INDEXERS = ('1337x',)
+# Indexers that go through FlareSolverr, which gets them past Cloudflare's browser check: all of setup's, as on the
+# reference host, since any of them can turn the check on.
+FLARESOLVERR_INDEXERS = tuple(PROWLARR_INDEXERS)
 FLARESOLVERR_TAG = 'flaresolverr'
 # The reference host's Transmission choices, applied once to installs that started before setup shipped them.
 # New installs get the same values from transmission-settings.json before Transmission first starts.

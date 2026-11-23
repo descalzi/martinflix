@@ -388,7 +388,7 @@ class RouteChangeTests(unittest.TestCase):
         self.assertEqual({route for route, _ in self.posts}, {'indexer?forceSave=true'})
         self.assertTrue(all(entry['enable'] for _, entry in self.posts))
         tagged = {entry['definitionName'] for _, entry in self.posts if entry['tags'] == [9]}
-        self.assertEqual(tagged, {'1337x'}, 'only Cloudflare-protected indexers go through FlareSolverr')
+        self.assertEqual(tagged, set(configure.PROWLARR_INDEXERS), 'every indexer setup adds goes through FlareSolverr')
 
     def test_flaresolverr_becomes_the_proxy_for_its_tag(self):
         prowlarr = self.prowlarr({'indexerproxy/schema': [
@@ -412,7 +412,8 @@ class RouteChangeTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             configure.update_seeded_prowlarr_indexers(prowlarr, enable=True, flaresolverr_tag=9)
         self.assertEqual([(route, entry['enable'], entry['tags']) for route, entry in self.puts],
-                         [('indexer/1?forceSave=true', True, [9])], 'your own indexers are left alone')
+                         [('indexer/1?forceSave=true', True, [9]), ('indexer/2?forceSave=true', True, [9])],
+                         'your own indexers are left alone')
 
 
 class PullTests(unittest.TestCase):
