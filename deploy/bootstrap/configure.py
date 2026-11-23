@@ -20,10 +20,32 @@ PROWLARR_INDEXERS = {
     'world-torrent': ('World-torrent', 26),
     'yts': ('YTS', 25),
 }
-# Indexers that go through FlareSolverr, which gets them past Cloudflare's browser check: all of setup's, as on the
-# reference host, since any of them can turn the check on.
-FLARESOLVERR_INDEXERS = tuple(PROWLARR_INDEXERS)
-FLARESOLVERR_TAG = 'flaresolverr'
+# Prowlarr's tags say which indexers each app gets, as on the reference host: Prowlarr gives an app only the indexers
+# that share one of its tags. FlareSolverr, which gets indexers past Cloudflare's browser check, carries the same tags,
+# so it serves every tagged indexer. (The reference host also has "books", for a books app this stack doesn't have;
+# TorrentDownloads carries only that tag there, so here it has none and stays for searching in Prowlarr itself.)
+PROWLARR_INDEXER_TAGS = {
+    '1337x': ('movies',), 'eztv': ('movies', 'series'), 'kickasstorrents-ws': ('movies', 'series'),
+    'limetorrents': ('movies', 'series'), 'thepiratebay': ('movies', 'series'), 'torrentdownloads': (),
+    'world-torrent': ('movies', 'series'), 'yts': ('movies',),
+}
+PROWLARR_APP_TAGS = {'Sonarr': ('movies', 'series'), 'Radarr': ('movies',)}
+FLARESOLVERR_TAGS = ('movies', 'series')
+# The tag earlier setups used for FlareSolverr, replaced by the ones above.
+OLD_FLARESOLVERR_TAG = 'flaresolverr'
+
+
+def ensure_tags(api, labels):
+    """Prowlarr's IDs for these tag labels, adding the ones it doesn't have."""
+    existing = {item['label'].casefold(): item['id'] for item in api.request('tag')}
+    for label in labels:
+        if label not in existing:
+            existing[label] = api.request('tag', {'label': label})['id']
+    return {label: existing[label] for label in labels}
+
+
+def tag_ids(labels, ids):
+    return [ids[label] for label in labels]
 # The site address each indexer uses on the reference host, when Prowlarr still offers it. Others (World-torrent has
 # none there) get the first address Prowlarr lists, as its own Add dialog would, which Prowlarr uses anyway.
 PROWLARR_BASE_URLS = {
@@ -429,55 +451,71 @@ def seed_radarr_indexer_defaults(api):
         api.request(f'config/indexer/{config["id"]}', {**config, **defaults}, method='PUT')
 
 
-def ensure_flaresolverr_proxy(api, behind_vpn):
-    """Make FlareSolverr Prowlarr's proxy for tagged indexers, keeping one that is already set up. Returns its tag ID."""
+def ensure_flaresolverr_proxy(api, behind_vpn, ids, retag=False):
+    """Make FlareSolverr Prowlarr's proxy for the tagged indexers, keeping one already set up. `retag` gives an
+    existing one the tags too, once, replacing the "flaresolverr" tag earlier setups used."""
     proxy = next((item for item in api.request('indexerproxy') if item.get('implementation') == 'FlareSolverr'), None)
-    if proxy is not None and proxy.get('tags'):
-        return proxy['tags'][0]
-    tag = next((item for item in api.request('tag') if item['label'].casefold() == FLARESOLVERR_TAG), None) \
-        or api.request('tag', {'label': FLARESOLVERR_TAG})
+    wanted = tag_ids(FLARESOLVERR_TAGS, ids)
     if proxy is not None:
-        api.request(f'indexerproxy/{proxy["id"]}?forceSave=true', {**proxy, 'tags': [tag['id']]}, method='PUT')
-        return tag['id']
+        if retag and sorted(proxy.get('tags') or []) != sorted(wanted):
+            api.request(f'indexerproxy/{proxy["id"]}?forceSave=true', {**proxy, 'tags': wanted}, method='PUT')
+            print('   Prowlarr: FlareSolverr now serves the indexers tagged movies or series.', flush=True)
+        return
     entry = next((item for item in api.request('indexerproxy/schema') if item.get('implementation') == 'FlareSolverr'), None)
     if entry is None:
         print('   Prowlarr: FlareSolverr proxy skipped. This Prowlarr version does not offer it.', flush=True)
-        return None
+        return
     entry.pop('id', None)
-    entry.update(name='FlareSolverr', tags=[tag['id']])
+    entry.update(name='FlareSolverr', tags=wanted)
     for field in entry['fields']:
         if field['name'] == 'host':
             field['value'] = FLARESOLVERR_URLS[behind_vpn]
     api.request('indexerproxy?forceSave=true', entry)
-    print(f'   Prowlarr: FlareSolverr added as the proxy for indexers tagged "{FLARESOLVERR_TAG}".', flush=True)
-    return tag['id']
+    print('   Prowlarr: FlareSolverr added as the proxy for the indexers tagged movies or series.', flush=True)
 
 
-def indexer_tags(definition, flaresolverr_tag, tags=()):
-    tags = list(tags)
-    if definition in FLARESOLVERR_INDEXERS and flaresolverr_tag is not None and flaresolverr_tag not in tags:
-        tags.append(flaresolverr_tag)
-    return tags
+def tag_prowlarr_apps(api, ids):
+    """Give the Sonarr and Radarr applications their tags, so each gets only the indexers meant for it."""
+    for item in api.request('applications'):
+        labels = PROWLARR_APP_TAGS.get(item.get('implementation'))
+        if labels is None or item.get('name') not in PROWLARR_APP_TAGS:
+            continue
+        wanted = sorted(set(item.get('tags') or []) | set(tag_ids(labels, ids)))
+        if wanted != sorted(item.get('tags') or []):
+            api.request(f'applications/{item["id"]}?forceSave=true', {**item, 'tags': wanted}, method='PUT')
+            print(f'   Prowlarr: {item["name"]} gets the indexers tagged {" or ".join(labels)}.', flush=True)
 
 
-def update_seeded_prowlarr_indexers(api, *, enable, flaresolverr_tag):
+def update_seeded_prowlarr_indexers(api, *, enable, ids=None, drop=None):
     """Put right the indexers earlier setups added: turn them on (`enable`), give them a site address if they have
-    none, and route them through FlareSolverr (`flaresolverr_tag`)."""
+    none, and give them their tags (`ids`), without the old "flaresolverr" tag (`drop`)."""
     for item in api.request('indexer'):
         definition = item.get('definitionName')
         if definition not in PROWLARR_INDEXERS:
             continue
-        tags = indexer_tags(definition, flaresolverr_tag, item.get('tags') or [])
+        current = item.get('tags') or []
+        tags = current
+        if ids is not None:
+            tags = sorted({tag for tag in current if tag != drop} | set(tag_ids(PROWLARR_INDEXER_TAGS[definition], ids)))
         addressed = with_base_url(item)
-        if (enable and not item.get('enable')) or tags != (item.get('tags') or []) or addressed:
+        if (enable and not item.get('enable')) or sorted(tags) != sorted(current) or addressed:
             api.request(f'indexer/{item["id"]}?forceSave=true',
                         {**(addressed or item), 'enable': item.get('enable') or enable, 'tags': tags}, method='PUT')
             print(f'   Prowlarr: {item["name"]} updated'
-                  f'{f" to use {chosen_base_url(item)}" if addressed else ""}'
-                  f'{", through FlareSolverr" if flaresolverr_tag is not None and flaresolverr_tag in tags else ""}.', flush=True)
+                  f'{f", using {chosen_base_url(item)}" if addressed else ""}.', flush=True)
 
 
-def seed_prowlarr_indexers(api, flaresolverr_tag=None):
+def drop_old_flaresolverr_tag(api, drop):
+    """Remove the "flaresolverr" tag earlier setups made, once nothing uses it."""
+    if drop is None:
+        return
+    for route in ('indexer', 'indexerproxy', 'applications'):
+        if any(drop in (item.get('tags') or []) for item in api.request(route)):
+            return
+    api.request(f'tag/{drop}', method='DELETE')
+
+
+def seed_prowlarr_indexers(api, ids):
     existing = api.request('indexer')
     definitions = {item.get('definitionName') for item in existing}
     names = {item['name'].casefold() for item in existing}
@@ -496,7 +534,7 @@ def seed_prowlarr_indexers(api, flaresolverr_tag=None):
         entry.pop('id', None)
         entry = with_base_url(entry) or entry
         entry.update(name=name, priority=priority, appProfileId=profile['id'], enable=True,
-                     tags=indexer_tags(definition, flaresolverr_tag))
+                     tags=tag_ids(PROWLARR_INDEXER_TAGS[definition], ids))
         # Save without Prowlarr's connection test: an indexer that is down today still belongs in the list, and
         # Prowlarr's health checks report the ones that keep failing.
         try:
@@ -511,11 +549,12 @@ def seed_prowlarr_indexers(api, flaresolverr_tag=None):
 
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
                    seed_indexers=False, seed_radarr_indexers=False, seed_prowlarr=False, arr_address='127.0.0.1',
-                   downloads_behind_vpn=True, prowlarr_address='127.0.0.1', setup_flaresolverr=False,
-                   enable_prowlarr_indexers=False, address_prowlarr_indexers=False):
+                   downloads_behind_vpn=True, prowlarr_address='127.0.0.1', flaresolverr=False,
+                   enable_prowlarr_indexers=False, address_prowlarr_indexers=False, tag_prowlarr=False):
     transmission_host = 'gluetun' if downloads_behind_vpn else 'transmission'
     prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
     prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=prowlarr_address) if prowlarr_key else None
+    ids = ensure_tags(prowlarr, ('movies', 'series')) if prowlarr else None
     for app, name in ARR_NAMES.items():
         api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
         ensure_quality_profile(api, app)
@@ -538,7 +577,7 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
             ensure_connection(prowlarr, 'applications', name, name, 'baseUrl', {
                 'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': f'http://{prowlarr_host}:9696',
                 'apiKey': arr_keys[app],
-            }, syncLevel='fullSync')
+            }, syncLevel='fullSync', tags=tag_ids(PROWLARR_APP_TAGS[name], ids))
     if prowlarr:
         sync_prowlarr_routes(prowlarr, prowlarr_host, downloads_behind_vpn)
     if prowlarr and transmission_password:
@@ -550,11 +589,18 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
         }, optional={'category': 'prowlarr'})
         sync_transmission_client(prowlarr, prowlarr_transmission, transmission_password)
     if prowlarr:
-        tag = ensure_flaresolverr_proxy(prowlarr, downloads_behind_vpn) if setup_flaresolverr else None
+        old = next((item['id'] for item in prowlarr.request('tag') if item['label'].casefold() == OLD_FLARESOLVERR_TAG), None)
+        if flaresolverr:
+            ensure_flaresolverr_proxy(prowlarr, downloads_behind_vpn, ids, retag=tag_prowlarr)
+        if tag_prowlarr:
+            tag_prowlarr_apps(prowlarr, ids)
         if seed_prowlarr:
-            seed_prowlarr_indexers(prowlarr, tag)
-        elif enable_prowlarr_indexers or address_prowlarr_indexers or tag is not None:
-            update_seeded_prowlarr_indexers(prowlarr, enable=enable_prowlarr_indexers, flaresolverr_tag=tag)
+            seed_prowlarr_indexers(prowlarr, ids)
+        elif enable_prowlarr_indexers or address_prowlarr_indexers or tag_prowlarr:
+            update_seeded_prowlarr_indexers(prowlarr, enable=enable_prowlarr_indexers, ids=ids if tag_prowlarr else None,
+                                            drop=old)
+        if tag_prowlarr:
+            drop_old_flaresolverr_tag(prowlarr, old)
     # Health warnings, such as a missing download folder, otherwise linger until the apps' next scheduled check.
     for api in (*(AppApi(name, ports[app], arr_keys[app], address=arr_address) for app, name in ARR_NAMES.items()),
                 *([prowlarr] if prowlarr else [])):

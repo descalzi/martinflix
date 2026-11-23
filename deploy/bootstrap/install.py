@@ -1637,20 +1637,22 @@ def run_installation(plan, state, previous, mode='install'):
         # Earlier setups added indexers disabled, or with no site address; put each right once.
         enable_prowlarr_indexers = bool(prowlarr_key) and not seed_prowlarr and not options.get('prowlarr_indexers_enabled')
         address_prowlarr_indexers = bool(prowlarr_key) and not seed_prowlarr and not options.get('prowlarr_indexers_addressed')
-        # Once per install: earlier setups routed only 1337x through FlareSolverr, so they get the rest tagged too.
-        setup_flaresolverr = bool(prowlarr_key) and 'flaresolverr' in downloads and not options.get('flaresolverr_all_indexers')
+        # Prowlarr's tags decide which indexers Sonarr and Radarr get, and which FlareSolverr serves. Applied once, so
+        # tags changed by hand afterwards stay; earlier setups used a single "flaresolverr" tag instead.
+        tag_prowlarr = bool(prowlarr_key) and not seed_prowlarr and not options.get('prowlarr_tags_applied')
         configure_apps(arr_keys, ports, media, prowlarr_key, transmission_password, seed_indexers=seed_indexers,
                        seed_radarr_indexers=seed_radarr_indexers, seed_prowlarr=seed_prowlarr, arr_address=arr_address,
                        downloads_behind_vpn=download_network == 'vpn', prowlarr_address=download_address,
-                       setup_flaresolverr=setup_flaresolverr, enable_prowlarr_indexers=enable_prowlarr_indexers,
-                       address_prowlarr_indexers=address_prowlarr_indexers)
+                       flaresolverr=bool(prowlarr_key) and 'flaresolverr' in downloads,
+                       enable_prowlarr_indexers=enable_prowlarr_indexers, address_prowlarr_indexers=address_prowlarr_indexers,
+                       tag_prowlarr=tag_prowlarr)
         if seed_prowlarr or enable_prowlarr_indexers or address_prowlarr_indexers:
             options.update(prowlarr_indexer_defaults_applied=True, prowlarr_indexers_enabled=True,
                            prowlarr_indexers_addressed=True)
-        if setup_flaresolverr:
-            options.update(flaresolverr_proxy_applied=True, flaresolverr_all_indexers=True)
+        if prowlarr_key:
+            options.update(prowlarr_tags_applied=True)
         if seed_indexers or seed_radarr_indexers or seed_prowlarr or enable_prowlarr_indexers or address_prowlarr_indexers \
-                or setup_flaresolverr:
+                or tag_prowlarr:
             options.update(sonarr_indexer_defaults_applied=True, radarr_indexer_defaults_pending=False)
             write_secret(state / 'install-options.json', json.dumps(options))
         if plan['plex']:

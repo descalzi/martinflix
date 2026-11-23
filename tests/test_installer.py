@@ -379,30 +379,52 @@ class RouteChangeTests(unittest.TestCase):
         api.request = with_ids
         return api
 
-    def test_seeded_indexers_are_saved_enabled_without_the_connection_test(self):
+    IDS = {'movies': 2, 'series': 4}
+
+    def test_seeded_indexers_are_saved_enabled_and_tagged_for_their_apps(self):
         schema = [{'definitionName': name, 'privacy': 'public', 'implementation': 'Cardigann', 'id': 0, 'fields': []}
                   for name in configure.PROWLARR_INDEXERS]
         prowlarr = self.prowlarr({'indexer/schema': schema, 'appprofile': [{'id': 1, 'name': 'Standard'}]})
         with redirect_stdout(io.StringIO()):
-            configure.seed_prowlarr_indexers(prowlarr, flaresolverr_tag=9)
+            configure.seed_prowlarr_indexers(prowlarr, self.IDS)
         self.assertEqual({route for route, _ in self.posts}, {'indexer?forceSave=true'})
         self.assertTrue(all(entry['enable'] for _, entry in self.posts))
-        tagged = {entry['definitionName'] for _, entry in self.posts if entry['tags'] == [9]}
-        self.assertEqual(tagged, set(configure.PROWLARR_INDEXERS), 'every indexer setup adds goes through FlareSolverr')
+        tags = {entry['definitionName']: entry['tags'] for _, entry in self.posts}
+        self.assertEqual(tags['eztv'], [2, 4])
+        self.assertEqual(tags['yts'], [2], 'films only, as on the reference host')
+        self.assertEqual(tags['torrentdownloads'], [], 'books only there, and this stack has no books app')
 
-    def test_flaresolverr_becomes_the_proxy_for_its_tag(self):
+    def test_tags_are_made_once_and_found_after(self):
+        prowlarr = self.prowlarr({'tag': [{'id': 5, 'label': 'Movies'}]})
+        self.assertEqual(configure.ensure_tags(prowlarr, ('movies', 'series')), {'movies': 5, 'series': 9})
+        self.assertEqual(self.posts, [('tag', {'label': 'series'})])
+
+    def test_flaresolverr_serves_the_tagged_indexers(self):
         prowlarr = self.prowlarr({'indexerproxy/schema': [
             {'implementation': 'FlareSolverr', 'fields': [{'name': 'host', 'value': ''}, {'name': 'requestTimeout', 'value': 60}]}]})
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(configure.ensure_flaresolverr_proxy(prowlarr, True), 9)
-        self.assertEqual(self.posts[0], ('tag', {'label': 'flaresolverr'}))
-        route, proxy = self.posts[1]
-        self.assertEqual((route, proxy['tags'], proxy['fields'][0]['value']), ('indexerproxy?forceSave=true', [9], 'http://127.0.0.1:8191/'))
+            configure.ensure_flaresolverr_proxy(prowlarr, True, self.IDS)
+        route, proxy = self.posts[0]
+        self.assertEqual((route, proxy['tags'], proxy['fields'][0]['value']), ('indexerproxy?forceSave=true', [2, 4], 'http://127.0.0.1:8191/'))
 
-    def test_an_existing_flaresolverr_proxy_keeps_its_tag(self):
-        prowlarr = self.prowlarr({'indexerproxy': [{'id': 2, 'implementation': 'FlareSolverr', 'tags': [4], 'fields': []}]})
-        self.assertEqual(configure.ensure_flaresolverr_proxy(prowlarr, True), 4)
-        self.assertEqual(self.posts + self.puts, [])
+    def test_an_earlier_install_moves_from_the_flaresolverr_tag_to_movies_and_series(self):
+        prowlarr = self.prowlarr({
+            'tag': [{'id': 7, 'label': 'flaresolverr'}],
+            'indexerproxy': [{'id': 3, 'implementation': 'FlareSolverr', 'tags': [7], 'fields': []}],
+            'applications': [{'id': 1, 'name': 'Sonarr', 'implementation': 'Sonarr', 'tags': []},
+                             {'id': 2, 'name': 'Radarr', 'implementation': 'Radarr', 'tags': []},
+                             {'id': 3, 'name': 'Readarr', 'implementation': 'Readarr', 'tags': [1]}],
+            'indexer': [{'id': 1, 'name': '1337x', 'definitionName': '1337x', 'enable': True, 'tags': [7]},
+                        {'id': 2, 'name': 'YTS', 'definitionName': 'yts', 'enable': True, 'tags': [7, 11]},
+                        {'id': 3, 'name': 'Mine', 'definitionName': 'someprivate', 'enable': True, 'tags': [7]}]})
+        with redirect_stdout(io.StringIO()):
+            configure.ensure_flaresolverr_proxy(prowlarr, True, self.IDS, retag=True)
+            configure.tag_prowlarr_apps(prowlarr, self.IDS)
+            configure.update_seeded_prowlarr_indexers(prowlarr, enable=False, ids=self.IDS, drop=7)
+        puts = {route: entry['tags'] for route, entry in self.puts}
+        self.assertEqual(puts, {'indexerproxy/3?forceSave=true': [2, 4], 'applications/1?forceSave=true': [2, 4],
+                                'applications/2?forceSave=true': [2], 'indexer/1?forceSave=true': [2],
+                                'indexer/2?forceSave=true': [2, 11]}, 'your own indexers and tags are left alone')
 
     def test_indexers_get_a_site_address_when_they_have_none(self):
         prowlarr = self.prowlarr({'indexer': [
@@ -411,11 +433,11 @@ class RouteChangeTests(unittest.TestCase):
             {'id': 2, 'name': 'EZTV', 'definitionName': 'eztv', 'enable': False, 'tags': [],
              'indexerUrls': ['https://eztvx.to/'], 'fields': [{'name': 'baseUrl', 'value': 'https://eztvx.to/'}]}]})
         with patch.dict(configure.PROWLARR_BASE_URLS, {'yts': 'https://yts.lt/'}), redirect_stdout(io.StringIO()):
-            configure.update_seeded_prowlarr_indexers(prowlarr, enable=False, flaresolverr_tag=None)
+            configure.update_seeded_prowlarr_indexers(prowlarr, enable=False)
         self.assertEqual(len(self.puts), 1, 'one already set, and disabled indexers stay disabled')
         route, entry = self.puts[0]
         self.assertEqual((route, entry['fields'][0]['value'], entry['enable']), ('indexer/1?forceSave=true', 'https://yts.lt/', True))
-        self.assertEqual(configure.chosen_base_url({'definitionName': 'yts', 'indexerUrls': ['https://a/', 'https://b/']}), 'https://a/')
+        self.assertEqual(configure.chosen_base_url({'definitionName': 'eztv', 'indexerUrls': ['https://a/', 'https://b/']}), 'https://a/')
 
     def test_earlier_disabled_indexers_are_turned_on_once(self):
         prowlarr = self.prowlarr({'indexer': [
@@ -423,9 +445,8 @@ class RouteChangeTests(unittest.TestCase):
             {'id': 2, 'name': 'YTS', 'definitionName': 'yts', 'enable': True, 'tags': []},
             {'id': 3, 'name': 'Private', 'definitionName': 'someprivate', 'enable': False, 'tags': []}]})
         with redirect_stdout(io.StringIO()):
-            configure.update_seeded_prowlarr_indexers(prowlarr, enable=True, flaresolverr_tag=9)
-        self.assertEqual([(route, entry['enable'], entry['tags']) for route, entry in self.puts],
-                         [('indexer/1?forceSave=true', True, [9]), ('indexer/2?forceSave=true', True, [9])],
+            configure.update_seeded_prowlarr_indexers(prowlarr, enable=True)
+        self.assertEqual([(route, entry['enable']) for route, entry in self.puts], [('indexer/1?forceSave=true', True)],
                          'your own indexers are left alone')
 
 
