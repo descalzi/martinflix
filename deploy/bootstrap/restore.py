@@ -10,14 +10,23 @@ Media files are never part of a backup, so a restore leaves them as they are.
 import datetime
 import hashlib
 import json
+import os
 import shutil
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
+from xml.etree import ElementTree
 
 ARR_APPS = ('sonarr', 'radarr', 'prowlarr')
 PLEX_DATABASES = Path('Library/Application Support/Plex Media Server/Plug-in Support/Databases')
-PLEX_PREFERENCES = Path('Library/Application Support/Plex Media Server/Preferences.xml')
+PLEX_SERVER = Path('Library/Application Support/Plex Media Server')
+PLEX_PREFERENCES = PLEX_SERVER / 'Preferences.xml'
+# What makes a Plex server itself, rather than its library: its identity, its sign-in to plex.tv, its name and how
+# it is reached. --keep-plex-identity keeps these from this machine's own Plex.
+PLEX_IDENTITY = ('MachineIdentifier', 'ProcessedMachineIdentifier', 'AnonymousMachineIdentifier', 'CertificateUUID',
+                 'PlexOnlineToken', 'PlexOnlineUsername', 'PlexOnlineMail', 'PlexOnlineHome', 'FriendlyName',
+                 'PublishServerOnPlexOnlineKey', 'ManualPortMappingMode', 'ManualPortMappingPort',
+                 'LastAutomaticMappedPort', 'customConnections')
 # MartinFlix's own files in its archive. Options that belong to this machine are kept as they are (see options).
 MARTINFLIX_ENTRIES = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
                       'controller/pin-hash')
@@ -84,6 +93,11 @@ class Backup:
             safe_name(name)
 
     @property
+    def exported(self):
+        """An export of a stack setup didn't install (see export.py), rather than one of MartinFlix's own backups."""
+        return self.manifest.get('kind') == 'export'
+
+    @property
     def created(self):
         return self.manifest.get('created') or self.folder.name
 
@@ -99,6 +113,10 @@ class Backup:
             pass
         apps = ', '.join(LABELS[app] for app in ORDER if app in self.apps)
         lines = [f'Backup     {self.folder}', f'Taken      {when}', f'Restores   {apps}']
+        if self.exported:
+            source = self.manifest.get('export') or {}
+            lines.insert(1, f'From       an export of {source.get("host") or "another stack"}'
+                            + (f', with media at {source["media"]}' if source.get('media') else ''))
         if self.missing:
             lines.append(f'Not in it  {", ".join(LABELS[app] for app in self.missing)} (left as they are now)')
         return '\n'.join(lines)
@@ -116,10 +134,11 @@ class Restorer:
     """Puts archives back into the state folder. Replaced files and folders go to the aside folder, keeping their
     place relative to the state folder, so nothing is lost."""
 
-    def __init__(self, state, aside, log=print):
+    def __init__(self, state, aside, log=print, keep_plex_identity=False):
         self.state = Path(state)
         self.aside = Path(aside)
         self.log = log
+        self.keep_plex_identity = keep_plex_identity
         self.moved = set()
 
     def move_aside(self, target):
@@ -156,10 +175,14 @@ class Restorer:
     # One method per app
 
     def martinflix(self, archive_path):
-        for top in MARTINFLIX_ENTRIES:
+        with tarfile.open(archive_path) as archive:
+            names = [str(safe_name(member.name)) for member in archive.getmembers() if member.isfile()]
+        # Only what the backup holds is replaced: an export carries options alone, and keeps this machine's secrets.
+        held = [entry for entry in MARTINFLIX_ENTRIES if any(name == entry or name.startswith(entry + '/') for name in names)]
+        for top in held:
             self.move_aside(self.state / top)
         for name, source, mode in self.tar_entries(archive_path):
-            if not any(str(name) == entry or str(name).startswith(entry + '/') for entry in MARTINFLIX_ENTRIES):
+            if not any(str(name) == entry or str(name).startswith(entry + '/') for entry in held):
                 continue
             self.write(source, self.state / name, mode & 0o700 or 0o600)
 
@@ -199,11 +222,31 @@ class Restorer:
 
     def plex(self, archive_path):
         folder = self.state / 'plex'
-        for name, source, _ in self.tar_entries(archive_path):
-            if str(name) == 'Preferences.xml':
-                self.write(source, folder / PLEX_PREFERENCES)
-            elif name.parts[0] == 'Databases' and len(name.parts) == 2 and name.suffix == '.db':
-                self.database(source, folder / PLEX_DATABASES / name.name)
+        server = folder / PLEX_SERVER
+        identity = plex_identity(folder / PLEX_PREFERENCES) if self.keep_plex_identity else None
+        with tarfile.open(archive_path) as archive:
+            for member in archive:
+                name = safe_name(member.name)
+                if str(name) == 'Preferences.xml' and member.isfile():
+                    self.write(archive.extractfile(member), folder / PLEX_PREFERENCES)
+                    if identity is not None:
+                        keep_identity(folder / PLEX_PREFERENCES, identity)
+                elif name.parts[0] == 'Databases' and len(name.parts) == 2 and name.suffix == '.db' and member.isfile():
+                    self.database(archive.extractfile(member), folder / PLEX_DATABASES / name.name)
+                elif name.parts[0] == 'Data' and len(name.parts) > 2 and (member.isfile() or member.issym()):
+                    # An export's artwork and agent data. Each top folder is replaced whole, the first time it comes.
+                    relative = PurePosixPath(*name.parts[1:])
+                    unit = relative.parts[:2] if relative.parts[0] == 'Plug-in Support' else relative.parts[:1]
+                    self.move_aside(server.joinpath(*unit))
+                    target = server / relative
+                    if member.issym():
+                        if not safe_link(relative, member.linkname):
+                            continue
+                        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        if not target.is_symlink():
+                            os.symlink(member.linkname, target)
+                    else:
+                        self.write(archive.extractfile(member), target)
 
     def restore(self, backup):
         for app in ORDER:
@@ -215,6 +258,52 @@ class Restorer:
             else:
                 getattr(self, app)(archive)
             self.log(f'   {LABELS[app]:<20} restored')
+
+
+def safe_link(name, target):
+    """True if a symbolic link at `name` pointing at `target` stays inside the folder it is restored into."""
+    if not target or target.startswith('/'):
+        return False
+    depth = len(PurePosixPath(name).parts) - 1
+    for part in PurePosixPath(target).parts:
+        depth += -1 if part == '..' else 0 if part == '.' else 1
+        if depth < 0:
+            return False
+    return True
+
+
+def plex_identity(preferences):
+    """This machine's own Plex identity, from its Preferences.xml."""
+    try:
+        root = ElementTree.parse(preferences).getroot()
+    except (OSError, ElementTree.ParseError) as exc:
+        raise RestoreError(f'This machine’s Plex settings cannot be read, so its identity cannot be kept ({exc}).') from None
+    if not root.get('MachineIdentifier'):
+        raise RestoreError('This machine’s Plex has no identity to keep yet. Leave out --keep-plex-identity.')
+    return {key: root.get(key) for key in PLEX_IDENTITY}
+
+
+def keep_identity(preferences, identity):
+    """Put this machine's Plex identity into restored settings, so the restored Plex stays this machine's server."""
+    tree = ElementTree.parse(preferences)
+    root = tree.getroot()
+    for key, value in identity.items():
+        if value is None:
+            root.attrib.pop(key, None)
+        else:
+            root.set(key, value)
+    tree.write(preferences, encoding='utf-8', xml_declaration=True)
+    preferences.chmod(0o600)
+
+
+def merge_exported(restored, current):
+    """An export holds only what adopting the old stack needs, so this installation's options stay, with the
+    export's added on top. Options that describe this machine stay as they are now."""
+    merged = {**current, **{key: value for key, value in restored.items() if key not in MACHINE_OPTIONS}}
+    merged.update({key: current[key] for key in MACHINE_OPTIONS if key in current})
+    # The export's data comes back as the old stack had it, so it is adopted again even if an earlier one was.
+    merged['legacy_adopted'] = False
+    return merged
 
 
 def merge_options(restored, current):

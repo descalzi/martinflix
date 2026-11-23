@@ -1,6 +1,7 @@
 """Apply the initial library and download settings through the apps' local APIs."""
 import base64
 import json
+from pathlib import PurePosixPath
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -253,6 +254,14 @@ class BazarrApi:
             raise ValueError(f'Bazarr rejected its settings (HTTP {exc.code}){": " + detail if detail else ""}.') from None
         except OSError:
             raise ValueError('Bazarr: could not save its settings. Check the app is running and rerun.') from None
+
+    def run_task(self, task):
+        """Start one of Bazarr's scheduled tasks now, such as syncing its series from Sonarr."""
+        body = urllib.parse.urlencode({'taskid': task}).encode()
+        request = urllib.request.Request(self.base + 'system/tasks', data=body, method='POST', headers={
+            'X-API-KEY': self.key, 'Content-Type': 'application/x-www-form-urlencoded'})
+        with OPENER.open(request, timeout=30) as response:
+            response.read()
 
 
 def form_fields(settings):
@@ -545,6 +554,90 @@ def seed_prowlarr_indexers(api, ids):
             print(f'   Prowlarr: {name} skipped. Prowlarr rejected its settings (HTTP {exc.status}).', flush=True)
         else:
             print(f'   Prowlarr: {name} added and enabled.', flush=True)
+
+
+MEDIA_ROOT = '/data'
+SHARED_TRANSMISSION = 'MartinFlix Transmission'
+ARR_COLLECTIONS = {'sonarr': ('series', 'seriesIds', 'series'), 'radarr': ('movie', 'movieIds', 'films')}
+
+
+def moved_path(path, old):
+    """A path in the old stack's media folder, as this installation sees it; None for any other path."""
+    path, old = (path or '').rstrip('/'), old.rstrip('/')
+    if path == old:
+        return MEDIA_ROOT
+    if path.startswith(old + '/'):
+        return MEDIA_ROOT + path[len(old):]
+    return None
+
+
+def adopt_legacy(arr_keys, ports, legacy_media, media, *, arr_address='127.0.0.1', prowlarr_key=None,
+                 prowlarr_address='127.0.0.1', downloads_behind_vpn=True, transmission=False, plex_alias=None,
+                 bazarr=None, log=print):
+    """Once, after restoring an export of a stack setup didn't install: point its data at this installation. Series
+    and films move to this installation's media folder without their files moving (they are the same files), and
+    the old stack's download clients and links between apps give way to this installation's own."""
+    for app, name in ARR_NAMES.items():
+        api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
+        collection, ids_field, noun = ARR_COLLECTIONS[app]
+        groups, elsewhere = {}, 0
+        for item in api.request(collection) or []:
+            path = item.get('path') or ''
+            root = item.get('rootFolderPath') or str(PurePosixPath(path).parent)
+            new_root = moved_path(root, legacy_media)
+            if new_root is None or moved_path(path, legacy_media) is None:
+                elsewhere += not path.startswith(MEDIA_ROOT + '/')
+                continue
+            groups.setdefault(new_root, []).append(item['id'])
+        old_roots = [folder for folder in api.request('rootfolder') if moved_path(folder['path'], legacy_media)]
+        for new_root, ids in sorted(groups.items()):
+            # The folder is the old one, on the same share; on another machine it may not exist yet.
+            (media / new_root.removeprefix(MEDIA_ROOT + '/')).mkdir(parents=True, exist_ok=True)
+            ensure_root_folder(api, new_root)
+            # Moving to another root folder without moving files keeps each title's own folder name.
+            api.request(f'{collection}/editor', {ids_field: ids, 'rootFolderPath': new_root, 'moveFiles': False},
+                        method='PUT')
+        for folder in old_roots:
+            api.request(f'rootfolder/{folder["id"]}', method='DELETE')
+        moved = sum(len(ids) for ids in groups.values())
+        counted = noun if moved != 1 or noun == 'series' else noun.removesuffix('s')
+        log(f'   {name}: ' + (f'{moved} {counted} now in {", ".join(sorted(groups))}' if moved else f'no {noun} to move')
+            + (f'; {elsewhere} elsewhere left as they were' if elsewhere else '') + '.', flush=True)
+        if transmission:
+            for client in api.request('downloadclient'):
+                if client.get('implementation') == 'Transmission' and client.get('name') != SHARED_TRANSMISSION:
+                    api.request(f'downloadclient/{client["id"]}', method='DELETE')
+        for mapping in api.request('remotepathmapping'):
+            if not (mapping.get('localPath') or '').startswith(MEDIA_ROOT + '/'):
+                api.request(f'remotepathmapping/{mapping["id"]}', method='DELETE')
+        if plex_alias:
+            # Plex still knows the media by the old stack's folders, so library updates name them that way.
+            for item in api.request('notification'):
+                if item.get('implementation') == 'PlexServer':
+                    put_if_changed(api, 'notification', item, {'mapFrom': MEDIA_ROOT + '/',
+                                                               'mapTo': plex_alias.rstrip('/') + '/'})
+    if prowlarr_key:
+        prowlarr = AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=prowlarr_address)
+        prowlarr_host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
+        for item in prowlarr.request('applications'):
+            app = {name: app for app, name in ARR_NAMES.items()}.get(item.get('implementation'))
+            if app:
+                put_if_changed(prowlarr, 'applications', item, {
+                    'baseUrl': f'http://{app}:{ARR_PORTS[app]}', 'prowlarrUrl': f'http://{prowlarr_host}:9696',
+                    'apiKey': arr_keys[app]})
+        if transmission:
+            for client in prowlarr.request('downloadclient'):
+                if client.get('implementation') == 'Transmission' and client.get('name') != SHARED_TRANSMISSION:
+                    prowlarr.request(f'downloadclient/{client["id"]}', method='DELETE')
+        log('   Prowlarr: Sonarr and Radarr are reached at this installation’s addresses.', flush=True)
+    if bazarr:
+        # Bazarr learns the new folders from Sonarr and Radarr at its next sync; start that now.
+        for task in ('update_series', 'update_movies'):
+            try:
+                bazarr.run_task(task)
+            except (OSError, ValueError):
+                log('   Bazarr: its sync with Sonarr and Radarr will pick up the new folders within the hour.', flush=True)
+                break
 
 
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,

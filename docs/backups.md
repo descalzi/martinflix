@@ -45,6 +45,31 @@ docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME
 
 Add `--check` to either to check the backup and the plan without changing anything. In a terminal setup asks you to type `RESTORE` before it stops anything.
 
+## Moving an existing stack onto MartinFlix
+
+A media stack setup didn't install, such as the reference host's own Compose stacks, moves over with an export and a restore.
+
+**1. Export**, on the machine running the old stack. The old apps keep running; nothing in them changes. The export finds them by their container names (`sonarr`, `radarr`, `prowlarr`, `bazarr`, `transmission-daemon`, `plex`; `--container app=name` for another name), asks each for a fresh backup, copies Plex's databases with Plex's own SQLite along with its artwork, video previews and agent data, and keeps Transmission's preferences but not its torrents, so let downloads finish first. It writes a normal backup into a `<host>-export` folder in the backup folder:
+
+```sh
+docker run --rm -it -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
+  ghcr.io/descalzi/martinflix:edge export --backup-dir /mnt/martinflix/Backups
+```
+
+Add `--check` first to see what it found: each app, where the old stack keeps media, which folder Plex sees it in, and any app on another image tag. An app on another tag of the same image, such as Radarr's `nightly`, stays on that tag after the move, because its database may be newer than the latest release understands.
+
+**2. Restore** the export with `--restore` as for any backup. On top of a usual restore, setup then adopts the old stack once:
+
+- Sonarr and Radarr: every series and film under the old media folder moves to the same folder under this installation's `/data`, without moving any files. The old root folders are removed, and the new ones added.
+- The old Transmission download clients and remote path mappings are removed in favour of this installation's own; Prowlarr's links to Sonarr and Radarr point at this installation's apps, and Bazarr syncs the new folders straight away.
+- Plex also sees the media at the old stack's folder, read-only, so its libraries, watch history and artwork need no changes. Sonarr's and Radarr's Plex connections translate their paths for it.
+- Every default setup would add to a new installation (indexers, Bazarr's providers, Plex's libraries) is skipped: the old stack has its own.
+- The apps keep their logins until you choose your dashboard password, which then becomes theirs.
+
+**Rehearse** on another machine first, with `update --restore <export> --keep-plex-identity` there. That keeps the rehearsal machine's own Plex server identity and sign-in, so it doesn't pose as the old server on your Plex account while that keeps running. Point the rehearsal machine at a media folder of its own, not the old stack's: two Sonarrs managing one library would fight over it. Sonarr and Radarr will report its files as missing there, which is expected.
+
+**Switch over** on the old machine: stop the old app and Plex stacks, then install with `--restore`, the media folder the old stack used and your usual options. The old stack's own folders stay as they were, so it can be started again if needed.
+
 ## The prototype for the reference host
 
 The prototype captures the latest *existing* app-generated archive in each of the configured Sonarr, Radarr, Prowlarr, Bazarr and Tautulli backup directories, if found. It does not ask the apps to create a new backup. The manifest records source modification times, sizes, SHA-256 checksums and missing sources. An incomplete snapshot returns a non-zero exit code. Archives can contain API keys and credentials: protect both the destination and any copies.

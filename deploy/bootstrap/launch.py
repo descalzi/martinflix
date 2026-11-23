@@ -25,6 +25,7 @@ Commands
   install [options]   Set up MartinFlix on this machine.
   update [options]    Update MartinFlix, keeping its settings. Options change them.
   reset [options]     Archive this installation's app data and start fresh.
+  export [options]    Export a stack setup didn't install, to restore onto MartinFlix.
   version             Show this image's version.
 
 Start setup with:
@@ -104,7 +105,23 @@ def folders(args, home):
     return result
 
 
-def second_step(args, interactive, run=subprocess.run):
+def export_folders(args):
+    """For an export: the backup folder, and each old app's config folder, read-only."""
+    sys.path.insert(0, str(BOOTSTRAP))
+    import export
+    try:
+        found = export.folders(args)
+    except export.ExportError as exc:
+        raise LaunchError(str(exc)) from None
+    for path, _ in found:
+        if not path.is_absolute():
+            raise LaunchError('Use a full path for --backup-dir, starting with /, such as /mnt/media/Backups.')
+        if ',' in str(path):
+            raise LaunchError(f'The export cannot use a folder with a comma in its path: {path}')
+    return found
+
+
+def second_step(args, interactive, run=subprocess.run, command_name='install'):
     """The docker run command for the installer, with this machine's folders, network and account."""
     home = Path(os.environ.get('HOME') or '/')
     if not SOCKET.is_socket():
@@ -115,7 +132,11 @@ def second_step(args, interactive, run=subprocess.run):
         raise LaunchError('Setup cannot use a home folder with a comma in its path. Add --state-dir and --backup-dir.')
     uid, gid = account(home)
     host_socket = os.environ.get('MARTINFLIX_DOCKER_SOCKET') or str(SOCKET)
-    mounts = folders(args, home)
+    if command_name == 'export':
+        mounts = [(home, False)] + [(path, readonly) for path, readonly in export_folders(args)
+                                   if path != home and not path.is_relative_to(home)]
+    else:
+        mounts = [(path, False) for path in folders(args, home)]
     image = tag_own_image(run)
     command = ['docker', 'run', '--rm', *(['-it'] if interactive else []), '--network', 'host',
                '--user', f'{uid}:{gid}', '--group-add', str(SOCKET.stat().st_gid), '--workdir', str(home),
@@ -125,20 +146,23 @@ def second_step(args, interactive, run=subprocess.run):
                '-e', 'PYTHONUNBUFFERED=1',
                '-v', f'{host_socket}:/var/run/docker.sock',
                '--mount', f'type=bind,source=/dev,target={HOST_DEV},readonly']
-    for folder in mounts:
+    for folder, readonly in mounts:
         # --mount, unlike -v, refuses a folder that does not exist rather than creating it as root.
-        command += ['--mount', f'type=bind,source={folder},target={folder}']
-    return [*command, image, 'install', *args]
+        command += ['--mount', f'type=bind,source={folder},target={folder}' + (',readonly' if readonly else '')]
+    return [*command, image, command_name, *args]
 
 
-def launch(args, run=subprocess.run):
+def launch(args, run=subprocess.run, command_name='install'):
     if os.environ.get('MARTINFLIX_STAGE') == 'run':
         sys.path.insert(0, str(BOOTSTRAP))
+        if command_name == 'export':
+            import export
+            return export.main(args)
         import install
         return install.main(args)
     interactive = sys.stdin.isatty()
     try:
-        command = second_step(args, interactive, run)
+        command = second_step(args, interactive, run, command_name)
     except (LaunchError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -168,6 +192,8 @@ def main(argv):
         if extra and extra[0] in args:
             extra = []
         return launch([*extra, *args])
+    if command == 'export':
+        return launch(args, command_name='export')
     print(USAGE.format(version=os.environ.get('MARTINFLIX_VERSION', 'dev'), start=start_command()))
     return 0 if command in ('help', '--help', '-h') else 2
 

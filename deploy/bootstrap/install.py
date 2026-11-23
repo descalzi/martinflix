@@ -25,13 +25,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'controller'))
 from controller import hash_pin, valid_pin  # noqa: E402
 import restore  # noqa: E402
-from configure import (AppApi, BazarrApi, TransmissionRpc, configure_apps, configure_bazarr, ensure_arr_login,
+from configure import (AppApi, BazarrApi, TransmissionRpc, adopt_legacy, configure_apps, configure_bazarr, ensure_arr_login,
                        ensure_bazarr_login, seed_transmission_defaults)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
@@ -583,6 +583,9 @@ def backup_folder(requested, previous):
 
 
 PLEX_PORT = 32400
+APP_IMAGES = {'sonarr': 'lscr.io/linuxserver/sonarr', 'radarr': 'lscr.io/linuxserver/radarr',
+              'prowlarr': 'lscr.io/linuxserver/prowlarr', 'bazarr': 'lscr.io/linuxserver/bazarr'}
+IMAGE_TAG = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
 PLEX_CLAIM_HELP = """
 Link the new Plex server to your Plex account with a claim code: sign in at https://plex.tv/claim and copy the
 code it shows. It only lasts four minutes, so get it now. Leave it blank to claim the server later in Plex Web."""
@@ -1139,8 +1142,33 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.downloads.yaml')), '-f', str(overlay_file)]
         for app in downloads:
             compose += ['--profile', app]
+    image_tags = previous.get('image_tags') or {}
+    if not isinstance(image_tags, dict) or any(app not in APP_IMAGES or not isinstance(tag, str) or not IMAGE_TAG.fullmatch(tag)
+                                               for app, tag in image_tags.items()):
+        raise ValueError('The saved image tags are not valid. Remove image_tags from install-options.json and rerun.')
+    running = {*APPS, *downloads}
+    if tagged := {app: tag for app, tag in image_tags.items() if app in running}:
+        # Apps that came from another stack on another tag of the same image (Radarr's nightly, say) stay on it: their
+        # databases may be newer than the latest release understands.
+        tag_overlay = overlay_file.with_name('image-tags-compose.json')
+        tag_overlay.write_text(json.dumps({'services': {app: {'image': f'{APP_IMAGES[app]}:{tag}'}
+                                                        for app, tag in tagged.items()}}))
+        compose += ['-f', str(tag_overlay)]
     if plex:
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.plex.yaml')), '--profile', 'plex']
+        alias = previous.get('plex_media_alias')
+        if alias:
+            if not isinstance(alias, str) or not re.fullmatch(r'/[A-Za-z0-9._ /-]{1,200}', alias) or '..' in alias \
+                    or PurePosixPath(alias).parts[1] in ('config', 'data', 'preroll', 'dev', 'proc', 'sys', 'etc', 'usr'):
+                raise ValueError('The saved Plex media folder is not valid. Remove plex_media_alias from '
+                                 'install-options.json and rerun.')
+            # A library adopted from another stack keeps Plex's folders as they were there, so Plex sees the media at
+            # that path too. Its own libraries use /data.
+            alias_overlay = overlay_file.with_name('plex-media-compose.json')
+            alias_overlay.write_text(json.dumps({'services': {'plex': {'volumes': [{
+                'type': 'bind', 'source': str(media), 'target': alias.rstrip('/'), 'read_only': True,
+                'bind': {'create_host_path': False}}]}}}))
+            compose += ['-f', str(alias_overlay)]
         if (HOST_DEV / 'dri').is_dir():
             # A GPU lets Plex transcode in hardware (with Plex Pass). The image gives Plex access to it.
             gpu_overlay = overlay_file.with_name('plex-gpu-compose.json')
@@ -1245,6 +1273,8 @@ def install(args, overlay_file):
     existing = has_installation(state)
     if args.restore and args.reset:
         raise ValueError('A restore replaces the app data anyway. Leave out --reset.')
+    if args.keep_plex_identity and not args.restore:
+        raise ValueError('--keep-plex-identity only applies with --restore.')
     if args.restore and not args.backup_dir and not saved_options(state).get('backup_dir'):
         # Rebuilding a machine from its backups: keep backing up to the folder they came from.
         args.backup_dir = str(Path(args.restore).resolve().parent.parent)
@@ -1293,6 +1323,11 @@ def install(args, overlay_file):
     if args.restore:
         backup = restore.Backup(args.restore)
         print('Restore\n' + backup.describe() + '\n', flush=True)
+        if args.keep_plex_identity and 'plex' in backup.apps:
+            # Checked now, before anything is stopped or replaced.
+            restore.plex_identity(target / 'plex' / restore.PLEX_PREFERENCES)
+        if backup.exported:
+            describe_export(backup, plan)
     if args.check:
         if backup:
             print('Preflight passed, and every archive in the backup matches its checksum. Run the same command '
@@ -1310,6 +1345,28 @@ def install(args, overlay_file):
         previous, plan = restore_backup(args, backup, target, previous, plan, project, overlay_file)
     run_installation(plan, target, previous,
                      mode='restore' if backup else 'reset' if args.reset else 'update' if existing else 'install')
+
+
+def describe_export(backup, plan):
+    """What restoring an export of another stack does beyond a usual restore, and anything that won't line up."""
+    source = backup.manifest.get('export') or {}
+    old, host = source.get('media'), source.get('mediaHost')
+    media = str(plan['media']) if plan['media'] else None
+    print('Adopting the old stack', flush=True)
+    if old:
+        print(f'   Sonarr and Radarr: series and films move from {old} to this installation’s media folder, '
+              f'{media}. Files stay where they are.')
+    if host and media and host != media:
+        print(f'   Note: the old stack kept its media in {host} on its machine, but this installation’s media folder is '
+              f'{media}. Sonarr and Radarr will look for every series and film there.')
+    if source.get('plexMedia') and plan['plex']:
+        print(f'   Plex: also sees your media at {source["plexMedia"]}, as before, so its libraries need no changes.')
+    names = [label for app, label in (('transmission', 'download clients'), ('prowlarr', 'Prowlarr'), ('bazarr', 'Bazarr'))
+             if app in plan['downloads']]
+    if names:
+        listed = ', '.join(names[:-1]) + (' and ' if len(names) > 1 else '') + names[-1]
+        print(f'   {listed[0].upper() + listed[1:]}: pointed at this installation’s apps.', flush=True)
+    print(flush=True)
 
 
 def restore_backup(args, backup, state, previous, plan, project, overlay_file):
@@ -1333,9 +1390,10 @@ def restore_backup(args, backup, state, previous, plan, project, overlay_file):
                              + (stopped.stderr or stopped.stdout).strip()[-600:])
         aside = state / datetime.datetime.now().strftime('before-restore-%Y-%m-%d_%H%M%S')
         private_directory(aside)
-        restore.Restorer(state, aside).restore(backup)
+        restore.Restorer(state, aside, keep_plex_identity=args.keep_plex_identity).restore(backup)
         restore.prune_aside(state, aside)
-        options = restore.merge_options(saved_options(state), previous)
+        merge = restore.merge_exported if backup.exported else restore.merge_options
+        options = merge(saved_options(state), previous)
         write_secret(state / 'install-options.json', json.dumps(options))
     print(f'   What the restore replaced is kept in {aside}', flush=True)
     return options, plan_installation(args, state, options, project, overlay_file)
@@ -1633,6 +1691,14 @@ def run_installation(plan, state, previous, mode='install'):
             if seed_bazarr:
                 options['bazarr_defaults_applied'] = True
                 write_secret(state / 'install-options.json', json.dumps(options))
+        if options.get('legacy_media') and not options.get('legacy_adopted'):
+            # Once, after restoring an export of a stack setup didn't install.
+            adopt_legacy(arr_keys, ports, options['legacy_media'], media, arr_address=arr_address,
+                         prowlarr_key=prowlarr_key, prowlarr_address=download_address,
+                         downloads_behind_vpn=download_network == 'vpn', transmission=bool(transmission_password),
+                         plex_alias=options.get('plex_media_alias') if plan['plex'] else None, bazarr=bazarr)
+            options['legacy_adopted'] = True
+            write_secret(state / 'install-options.json', json.dumps(options))
         if 'transmission' in downloads and not options.get('transmission_defaults_applied'):
             seed_transmission_defaults(TransmissionRpc(download_address, ports['transmission'], 'admin', transmission_password))
             options['transmission_defaults_applied'] = True
@@ -1750,7 +1816,8 @@ for app in ('sonarr', 'radarr'):
     print(f'{app} monitoring connected', flush=True)
 '''
         compose_step(f'{step + 2}. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
-    print_summary(mode, plan, password, (auth_dir / 'password-hash').is_file(), personal_password_set)
+    print_summary(mode, plan, password, (auth_dir / 'password-hash').is_file(), personal_password_set,
+                  old_logins=bool(options.get('legacy_media')) and not personal_password_set)
 
 
 DONE = r"""
@@ -1766,7 +1833,7 @@ def heading(title, output):
     output.write(f'\n{title}\n{"─" * len(title)}\n')
 
 
-def print_summary(mode, plan, password, password_set, apps_use_it, output=None):
+def print_summary(mode, plan, password, password_set, apps_use_it, output=None, old_logins=False):
     """The end of a successful run: a clear Done, then where everything is and how to sign in."""
     output = output or sys.stdout
     enabled, ports, bind = plan['enabled'], plan['ports'], plan['bind']
@@ -1791,8 +1858,13 @@ def print_summary(mode, plan, password, password_set, apps_use_it, output=None):
                      '          Sign in with it, then choose your own.\n')
 
     heading('Apps', output)
-    output.write(('Each signs in with admin and your dashboard password.\n' if apps_use_it else
-                  'Each signs in with admin and the temporary password, until you choose your own in the dashboard.\n'))
+    if old_logins:
+        # Adopted from another stack: setup only gives a login to an app that has none.
+        output.write('Each keeps its login from the old stack until you choose your dashboard password, which then '
+                     'becomes theirs too.\n')
+    else:
+        output.write(('Each signs in with admin and your dashboard password.\n' if apps_use_it else
+                      'Each signs in with admin and the temporary password, until you choose your own in the dashboard.\n'))
     for app in plan['app_dirs']:
         output.write(f'{app.capitalize():13} http://{bind}:{ports[app]}\n')
     if plan['plex']:
@@ -1858,6 +1930,10 @@ def build_parser():
                         help='Restore a backup folder, such as /mnt/martinflix/Backups/vm/2026-11-22_010000, into this '
                              'installation, or into a new one. Setup checks the backup, stops the apps, puts their '
                              'data back and starts them again. Media files are not touched.')
+    parser.add_argument('--keep-plex-identity', action='store_true',
+                        help='With --restore: keep this machine’s own Plex server identity and sign-in, so it stays a '
+                             'separate server with the backup’s libraries and history. For trying out a restore of '
+                             'another machine’s backup while that machine keeps running.')
     parser.add_argument('--change-pin', action='store_true',
                         help='Choose a new PIN for restarting and updating apps from the dashboard.')
     parser.add_argument('--download-client', choices=['transmission'])

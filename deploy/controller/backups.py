@@ -72,6 +72,9 @@ def add_tree(archive, source, name):
 
 
 class Backups:
+    # Plex's artwork and other data beyond its databases: only an export of an older stack carries them.
+    plex_data = None
+
     def __init__(self, stack, clock=time.time, sleep=time.sleep):
         self.stack = stack
         self.clock = clock
@@ -95,6 +98,18 @@ class Backups:
             raise BackupError((result.stderr or result.stdout or '').strip()[-300:] or f'exit code {result.returncode}')
         return result.stdout
 
+    def config_dir(self, state, app):
+        """Where an app keeps its settings and data on this machine."""
+        return state / app
+
+    def extra_manifest(self):
+        return {}
+
+    def address(self, state, app):
+        """The app's address inside its own container."""
+        port = ARR_APPS[app][0] if app in ARR_APPS else 6767
+        return f'http://127.0.0.1:{port}'
+
     def key(self, state, app):
         try:
             return (state / 'dashboard-secrets' / f'{app}-key').read_text().strip()
@@ -103,9 +118,9 @@ class Backups:
 
     # One capture per app. Each returns the archive it wrote into the backup folder.
     def capture_arr(self, app, state, target):
-        port, version = ARR_APPS[app]
+        _, version = ARR_APPS[app]
         started = self.clock()
-        base = f'http://127.0.0.1:{port}/api/{version}'
+        base = f'{self.address(state, app)}/api/{version}'
         header = f'X-Api-Key: {self.key(state, app)}'
         reply = self.exec(app, 'curl', '-fsS', '-X', 'POST', '-H', header, '-H', 'Content-Type: application/json',
                           '-d', '{"name": "Backup"}', f'{base}/command')
@@ -119,7 +134,7 @@ class Backups:
             self.sleep(1)
         else:
             raise BackupError('its backup did not finish within two minutes')
-        made = newest(state / app / 'Backups', '*.zip', started)
+        made = newest(self.config_dir(state, app) / 'Backups', '*.zip', started)
         if made is None:
             raise BackupError('its backup file could not be found')
         destination = target / f'{app}.zip'
@@ -129,12 +144,12 @@ class Backups:
     def capture_bazarr(self, state, target):
         started = self.clock()
         self.exec('bazarr', 'curl', '-fsS', '-X', 'POST', '-H', f'X-API-KEY: {self.key(state, "bazarr")}',
-                  'http://127.0.0.1:6767/api/system/backups')
+                  f'{self.address(state, "bazarr")}/api/system/backups')
         # Bazarr answers straight away and writes the backup from its job queue, so wait for a complete zip:
         # its settings file is the last thing it adds.
         made = None
         for _ in range(BAZARR_WAIT_SECONDS // 2):
-            made = newest(state / 'bazarr', '*.zip', started)
+            made = newest(self.config_dir(state, 'bazarr'), '*.zip', started)
             if made is not None and complete_zip(made, 'config.yaml'):
                 break
             made = None
@@ -163,12 +178,14 @@ class Backups:
                 # Plex's own SQLite copies a database consistently while Plex keeps running.
                 self.exec('plex', PLEX_SQLITE, source, f".backup '{staging}/{database}'", timeout=1800)
             self.exec('plex', 'chmod', '-R', 'a+rX', staging)
-            local = state / 'plex' / staging.removeprefix('/config/')
-            destination = target / 'plex.tar.gz'
-            with tarfile.open(destination, 'w:gz') as archive:
-                add_tree(archive, state / 'plex' / PLEX_PREFERENCES, 'Preferences.xml')
+            local = self.config_dir(state, 'plex') / staging.removeprefix('/config/')
+            destination = target / ('plex.tar' if self.plex_data else 'plex.tar.gz')
+            with tarfile.open(destination, 'w' if self.plex_data else 'w:gz') as archive:
+                add_tree(archive, self.config_dir(state, 'plex') / PLEX_PREFERENCES, 'Preferences.xml')
                 for database in sorted(local.iterdir()):
                     archive.add(database, arcname=f'Databases/{database.name}')
+                if self.plex_data:
+                    self.plex_data(archive, local)
             return destination
         finally:
             self.exec('plex', 'rm', '-rf', staging)
@@ -212,7 +229,7 @@ class Backups:
             partial = root / f'.{name}.partial'
             partial.mkdir(mode=0o700)
             manifest = {'version': 1, 'created': created.isoformat(timespec='seconds'), 'kind': kind,
-                        'host': root.name, 'apps': {}, 'files': [], 'missing': [], 'errors': []}
+                        'host': root.name, 'apps': {}, 'files': [], 'missing': [], 'errors': [], **self.extra_manifest()}
             for app, capture in self.plan():
                 try:
                     archive = capture(partial)
