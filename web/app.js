@@ -882,8 +882,20 @@ function posterProblem(item, kind) {
   return null;
 }
 
+const LIBRARY_APPS = {sonarr: 'Sonarr', radarr: 'Radarr', listenarr: 'Listenarr'};
+const LIBRARY_NOUNS = {sonarr: 'series', radarr: 'films', listenarr: 'audiobooks'};
+
+/** An audiobook's author, and its series and state, on its card. */
+function bookDetails(item, all) {
+  const state = item.downloading ? 'Downloading' : item.downloaded ? `Downloaded${item.size ? ` · ${bytesLabel(item.size)}` : ''}`
+    : item.monitored ? 'Wanted' : 'Not monitored';
+  return {meta: item.authors?.length ? item.authors.join(', ') : 'Unknown author',
+    extra: [item.series, all || item.downloading ? state : ''].filter(Boolean).join(' · ')};
+}
+
 /** In the whole-library view: what each title holds on disk, which is what deleting it frees. */
 function libraryDetails(item, kind) {
+  if (kind === 'listenarr') return bookDetails(item, true);
   const quiet = item.monitored ? '' : 'Not monitored';
   if (kind === 'sonarr') {
     const {files = 0, total = 0} = item.episodes || {};
@@ -896,6 +908,7 @@ function libraryDetails(item, kind) {
 }
 
 function posterDetails(item, kind) {
+  if (kind === 'listenarr') return bookDetails(item, false);
   if (kind === 'sonarr') {
     const airing = item.nextAiring && new Date(item.nextAiring);
     const code = episodeCode(item.nextEpisode);
@@ -914,7 +927,15 @@ function posterDetails(item, kind) {
   return {meta: 'Release date unknown', extra: ''};
 }
 
-const LINK_NAMES = {imdb: 'IMDb', tmdb: 'TMDB', tvdb: 'TheTVDB'};
+const LINK_NAMES = {imdb: 'IMDb', tmdb: 'TMDB', tvdb: 'TheTVDB', audible: 'Audible'};
+
+/** Audiobookshelf's page for a book, at this dashboard's host on Audiobookshelf's own port. */
+function listenLink(item, title) {
+  const {port, path} = item.listen || {};
+  if (!Number.isInteger(port) || !/^\/audiobookshelf\/item\/[A-Za-z0-9_%-]+$/.test(path || '')) return '';
+  const href = `http://${window.location.hostname}:${port}${path}`;
+  return `<a class="poster-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer" aria-label="Listen to ${esc(title)} in Audiobookshelf">Listen${icon('external')}</a>`;
+}
 
 /** IMDb and TMDB links for a poster, opening in a new tab. */
 function titleLinks(links, title) {
@@ -926,11 +947,11 @@ function titleLinks(links, title) {
 function posterCard(item, kind, {all = false, deletable = false} = {}) {
   const {meta, extra} = all ? libraryDetails(item, kind) : posterDetails(item, kind);
   const problem = posterProblem(item, kind);
-  const title = item.year ? `${item.title} (${item.year})` : item.title;
+  const title = item.year && kind !== 'listenarr' ? `${item.title} (${item.year})` : item.title;
   const remove = deletable && item.id
     ? `<button class="poster-delete" type="button" data-delete="${esc(kind)}" data-id="${esc(item.id)}" aria-label="Delete ${esc(title)}" title="Delete">${icon('trash')}</button>`
     : '';
-  const links = titleLinks(item.links, title);
+  const links = (kind === 'listenarr' ? listenLink(item, item.title) : '') + titleLinks(item.links, title);
   return `<li class="poster-card${problem ? ' has-problem' : ''}">
     <div class="poster-art"${links ? ` tabindex="0" aria-label="${esc(title)}: show links"` : ''}>
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
@@ -968,6 +989,15 @@ function renderLibraryCount(library) {
     return;
   }
   const total = libraryItems(library).length;
+  if (kind === 'listenarr') {
+    const downloading = libraryItems(library).filter(item => item.downloading).length;
+    const size = libraryItems(library).reduce((sum, item) => sum + (item.size || 0), 0);
+    count.textContent = library.show === 'all'
+      ? `${total} ${total === 1 ? 'book' : 'books'} · ${bytesLabel(size)} on disk`
+      : `${total} wanted${downloading ? ` · ${downloading} downloading` : ''}`;
+    count.classList.remove('has-problem');
+    return;
+  }
   const queued = queues[kind];
   const queue = queued ? ` · ${queued} in the download queue` : '';
   if (library.limit) {
@@ -990,12 +1020,17 @@ function renderLibraryCount(library) {
 }
 
 function libraryMessage(kind, data) {
-  const name = kind === 'sonarr' ? 'Sonarr' : 'Radarr';
+  const name = LIBRARY_APPS[kind];
   if (!data.configured) return `<div class="empty-state"><h3>${name} isn’t connected</h3><p>Save its API key in the dashboard secrets directory. The dashboard guide explains where.</p></div>`;
   return `<p class="empty">${esc(data.error)}</p>`;
 }
 
 function emptyLibrary(library) {
+  if (library.kind === 'listenarr') {
+    return library.show === 'all'
+      ? '<div class="empty-state"><h3>No audiobooks yet</h3><p>Listenarr has no books.</p><a class="text-link" href="/add?kind=listenarr">Add a book</a></div>'
+      : '<div class="empty-state"><h3>Nothing wanted</h3><p>Every book Listenarr is looking for has been downloaded.</p><a class="text-link" href="/add?kind=listenarr">Add a book</a></div>';
+  }
   if (library.show === 'all') {
     return library.kind === 'sonarr'
       ? '<div class="empty-state"><h3>No series yet</h3><p>Sonarr has no series.</p><a class="text-link" href="/add">Add a series</a></div>'
@@ -1018,10 +1053,11 @@ function renderLibrary(library) {
     return;
   }
   const search = filter ? filter.value.trim().toLowerCase() : '';
-  let items = libraryItems(library).filter(item => item.title.toLowerCase().includes(search));
+  let items = libraryItems(library).filter(item => [item.title, ...(item.authors || []), item.series || '']
+    .some(text => text.toLowerCase().includes(search)));
   if (library.limit) items = items.slice(0, library.limit);
   content.innerHTML = items.length
-    ? `<ul class="poster-grid${library.limit ? ' is-rail' : ''}">${items.map(item => posterCard(item, kind,
+    ? `<ul class="poster-grid${library.limit ? ' is-rail' : ''}${kind === 'listenarr' ? ' is-square' : ''}">${items.map(item => posterCard(item, kind,
       {all: library.show === 'all', deletable: !library.limit})).join('')}</ul>`
     : search ? `<p class="empty">No titles match “${esc(filter.value.trim())}”.</p>` : emptyLibrary(library);
 }
@@ -1054,7 +1090,8 @@ function overviewLibrary(kind, content, count, extra = {}) {
 }
 
 if (page === 'library') {
-  for (const section of document.querySelectorAll('[data-library]')) {
+  // Audiobooks show only where they're installed.
+  for (const section of document.querySelectorAll('[data-library]:not([hidden])')) {
     const content = section.querySelector('.library-content');
     const filter = section.querySelector('[data-library-filter]');
     const library = {kind: section.dataset.library, content, filter, count: section.querySelector('.library-count'), show: 'attention'};
@@ -1066,7 +1103,7 @@ if (page === 'library') {
         for (const intro of section.querySelectorAll('[data-show-intro]')) intro.hidden = intro.dataset.showIntro !== library.show;
         library.data = null;
         library.count.textContent = '';
-        content.innerHTML = `<p class="empty">Loading ${library.kind === 'sonarr' ? 'series' : 'films'}…</p>`;
+        content.innerHTML = `<p class="empty">Loading ${LIBRARY_NOUNS[library.kind]}…</p>`;
         loadLibrary(library);
       });
     }
@@ -1091,16 +1128,17 @@ function setupDelete() {
 
   const describe = () => {
     const {kind, item} = target;
-    const app = kind === 'sonarr' ? 'Sonarr' : 'Radarr';
+    const app = LIBRARY_APPS[kind];
+    const player = kind === 'listenarr' ? 'Audiobookshelf' : 'Plex';
     $('#delete-detail').textContent = files.checked
       ? `Removes it from ${app} and deletes its folder from your media.`
-      : `Removes it from ${app}, which stops monitoring and downloading it. Its files stay in your media folder, and Plex keeps showing them.`;
+      : `Removes it from ${app}, which stops monitoring and downloading it. Its files stay in your media folder, and ${player} keeps showing them.`;
     warning.hidden = !files.checked;
     // What's on disk is only known in the All view; otherwise say it plainly.
     const saved = kind === 'sonarr' ? item.episodes?.files : item.downloaded === undefined ? undefined : Number(item.downloaded);
     const held = saved === 0 ? null : kind === 'sonarr'
       ? (saved ? `${saved} downloaded episode${saved === 1 ? '' : 's'}` : 'every downloaded episode')
-      : 'the downloaded film';
+      : kind === 'listenarr' ? 'the downloaded audiobook' : 'the downloaded film';
     warning.querySelector('span').textContent = held
       ? `This deletes ${held}${item.size ? ` (${bytesLabel(item.size)})` : ''} for good. It can’t be undone.`
       : 'Nothing has been downloaded for it, so only its folder goes. It can’t be undone.';
@@ -1122,7 +1160,7 @@ function setupDelete() {
     const item = library?.data?.items?.find(entry => String(entry.id) === button.dataset.id);
     if (!item) return;
     target = {library, kind: library.kind, item};
-    $('#delete-title').textContent = `Delete ${item.year ? `${item.title} (${item.year})` : item.title}?`;
+    $('#delete-title').textContent = `Delete ${item.year && library.kind !== 'listenarr' ? `${item.title} (${item.year})` : item.title}?`;
     files.checked = false;
     error.hidden = true;
     setBusy(false);
@@ -1145,7 +1183,7 @@ function setupDelete() {
       library.data.items = library.data.items.filter(entry => entry.id !== item.id);
       renderLibrary(library);
       const notice = $('#library-notice');
-      notice.textContent = `${data.title} was deleted from ${kind === 'sonarr' ? 'Sonarr' : 'Radarr'}${data.files ? ', with its files' : '. Its files are still in your media folder'}.`;
+      notice.textContent = `${data.title} was deleted from ${LIBRARY_APPS[kind]}${data.files ? ', with its files' : '. Its files are still in your media folder'}.`;
       notice.hidden = false;
     } catch (failure) {
       setBusy(false);
@@ -1190,6 +1228,10 @@ async function showAddTarget(kind) {
       target.textContent = settings.problem;
       return;
     }
+    if (kind === 'listenarr') {
+      target.textContent = `New books go to ${settings.folder}, with Listenarr’s default quality profile, and Audiobookshelf shows them once downloaded.`;
+      return;
+    }
     const profile = settings.profiles.find(item => item.id === settings.profile);
     target.textContent = `New titles use the ${profile.name} profile and ${settings.folder} unless you change them when adding.`;
   } catch {
@@ -1197,7 +1239,15 @@ async function showAddTarget(kind) {
   }
 }
 
+/** "11 h 32 min" for an audiobook's length in minutes. */
+function runtimeLabel(minutes) {
+  if (!minutes) return '';
+  const hours = Math.floor(minutes / 60);
+  return hours ? `${hours} h${minutes % 60 ? ` ${minutes % 60} min` : ''}` : `${minutes} min`;
+}
+
 function resultCard(item, kind) {
+  if (kind === 'listenarr') return bookResultCard(item);
   const facts = kind === 'sonarr'
     ? [item.year, item.network, item.seasons ? `${item.seasons} ${item.seasons === 1 ? 'season' : 'seasons'}` : '', item.status === 'ended' ? 'Ended' : item.status === 'upcoming' ? 'Upcoming' : '']
     : [item.year, item.studio, item.runtime ? `${item.runtime} min` : ''];
@@ -1218,12 +1268,42 @@ function resultCard(item, kind) {
   </li>`;
 }
 
+function bookResultCard(item) {
+  const action = item.added
+    ? '<span class="badge ok">In your library</span>'
+    : addButton(item.id);
+  const facts = [item.authors?.join(', '), item.narrators?.length ? `Narrated by ${item.narrators.join(', ')}` : '',
+    item.series, runtimeLabel(item.runtime), item.year].filter(Boolean);
+  return `<li class="result" data-id="${esc(item.id)}">
+    <div class="poster-art result-art is-square">
+      <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
+      ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" width="120" height="120">` : ''}
+    </div>
+    <div class="result-body">
+      <h3 id="result-title-${esc(item.id)}">${esc(item.title)}</h3>
+      ${item.subtitle ? `<p class="result-overview">${esc(item.subtitle)}</p>` : ''}
+      <p class="result-facts">${esc(facts.join(' · '))}</p>
+    </div>
+    <div class="result-action">${action}</div>
+  </li>`;
+}
+
 function seasonLabel(number) {
   return number === 0 ? 'Specials' : String(number);
 }
 
 /** The options panel shown in place of the Add button. Every control starts on the default. */
 function addOptionsForm(item, kind, settings) {
+  if (kind === 'listenarr') {
+    return `<form class="add-options" aria-labelledby="result-title-${esc(item.id)}" novalidate>
+      <label class="check"><input type="checkbox" name="search" checked><span>Start searching now</span></label>
+      <p class="error error-inline" role="alert" hidden></p>
+      <div class="option-actions">
+        <button class="button button-primary" type="submit">${icon('plus')}Add book</button>
+        <button class="button button-quiet" type="button" data-cancel>Cancel</button>
+      </div>
+    </form>`;
+  }
   const series = kind === 'sonarr';
   const id = `add-${kind}-${item.id}`;
   const profiles = settings.profiles.map(profile =>
@@ -1288,7 +1368,7 @@ async function openOptions(card, kind) {
     for (const open of document.querySelectorAll('.result.is-open')) if (open !== card) closeOptions(open);
     card.classList.add('is-open');
     action.innerHTML = addOptionsForm(item, kind, settings);
-    action.querySelector('select').focus();
+    action.querySelector('select, input').focus();
     card.scrollIntoView({block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
   } catch (error) {
     action.innerHTML = `<p class="error error-inline">${esc(error.message || 'Could not load the add options.')}</p>${addButton(card.dataset.id)}`;
@@ -1298,7 +1378,9 @@ async function openOptions(card, kind) {
 async function submitOptions(form, card, kind) {
   const error = form.querySelector('.error');
   const data = new FormData(form);
-  const request = {id: Number(card.dataset.id), profile: Number(data.get('profile')), search: data.get('search') === 'on'};
+  // Audiobooks are found by their ASIN; series and films by a number.
+  const request = kind === 'listenarr' ? {id: card.dataset.id, search: data.get('search') === 'on'}
+    : {id: Number(card.dataset.id), profile: Number(data.get('profile')), search: data.get('search') === 'on'};
   if (data.get('folder')) request.folder = data.get('folder');
   if (kind === 'sonarr') {
     request.monitor = data.get('monitor');
@@ -1310,7 +1392,7 @@ async function submitOptions(form, card, kind) {
         return;
       }
     }
-  } else {
+  } else if (kind === 'radarr') {
     request.availability = data.get('availability');
   }
   const submit = form.querySelector('[type="submit"]');
@@ -1329,7 +1411,7 @@ async function submitOptions(form, card, kind) {
     error.textContent = failure.message;
     error.hidden = false;
     submit.disabled = false;
-    submit.innerHTML = `${icon('plus')}Add ${kind === 'sonarr' ? 'series' : 'film'}`;
+    submit.innerHTML = `${icon('plus')}Add ${{sonarr: 'series', radarr: 'film', listenarr: 'book'}[kind]}`;
   }
 }
 
@@ -1341,7 +1423,7 @@ if (page === 'add') {
   hidePosterOnError(results);
   const syncKind = () => {
     const kind = addKind();
-    term.placeholder = kind === 'sonarr' ? 'Search for a series' : 'Search for a film';
+    term.placeholder = {sonarr: 'Search for a series', radarr: 'Search for a film', listenarr: 'Search for a book, author or narrator'}[kind];
     showAddTarget(kind);
     if (lastSearch && lastSearch.kind !== kind && term.value.trim()) form.requestSubmit();
   };
@@ -1375,7 +1457,7 @@ if (page === 'add') {
       for (const item of data.results) addResults.set(`${kind}:${item.id}`, item);
       results.innerHTML = data.results.length
         ? `<p class="result-count">${data.results.length} ${data.results.length === 1 ? 'match' : 'matches'} for “${esc(shown)}”</p><ul class="results" data-kind="${kind}">${data.results.map(item => resultCard(item, kind)).join('')}</ul>`
-        : `<div class="empty-state"><h3>Nothing found for “${esc(shown)}”</h3><p>Check the spelling, or try the original title.</p></div>`;
+        : `<div class="empty-state"><h3>Nothing found for “${esc(shown)}”</h3><p>${kind === 'listenarr' ? 'Check the spelling, or search for the author.' : 'Check the spelling, or try the original title.'}</p></div>`;
       // A title picked on Discover opens straight onto its options.
       const only = results.querySelector('.result [data-add]');
       if (exact && data.results.length === 1 && only) openOptions(only.closest('.result'), kind);
@@ -1408,8 +1490,10 @@ if (page === 'add') {
     if (event.key === 'Escape' && event.target.closest('.add-options')) closeOptions(event.target.closest('.result'));
   });
   showAddTarget(addKind());
-  if (new URLSearchParams(window.location.search).get('kind') === 'radarr') {
-    form.querySelector('input[value="radarr"]').checked = true;
+  const asked = new URLSearchParams(window.location.search).get('kind');
+  const choice = ['radarr', 'listenarr'].includes(asked) && form.querySelector(`input[value="${asked}"]`);
+  if (choice && !choice.closest('[hidden]')) {
+    choice.checked = true;
     syncKind();
   }
   term.focus();

@@ -1503,7 +1503,8 @@ def backup_status():
 
 
 PROFILE_NAME = 'MartinFlix HD (720p/1080p)'
-POSTER_HOSTS = ('image.tmdb.org', 'artworks.thetvdb.com')
+# TMDB's and TheTVDB's artwork, and Audible's covers in audiobook search results.
+POSTER_HOSTS = ('image.tmdb.org', 'artworks.thetvdb.com', 'm.media-amazon.com')
 IMAGE_SOURCES = ' '.join('https://' + host for host in POSTER_HOSTS)
 
 
@@ -1846,6 +1847,254 @@ def delete_title(kind, request):
     return {'deleted': True, 'title': item.get('title') or 'The title', 'files': files}
 
 
+# Audiobooks: Listenarr's library and its search of Audible's catalogue, with links to listen in Audiobookshelf.
+ASIN = re.compile(r'[A-Z0-9]{10}')
+# Audible's store for the Discover country, as setup chose it for Listenarr and Audiobookshelf.
+AUDIBLE_STORES = {'GB': 'uk', 'IE': 'uk', 'US': 'us', 'CA': 'ca', 'AU': 'au', 'NZ': 'au', 'FR': 'fr', 'DE': 'de',
+                  'ES': 'es', 'IT': 'it', 'JP': 'jp', 'IN': 'in'}
+AUDIBLE_SITES = {'uk': 'www.audible.co.uk', 'us': 'www.audible.com', 'ca': 'www.audible.ca', 'au': 'www.audible.com.au',
+                 'fr': 'www.audible.fr', 'de': 'www.audible.de', 'es': 'www.audible.es', 'it': 'www.audible.it',
+                 'jp': 'www.audible.co.jp', 'in': 'www.audible.in'}
+# What the last searches found, by ASIN, so adding a book sends Listenarr the details it was shown.
+AUDIOBOOK_SEARCHES = {}
+AUDIOBOOK_SEARCHES_KEPT = 500
+
+
+def audible_store():
+    return AUDIBLE_STORES.get(os.environ.get('MARTINFLIX_DISCOVER_REGION', 'GB').upper(), 'us')
+
+
+def audiobook_json(kind, endpoint, payload=None, method=None, timeout=10):
+    with audiobook_open(kind, endpoint, payload=payload, method=method, timeout=timeout) as response:
+        body = response.read()
+    return json.loads(body) if body.strip() else None
+
+
+def names(value):
+    """A list of names, from strings or from objects with a name."""
+    found = []
+    for item in value if isinstance(value, list) else []:
+        name = item.get('name') if isinstance(item, dict) else item
+        if isinstance(name, str) and name.strip():
+            found.append(' '.join(name.split()))
+    return found
+
+
+def year_of(value):
+    match = re.match(r'(\d{4})', value) if isinstance(value, str) else None
+    return int(match.group(1)) if match else None
+
+
+def audiobookshelf_items():
+    """Audiobookshelf's books, by ASIN and by title and author, for a link straight to each one."""
+    found = {}
+    for library in (audiobook_json('audiobookshelf', '/api/libraries') or {}).get('libraries') or []:
+        if not isinstance(library, dict) or library.get('mediaType') != 'book' or not isinstance(library.get('id'), str):
+            continue
+        listed = audiobook_json('audiobookshelf', f'/api/libraries/{urllib.parse.quote(library["id"])}/items?minified=1',
+                                timeout=20) or {}
+        for item in listed.get('results') or []:
+            metadata = ((item.get('media') or {}).get('metadata') or {}) if isinstance(item, dict) else {}
+            if not isinstance(item.get('id'), str) or not item['id']:
+                continue
+            if isinstance(metadata.get('asin'), str) and metadata['asin'].strip():
+                found.setdefault(('asin', metadata['asin'].strip().upper()), item['id'])
+            if isinstance(metadata.get('title'), str):
+                found.setdefault(('title', metadata['title'].casefold().strip(), str(metadata.get('authorName') or '').casefold().strip()),
+                                 item['id'])
+    return found
+
+
+def audiobook_items(raw, everything=False, shelf=None):
+    """Listenarr's books: by default those monitored and not downloaded yet; with `everything`, all of them."""
+    shelf = shelf or {}
+    port = os.environ.get('MARTINFLIX_AUDIOBOOKSHELF_WEB_PORT', '13378')
+    site = AUDIBLE_SITES[audible_store()]
+    items = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or type(item.get('id')) is not int or not 0 < item['id'] <= 2147483647:
+            continue
+        status = str(item.get('status') or '')
+        downloading = status == 'downloading'
+        downloaded = status.startswith('quality-') or (type(item.get('fileCount')) is int and item['fileCount'] > 0)
+        monitored = bool(item.get('monitored'))
+        if not everything and (downloaded or not monitored):
+            continue
+        title = ' '.join(str(item.get('title') or 'Untitled').split())
+        authors = names(item.get('authors'))
+        asin = str(item.get('asin') or '').strip().upper()
+        series = item.get('series') if isinstance(item.get('series'), str) else ''
+        number = item.get('seriesNumber') if isinstance(item.get('seriesNumber'), str) else ''
+        size = item.get('fileSize')
+        entry = {
+            'id': item['id'], 'title': title, 'year': year_of(item.get('publishYear') or item.get('publishedDate')),
+            'authors': authors, 'narrators': names(item.get('narrators')),
+            'series': f'{series} #{number}' if series and number else series,
+            'monitored': monitored, 'downloaded': downloaded, 'downloading': downloading,
+            'size': size if type(size) is int and size > 0 else 0,
+            'poster': f'/api/posters/listenarr/{asin}' if ASIN.fullmatch(asin) else None,
+            'links': {'audible': f'https://{site}/pd/{asin}'} if ASIN.fullmatch(asin) else {},
+        }
+        book = shelf.get(('asin', asin)) if asin else None
+        book = book or shelf.get(('title', title.casefold(), (authors[0] if authors else '').casefold()))
+        if book:
+            # Audiobookshelf serves its pages under /audiobookshelf, on its own port; the page adds this address.
+            entry['listen'] = {'port': int(port) if port.isdigit() else 13378, 'path': f'/audiobookshelf/item/{urllib.parse.quote(book)}'}
+        items.append(entry)
+    if everything:
+        return sorted(items, key=lambda entry: (entry['title'].casefold().removeprefix('the '), entry['year'] or 0))
+    return sorted(items, key=lambda entry: (not entry['downloading'], entry['title'].casefold().removeprefix('the ')))
+
+
+def audiobook_data(everything=False):
+    if not audiobooks_installed():
+        return {'configured': False, 'items': []}
+    try:
+        raw = audiobook_json('listenarr', '/api/v1/library', timeout=20)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {'configured': True, 'error': 'Could not reach Listenarr, or it rejected the key.', 'items': []}
+    # Links to listen are a nicety: the list still shows if Audiobookshelf doesn't answer.
+    try:
+        shelf = audiobookshelf_items()
+    except (OSError, ValueError, TypeError, AttributeError):
+        shelf = {}
+    return {'configured': True, 'items': audiobook_items(raw, everything, shelf)}
+
+
+def audiobook_cover(asin):
+    """A book's cover from Listenarr's own cache of them."""
+    limit = 2 * 1024 * 1024
+    try:
+        with audiobook_open('listenarr', f'/api/v1/images/{asin}') as response:
+            kind = response.headers.get_content_type()
+            body = response.read(limit + 1)
+    except (OSError, ValueError):
+        return None
+    signatures = {'image/jpeg': b'\xff\xd8\xff', 'image/png': b'\x89PNG', 'image/webp': b'RIFF'}
+    if kind not in signatures or not body.startswith(signatures[kind]) or len(body) > limit:
+        return None
+    return body, kind
+
+
+def audible_entry(item, owned):
+    asin = str(item.get('asin') or '').strip().upper()
+    if not ASIN.fullmatch(asin):
+        return None
+    runtime = next((item.get(key) for key in ('runtimeLengthMin', 'lengthMinutes', 'runtimeMinutes')
+                    if type(item.get(key)) is int and item[key] > 0), None)
+    series = next((entry for entry in item.get('series') or [] if isinstance(entry, dict) and entry.get('name')), None)
+    return {
+        'id': asin, 'title': ' '.join(str(item.get('title') or 'Untitled').split()),
+        'subtitle': item.get('subtitle') if isinstance(item.get('subtitle'), str) else '',
+        'authors': names(item.get('authors')), 'narrators': names(item.get('narrators')),
+        'series': (f'{series["name"]} #{series["position"]}' if series.get('position') else series['name']) if series else '',
+        'runtime': runtime, 'year': year_of(item.get('releaseDate')),
+        'poster': remote_poster(item.get('imageUrl')), 'added': asin in owned,
+    }
+
+
+def search_audiobooks(term):
+    if not audiobooks_installed():
+        raise AddError('Audiobooks aren’t installed. Turn them on under Settings.')
+    try:
+        found = audiobook_json('listenarr', '/api/v1/search/audible?' + urllib.parse.urlencode(
+            {'query': term, 'region': audible_store()}), timeout=45) or {}
+    except urllib.error.HTTPError as exc:
+        # Listenarr answers 404 when Audible has nothing for the search.
+        if exc.code != 404:
+            raise
+        exc.close()
+        return []
+    owned = {str(item.get('asin') or '').upper() for item in audiobook_json('listenarr', '/api/v1/library', timeout=20) or []
+             if isinstance(item, dict)}
+    results = []
+    for item in found.get('results') or []:
+        entry = audible_entry(item, owned) if isinstance(item, dict) else None
+        if not entry or any(result['id'] == entry['id'] for result in results):
+            continue
+        AUDIOBOOK_SEARCHES.pop(entry['id'], None)
+        AUDIOBOOK_SEARCHES[entry['id']] = item
+        results.append(entry)
+        if len(results) == 24:
+            break
+    while len(AUDIOBOOK_SEARCHES) > AUDIOBOOK_SEARCHES_KEPT:
+        AUDIOBOOK_SEARCHES.pop(next(iter(AUDIOBOOK_SEARCHES)))
+    return results
+
+
+def audiobook_settings():
+    """Where new audiobooks go: Listenarr's default root folder."""
+    if not audiobooks_installed():
+        return {'ready': False, 'problem': 'Audiobooks aren’t installed. Turn them on under Settings.'}
+    try:
+        folders = [item for item in audiobook_json('listenarr', '/api/v1/rootfolders') or []
+                   if isinstance(item, dict) and isinstance(item.get('path'), str)]
+    except (OSError, ValueError, TypeError):
+        return {'ready': False, 'problem': 'Could not reach Listenarr.'}
+    if not folders:
+        return {'ready': False, 'problem': 'Listenarr has no root folder yet. Run setup again to add it.'}
+    folder = next((item for item in folders if item.get('isDefault')), folders[0])
+    return {'ready': True, 'folder': folder['path']}
+
+
+def add_audiobook(request):
+    """Add one book to Listenarr, with the details Audible's catalogue gave for it, and search for it if asked."""
+    asin, search = request.get('id'), request.get('search', True)
+    if not isinstance(asin, str) or not ASIN.fullmatch(asin):
+        raise AddError('Choose a book from the search results.')
+    if type(search) is not bool:
+        raise AddError('Invalid search choice.')
+    item = AUDIOBOOK_SEARCHES.get(asin)
+    if item is None:
+        search_audiobooks(asin)
+        item = AUDIOBOOK_SEARCHES.get(asin)
+    if item is None:
+        raise AddError('That book could not be found any more. Search again.')
+    series = next((entry for entry in item.get('series') or [] if isinstance(entry, dict) and entry.get('name')), {})
+    released = item.get('releaseDate') if isinstance(item.get('releaseDate'), str) else None
+    entry = audible_entry(item, set())
+    metadata = {
+        'asin': asin, 'source': 'Audible', 'region': audible_store(), 'title': entry['title'],
+        'subtitle': entry['subtitle'] or None, 'authors': entry['authors'], 'narrators': entry['narrators'],
+        'imageUrl': item.get('imageUrl') if isinstance(item.get('imageUrl'), str) else None,
+        'series': series.get('name'), 'seriesNumber': series.get('position'), 'seriesAsin': series.get('asin'),
+        'publisher': item.get('publisher') if isinstance(item.get('publisher'), str) else None,
+        'language': item.get('language') if isinstance(item.get('language'), str) else None,
+        'runtime': entry['runtime'], 'publishedDate': released[:10] if released else None,
+        'publishYear': str(entry['year']) if entry['year'] else None, 'genres': names(item.get('genres')),
+    }
+    try:
+        audiobook_json('listenarr', '/api/v1/library/add', {'metadata': metadata, 'monitored': True, 'autoSearch': search},
+                       method='POST', timeout=60)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code == 409:
+            raise AddError(f'{entry["title"]} is already in Listenarr.') from None
+        raise
+    return {'added': True, 'title': entry['title'], 'searching': search}
+
+
+def delete_audiobook(request):
+    """Remove one book from Listenarr, and with `files`, its folder and everything in it."""
+    identifier, files = request.get('id'), request.get('files', False)
+    if type(identifier) is not int or not 0 < identifier <= 2147483647:
+        raise AddError('Choose a book to delete.')
+    if type(files) is not bool:
+        raise AddError('Invalid choice for the files.')
+    try:
+        item = audiobook_json('listenarr', f'/api/v1/library/{identifier}', timeout=15)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code == 404:
+            raise AddError('That book is no longer in Listenarr.') from None
+        raise
+    if not isinstance(item, dict) or item.get('id') != identifier:
+        raise AddError('That book is no longer in Listenarr.')
+    query = urllib.parse.urlencode({'deleteFiles': str(files).lower(), 'deleteFolder': str(files).lower()})
+    audiobook_json('listenarr', f'/api/v1/library/{identifier}?{query}', method='DELETE', timeout=120)
+    return {'deleted': True, 'title': item.get('title') or 'The book', 'files': files}
+
+
 # Telegram: Sonarr and Radarr tell the dashboard what happened through a webhook named MartinFlix, and the dashboard
 # posts one message in one format for both, with the poster.
 TELEGRAM_TOKEN = re.compile(r'[0-9]{5,12}:[A-Za-z0-9_-]{30,64}')
@@ -2145,19 +2394,42 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ('/api/sonarr', '/api/radarr'):
             everything = urllib.parse.parse_qs(url.query).get('show') == ['all']
             self.send_json(arr_data(path.rsplit('/', 1)[1], everything))
-        elif search := re.fullmatch(r'/api/search/(sonarr|radarr)', path):
+        elif path == '/api/listenarr':
+            self.send_json(audiobook_data(urllib.parse.parse_qs(url.query).get('show') == ['all']))
+        elif search := re.fullmatch(r'/api/search/(sonarr|radarr|listenarr)', path):
             term = ' '.join(urllib.parse.parse_qs(url.query).get('term', [''])[0].split())
             if not 1 <= len(term) <= 100:
                 self.send_json({'error': 'Enter a title to search for.'}, 400)
                 return
             try:
+                if search.group(1) == 'listenarr':
+                    self.send_json({'results': search_audiobooks(term)})
+                    return
                 self.send_json({'results': search_titles(search.group(1), term)})
             except AddError as exc:
                 self.send_json({'error': str(exc)}, 409)
+            except urllib.error.HTTPError as exc:
+                exc.close()
+                self.send_json({'error': 'Audible’s catalogue didn’t answer. Try again in a moment.'
+                                if exc.code == 503 and search.group(1) == 'listenarr' else
+                                f'{search.group(1).capitalize()} could not search right now. Try again.'}, 502)
             except (OSError, ValueError, TypeError, AttributeError):
                 self.send_json({'error': f'{search.group(1).capitalize()} could not search right now. Try again.'}, 502)
-        elif settings := re.fullmatch(r'/api/add-settings/(sonarr|radarr)', path):
-            self.send_json(add_settings(settings.group(1)))
+        elif settings := re.fullmatch(r'/api/add-settings/(sonarr|radarr|listenarr)', path):
+            self.send_json(audiobook_settings() if settings.group(1) == 'listenarr' else add_settings(settings.group(1)))
+        elif cover := re.fullmatch(r'/api/posters/listenarr/([A-Z0-9]{10})', path):
+            found = audiobook_cover(cover.group(1)) if audiobooks_installed() else None
+            if found is None:
+                self.send_error(404)
+                return
+            body, kind = found
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'private, max-age=86400')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            self.wfile.write(body)
         elif poster := re.fullmatch(r'/api/posters/(sonarr|radarr)/([1-9][0-9]{0,9})', path):
             body = arr_poster(*poster.groups())
             if body is None:
@@ -2175,7 +2447,9 @@ class Handler(BaseHTTPRequestHandler):
             body = (WEB / 'index.html').read_bytes().replace(b'data-page="overview"', f'data-page="{page}"'.encode(), 1)
             # Menu items that depend on settings are shown from the start, so they don't blink in once the page loads.
             for item, shown in ((b'nav-discover', bool(tmdb_key()) or page == 'discover'), (b'nav-password', form_login),
-                                (b'nav-pin', form_login and controller_configured())):
+                                (b'nav-pin', form_login and controller_configured()),
+                                (b'audiobooks', audiobooks_installed()), (b'library-audiobooks-link', audiobooks_installed()),
+                                (b'add-kind-audiobooks', audiobooks_installed())):
                 if shown:
                     body = body.replace(b'id="' + item + b'" hidden', b'id="' + item + b'"', 1)
             self.send_web_file('index.html', 'text/html', body=body)
@@ -2201,7 +2475,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ('/api/telegram/test', '/api/telegram/chats'):
             self.telegram_request(path)
             return
-        if add := re.fullmatch(r'/api/(add|delete)/(sonarr|radarr)', path):
+        if add := re.fullmatch(r'/api/(add|delete)/(sonarr|radarr|listenarr)', path):
             self.add_request(add.group(2), add.group(1))
             return
         if control := re.fullmatch(r'/api/control/(restart|update)', path):
@@ -2453,7 +2727,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if action == 'delete':
             try:
-                self.send_json(delete_title(kind, request))
+                self.send_json(delete_audiobook(request) if kind == 'listenarr' else delete_title(kind, request))
             except AddError as exc:
                 self.send_json({'error': str(exc)}, 409)
             except urllib.error.HTTPError as exc:
@@ -2463,6 +2737,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': f'Could not reach {kind.capitalize()}. Check whether the title is still there, then try again.'}, 502)
             return
         try:
+            if kind == 'listenarr':
+                self.send_json(add_audiobook(request))
+                return
             if 'id' not in request and type(request.get('tmdb')) is int and 0 < request['tmdb'] <= 2147483647:
                 # From Discover: TMDB's ID, and the usual defaults. Sonarr adds series by TheTVDB's ID.
                 request = {'id': tvdb_for_tmdb(request['tmdb']) if kind == 'sonarr' else request['tmdb']}

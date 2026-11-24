@@ -192,6 +192,8 @@ Both keep the audiobooks in an `Audiobooks` folder in the media directory. If th
 - connects Listenarr to Transmission, with a `listenarr` category and the same `/downloads` path mapping as Sonarr’s, and imports Prowlarr’s indexers that carry audiobooks. If none does, setup says so: add one in Prowlarr, then run setup again;
 - backs both up each night: Audiobookshelf through its own backup, and Listenarr, which has none, by pausing it for the moment its files are copied.
 
+In the dashboard, the **Library** page gets an **Audiobooks** section: the books Listenarr is still looking for, or every book with what it takes up on disk. Hover a cover to listen in Audiobookshelf or open the book on Audible, or to delete it, with its files if you choose. The **Add** page searches Audible’s catalogue in your Discover country’s store and adds a book to Listenarr, which then searches for it.
+
 Listenarr only publishes test builds, so setup installs one version it has been checked against, not the newest; MartinFlix releases move it on. Audiobookshelf follows its latest release, like the other apps.
 
 Added to an installation whose dashboard password you already chose, both start with the temporary password, because setup only knows that one. Save your dashboard password again under **Change password** and they get it too. Setup installs apps but never removes them: to stop using audiobooks, stop both on the Services page.

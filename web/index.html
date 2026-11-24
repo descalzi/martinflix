@@ -193,7 +193,7 @@
 
       <div class="page" data-for="library">
         <div class="library-bar">
-          <nav class="subnav" aria-label="Library sections"><a href="#series">Series</a><a href="#films">Films</a></nav>
+          <nav class="subnav" aria-label="Library sections"><a href="#series">Series</a><a href="#films">Films</a><a href="#audiobooks" id="library-audiobooks-link" hidden>Audiobooks</a></nav>
           <a class="button button-primary" href="/add"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add a series or film</a>
         </div>
         <p class="control-notice" id="library-notice" role="status" hidden></p>
@@ -227,10 +227,26 @@
           </div>
           <div class="library-content" aria-live="polite"><p class="empty">Loading films…</p></div>
         </section>
+        <section id="audiobooks" hidden class="panel library" data-library="listenarr" aria-labelledby="audiobooks-title">
+          <div class="panel-head">
+            <div><h2 id="audiobooks-title">Audiobooks</h2><p data-show-intro="attention">Books Listenarr is looking for and hasn’t downloaded yet, those downloading first.</p><p data-show-intro="all" hidden>Every book in Listenarr, by title, with what it takes up on disk. Hover a cover to listen in Audiobookshelf or read about it on Audible.</p></div>
+            <a class="button button-quiet" href="/add?kind=listenarr"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add a book</a>
+          </div>
+          <div class="library-controls">
+            <fieldset class="segmented library-show">
+              <legend class="sr-only">Show</legend>
+              <label><input type="radio" name="audiobooks-show" value="attention" checked><span>Wanted</span></label>
+              <label><input type="radio" name="audiobooks-show" value="all"><span>All books</span></label>
+            </fieldset>
+            <p class="library-count"></p>
+            <label class="search"><span class="sr-only">Find a book</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" data-library-filter placeholder="Find a book or author" autocomplete="off"></label>
+          </div>
+          <div class="library-content" aria-live="polite"><p class="empty">Loading audiobooks…</p></div>
+        </section>
       </div>
 
       <div class="page" data-for="add">
-        <p class="page-intro">Find a series or film and add it to Sonarr or Radarr. Keep the defaults, or choose the quality profile, seasons and folder as you add.</p>
+        <p class="page-intro">Find a series, film or audiobook and add it to Sonarr, Radarr or Listenarr. Keep the defaults, or choose the quality profile, seasons and folder as you add.</p>
         <section class="panel" aria-labelledby="add-search-title">
           <h2 id="add-search-title" class="sr-only">Search</h2>
           <form id="add-form" class="add-form" role="search">
@@ -238,6 +254,7 @@
               <legend class="sr-only">Kind of title</legend>
               <label><input type="radio" name="kind" value="sonarr" checked><span>Series</span></label>
               <label><input type="radio" name="kind" value="radarr"><span>Films</span></label>
+              <label id="add-kind-audiobooks" hidden><input type="radio" name="kind" value="listenarr"><span>Audiobooks</span></label>
             </fieldset>
             <label class="search search-wide"><span class="sr-only">Title</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input id="add-term" type="search" name="term" placeholder="Search for a series" maxlength="100" autocomplete="off" required></label>
             <button class="button button-primary" type="submit" id="add-submit">Search</button>

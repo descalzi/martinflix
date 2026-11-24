@@ -6,6 +6,7 @@ import os
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import threading
 import unittest
 import zipfile
@@ -445,3 +446,100 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LibraryAndAddTests(unittest.TestCase):
+    """The dashboard's Library and Add pages, for audiobooks through Listenarr."""
+    environment = {'MARTINFLIX_ARR_COMPOSE_NETWORK': '1', 'MARTINFLIX_AUDIOBOOKS': '1', 'MARTINFLIX_DISCOVER_REGION': 'GB',
+                   'MARTINFLIX_AUDIOBOOKSHELF_WEB_PORT': '13378', 'MARTINFLIX_LISTENARR_KEY': 'l', 'MARTINFLIX_AUDIOBOOKSHELF_KEY': 'a'}
+    library = [
+        {'id': 1, 'title': 'Project Hail Mary', 'authors': ['Andy Weir'], 'narrators': ['Ray Porter'], 'asin': 'B08G9PRS1K',
+         'publishYear': '2021', 'series': None, 'monitored': True, 'status': 'quality-match', 'fileCount': 1, 'fileSize': 900_000_000},
+        {'id': 2, 'title': 'The Way of Kings', 'authors': ['Brandon Sanderson'], 'asin': 'B003ZWFO7E', 'series': 'The Stormlight Archive',
+         'seriesNumber': '1', 'monitored': True, 'status': 'no-file', 'fileCount': 0},
+        {'id': 3, 'title': 'Dune', 'authors': ['Frank Herbert'], 'asin': 'bad', 'monitored': True, 'status': 'downloading'},
+        {'id': 4, 'title': 'Old Book', 'authors': [], 'monitored': False, 'status': 'no-file'},
+    ]
+
+    def test_wanted_and_all_views(self):
+        shelf = {('asin', 'B08G9PRS1K'): 'li_abc'}
+        with patch.dict('os.environ', self.environment, clear=True):
+            wanted = server.audiobook_items(self.library, shelf=shelf)
+            everything = server.audiobook_items(self.library, everything=True, shelf=shelf)
+        self.assertEqual([item['title'] for item in wanted], ['Dune', 'The Way of Kings'], 'downloading first, then by title')
+        self.assertEqual([item['title'] for item in everything], ['Dune', 'Old Book', 'Project Hail Mary', 'The Way of Kings'])
+        book = next(item for item in everything if item['id'] == 1)
+        self.assertEqual(book['listen'], {'port': 13378, 'path': '/audiobookshelf/item/li_abc'})
+        self.assertEqual(book['links'], {'audible': 'https://www.audible.co.uk/pd/B08G9PRS1K'})
+        self.assertEqual(book['poster'], '/api/posters/listenarr/B08G9PRS1K')
+        self.assertEqual((book['downloaded'], book['size'], book['year']), (True, 900_000_000, 2021))
+        kings = next(item for item in everything if item['id'] == 2)
+        self.assertEqual(kings['series'], 'The Stormlight Archive #1')
+        self.assertNotIn('listen', kings)
+        dune = next(item for item in everything if item['id'] == 3)
+        self.assertEqual((dune['poster'], dune['links']), (None, {}), 'no cover or link without a real ASIN')
+
+    def test_add_sends_what_the_search_showed(self):
+        calls = []
+        search = {'results': [{'asin': 'B08G9PRS1K', 'title': 'Project Hail Mary', 'authors': [{'name': 'Andy Weir'}],
+                               'narrators': [{'name': 'Ray Porter'}], 'imageUrl': 'https://m.media-amazon.com/images/I/a.jpg',
+                               'series': [], 'runtimeLengthMin': 970, 'releaseDate': '2021-05-04', 'publisher': 'Audible Studios'},
+                              {'asin': 'nope', 'title': 'Skipped'}]}
+
+        def fake_json(kind, endpoint, payload=None, method=None, timeout=10):
+            calls.append((endpoint, payload, method))
+            if endpoint.startswith('/api/v1/search/audible'):
+                return search
+            if endpoint == '/api/v1/library':
+                return [{'asin': 'B003ZWFO7E'}]
+            return {'message': 'added'}
+
+        with patch.dict('os.environ', self.environment, clear=True), patch.object(server, 'audiobook_json', side_effect=fake_json):
+            results = server.search_audiobooks('hail mary')
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]['poster'], 'https://m.media-amazon.com/images/I/a.jpg')
+            self.assertEqual((results[0]['runtime'], results[0]['year'], results[0]['added']), (970, 2021, False))
+            self.assertIn('region=uk', calls[0][0])
+            added = server.add_audiobook({'id': 'B08G9PRS1K', 'search': True})
+        self.assertEqual(added, {'added': True, 'title': 'Project Hail Mary', 'searching': True})
+        endpoint, payload, method = calls[-1]
+        self.assertEqual((endpoint, method), ('/api/v1/library/add', 'POST'))
+        self.assertEqual(payload['metadata']['authors'], ['Andy Weir'])
+        self.assertEqual((payload['metadata']['runtime'], payload['metadata']['publishYear']), (970, '2021'))
+        self.assertTrue(payload['autoSearch'])
+        with self.assertRaises(server.AddError):
+            server.add_audiobook({'id': 'not-an-asin'})
+
+    def test_adding_a_book_already_there_says_so(self):
+        server.AUDIOBOOK_SEARCHES['B0000000AA'] = {'asin': 'B0000000AA', 'title': 'Here Already'}
+
+        def conflict(kind, endpoint, payload=None, method=None, timeout=10):
+            raise urllib.error.HTTPError(endpoint, 409, 'Conflict', {}, io.BytesIO(b''))
+
+        with patch.dict('os.environ', self.environment, clear=True), patch.object(server, 'audiobook_json', side_effect=conflict):
+            with self.assertRaisesRegex(server.AddError, 'Here Already is already in Listenarr'):
+                server.add_audiobook({'id': 'B0000000AA'})
+
+    def test_delete_with_and_without_files(self):
+        calls = []
+
+        def fake_json(kind, endpoint, payload=None, method=None, timeout=10):
+            calls.append((endpoint, method))
+            return {'id': 2, 'title': 'The Way of Kings'} if method is None else None
+
+        with patch.dict('os.environ', self.environment, clear=True), patch.object(server, 'audiobook_json', side_effect=fake_json):
+            self.assertEqual(server.delete_audiobook({'id': 2, 'files': True})['files'], True)
+            server.delete_audiobook({'id': 2})
+        self.assertEqual(calls[1], ('/api/v1/library/2?deleteFiles=true&deleteFolder=true', 'DELETE'))
+        self.assertEqual(calls[3], ('/api/v1/library/2?deleteFiles=false&deleteFolder=false', 'DELETE'))
+
+    def test_no_results_from_audible_is_an_empty_list(self):
+        def not_found(kind, endpoint, payload=None, method=None, timeout=10):
+            raise urllib.error.HTTPError(endpoint, 404, 'Not Found', {}, io.BytesIO(b''))
+
+        with patch.dict('os.environ', self.environment, clear=True), patch.object(server, 'audiobook_json', side_effect=not_found):
+            self.assertEqual(server.search_audiobooks('zzzz'), [])
+
+    def test_audible_covers_are_allowed_in_search_results(self):
+        self.assertEqual(server.remote_poster('https://m.media-amazon.com/images/I/a.jpg'), 'https://m.media-amazon.com/images/I/a.jpg')
+        self.assertIsNone(server.remote_poster('https://example.com/a.jpg'))
