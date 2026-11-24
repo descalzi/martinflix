@@ -6,9 +6,9 @@ Run:
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --check
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media --check
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media
 ```
 
 `docker run … install` starts setup in two steps. The first container sees only the Docker socket and your home folder; it works out which other folders setup needs (the media folder, the backup folder, a state directory outside your home) and starts the installer in a second container with exactly those folders at the same paths, the VM’s network, and your account. Paths must match the VM’s because Docker resolves every folder in the Compose files on the VM. `update` in place of `install` updates an existing installation, and `reset` starts from scratch. In the rest of this guide, “run setup with `--flag`” means adding the flag to that command.
@@ -102,7 +102,7 @@ To run an isolated trial alongside another stack, use a separate state directory
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install \
+  ghcr.io/descalzi/martinflix:stable install \
   --state-dir ~/.local/state/martinflix-trial --media-path /mnt/media-trial \
   --dashboard-port 18765 --sonarr-port 18989 --radarr-port 17878
 ```
@@ -127,7 +127,7 @@ Once saved, **Send a test message** checks it. Sonarr and Radarr get a webhook c
 
 **Settings** also changes Telegram, Discover (on or off, country, your own TMDB key), Plex (the server name, or the address and token of a Plex elsewhere), the backup folder, the VPN exit, protocol and service credentials, and the release channel. Saving runs setup the same way, with your PIN, so the change is checked and applied exactly as from a terminal and only the apps it affects restart. Secrets reach setup in a private file that it deletes as soon as it has read it.
 
-The **edge** channel gets every change pushed to `main`; **stable** gets versions tagged `v1.2.0` and so on. A new installation follows the channel of the image you ran (`:edge` or `:stable`); switch under **Settings → Updates**, or with `--channel`.
+The **edge** channel gets every change pushed to `main`; **stable** gets released versions, tagged `v1.0.0` and so on, and is the default. A new installation follows the channel of the image you ran (`:edge` or `:stable`); switch under **Settings → Updates**, or with `--channel`.
 
 ### Update an existing installation
 
@@ -145,9 +145,9 @@ For library folders without the download services, pass only `--media-path`. To 
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --enable-downloads --check
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media --enable-downloads --check
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --enable-downloads
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media --enable-downloads
 ```
 
 The VPN option requires `/dev/net/tun` and your NordVPN **service credentials**, which aren’t your Nord Account email and password. In your [Nord Account](https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/), open NordVPN → **Set up NordVPN manually**, enter the code NordVPN emails you, and copy the username and password from the **Service credentials** tab. [NordVPN’s guide](https://support.nordvpn.com/hc/en-us/articles/19685514639633-How-to-find-your-service-credentials-for-manual-NordVPN-setup) has screenshots. The installer prompts for the credentials without echoing them and saves them in private files in the state directory; replace them later under **Settings → VPN**. Gluetun uses NordVPN and defaults to Prague, matching the reference Compose file. Pass `--enable-vpn` for a standalone VPN gateway. Use `--vpn-city Prague` or a supported `--vpn-country` to choose the exit. Before connecting, setup downloads NordVPN’s current server list into the state directory, and Gluetun refreshes it daily, so an out-of-date list built into the image can’t send it to a retired server. If your network blocks VPN traffic over UDP, add `--vpn-protocol tcp`; setup remembers the choice. If a server rejects the login (`AUTH_FAILED`), Gluetun moves on to another server in the same city instead of retrying the one that refused it. If every attempt is rejected, setup names the servers it tried and keeps your saved credentials, because NordVPN also refuses logins when the account is at its device limit. Stop VPN connections you no longer use before you rerun it. VPN-backed Transmission, Prowlarr, and FlareSolverr share Gluetun’s network and wait for its health check. If you explicitly choose `--download-network direct`, those three services use the normal Docker network. Existing download routes are retained on rerun. Their web pages use ports 9091 and 9696 by default, on the same address as the dashboard. Sign in to both with `admin` and your dashboard password.

@@ -39,14 +39,14 @@ Everything the restore replaces is moved, not deleted, into a `before-restore-<d
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge update --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
+  ghcr.io/descalzi/martinflix:stable update --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
 ```
 
 **Onto a new machine**, the same option with `install` rebuilds the whole stack from a backup in one go, with no claim code, PIN or credentials to enter, because they come from the backup. Pass the media folder as for any new install; backups carry on into the folder the backup came from unless you pass `--backup-dir`:
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/martinflix --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/martinflix --restore /mnt/martinflix/Backups/martinflix/2026-11-22_010000
 ```
 
 Add `--check` to either to check the backup and the plan without changing anything. In a terminal setup asks you to type `RESTORE` before it stops anything.
@@ -59,7 +59,7 @@ A media stack setup didn't install, such as the reference host's own Compose sta
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge export --backup-dir /mnt/martinflix/Backups
+  ghcr.io/descalzi/martinflix:stable export --backup-dir /mnt/martinflix/Backups
 ```
 
 Add `--check` first to see what it found: each app, where the old stack keeps media, which folder Plex sees it in, and any app on another image tag. An app on another tag of the same image, such as Radarr's `nightly`, stays on that tag after the move, because its database may be newer than the latest release understands.

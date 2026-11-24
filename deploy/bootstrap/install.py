@@ -2188,7 +2188,7 @@ def main(argv=None):
     if os.environ.get('MARTINFLIX_STAGE') != 'run':
         parser.exit(1, 'Setup now runs from the MartinFlix image, with no copy of the repo. Start it with:\n'
                        '  docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
-                       '    ghcr.io/descalzi/martinflix:edge install --help\n')
+                       '    ghcr.io/descalzi/martinflix:stable install --help\n')
     os.umask(0o077)
     try:
         with tempfile.TemporaryDirectory(prefix='martinflix-compose-') as directory:

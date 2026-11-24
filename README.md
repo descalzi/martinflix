@@ -26,19 +26,19 @@ Every installation needs a media directory: an existing, writable folder for you
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --check
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media --check
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media
 ```
 
 **If your browser is on another machine**, add the VM’s LAN IPv4 address. Replace the example address with your VM’s address:
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge install --media-path /mnt/media --dashboard-bind 192.168.1.50
+  ghcr.io/descalzi/martinflix:stable install --media-path /mnt/media --dashboard-bind 192.168.1.50
 ```
 
-Setup runs from the MartinFlix image in two short-lived containers: the first works out which of your folders setup needs, and the second runs the installer with exactly those folders, at the same paths, on the VM’s network, as your account. `:edge` follows every change; `:stable` follows released versions.
+Setup runs from the MartinFlix image in two short-lived containers: the first works out which of your folders setup needs, and the second runs the installer with exactly those folders, at the same paths, on the VM’s network, as your account. `:stable` follows released versions; use `:edge` in place of it to test every change as it lands.
 
 Use LAN access on a trusted home network. HTTP sends credentials unencrypted, so keep these services off the public internet. Sonarr and Radarr use the same LAN address as the dashboard on ports 8989 and 7878 by default.
 
@@ -72,7 +72,7 @@ To add apps or change the address or ports, rerun setup with `update` in place o
 
 ```sh
 docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \
-  ghcr.io/descalzi/martinflix:edge update --enable-bazarr
+  ghcr.io/descalzi/martinflix:stable update --enable-bazarr
 ```
 
 Add `--state-dir` if you installed to a custom location. To start fresh with the same state directory, see [Start from scratch](docs/first-run.md#start-from-scratch).

@@ -1,9 +1,8 @@
 'use strict';
 
 const IMAGE = 'ghcr.io/descalzi/martinflix';
-// The channel a new installation follows until it is changed in the dashboard. Stable is published from version tags;
-// until the first one exists, new installations follow edge.
-const DEFAULT_CHANNEL = 'edge';
+// The channel a new installation follows until it is changed in the dashboard. Stable is published from version tags.
+const DEFAULT_CHANNEL = 'stable';
 // Setup runs from the MartinFlix image. It needs the Docker socket, and your home folder for its state.
 const LAUNCH = ['docker run --rm -it --pull always', '-v /var/run/docker.sock:/var/run/docker.sock', '-v "$HOME:$HOME" -e HOME'];
 const portOptions = [
