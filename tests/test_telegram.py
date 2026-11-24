@@ -65,8 +65,8 @@ class MessageTests(unittest.TestCase):
         self.hooks.handle('radarr', {'eventType': 'Test'})
         self.hooks.handle('radarr', {'eventType': 'Grab', 'movie': {'title': 'Ignored'}})
         self.assertEqual([text for text, _ in self.sent], ['<b>Taskmaster</b> (2015)\nNow monitored: episodes will download as they become available',
-                                                           '<b>Hamnet</b> (2025)\nNow monitored: it will download once it’s available',
-                                                           'Radarr can reach MartinFlix: downloads and new films will be posted here.'])
+                                                           '<b>Hamnet</b> (2025)\nNow monitored: it will download once it’s available'],
+                         'tests and grabs send nothing')
 
     def test_episode_codes(self):
         self.assertEqual(server.episode_codes([(1, 1)]), 'S01E01')

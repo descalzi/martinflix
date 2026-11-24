@@ -1643,10 +1643,9 @@ class HookMessages:
 
     def handle(self, app, event):
         kind = event.get('eventType') if isinstance(event, dict) else None
-        if kind == 'Test':
-            self.deliver(f'{"Sonarr" if app == "sonarr" else "Radarr"} can reach MartinFlix: downloads and new '
-                         f'{"series" if app == "sonarr" else "films"} will be posted here.', None)
-        elif kind == 'SeriesAdd' and app == 'sonarr':
+        # Sonarr and Radarr send a Test event when the webhook is added or saved: not worth a message each time.
+        # The dashboard's own Send a test message covers checking the chat.
+        if kind == 'SeriesAdd' and app == 'sonarr':
             series = event.get('series') or {}
             self.deliver(f'{hook_heading(series)}\nNow monitored: episodes will download as they become available', hook_poster(series))
         elif kind == 'MovieAdded' and app == 'radarr':
