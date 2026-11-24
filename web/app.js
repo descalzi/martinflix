@@ -1158,6 +1158,9 @@ if (page === 'library') {
     for (const choice of section.querySelectorAll('.library-show input')) {
       choice.addEventListener('change', () => {
         library.show = choice.value;
+        // The whole library scrolls inside its section, so a long one doesn't stretch the page.
+        section.classList.toggle('is-all', library.show === 'all');
+        content.scrollTop = 0;
         for (const intro of section.querySelectorAll('[data-show-intro]')) intro.hidden = intro.dataset.showIntro !== library.show;
         library.data = null;
         library.count.textContent = '';
