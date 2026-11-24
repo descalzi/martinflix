@@ -72,7 +72,8 @@ class PasswordSyncTests(unittest.TestCase):
             elif endpoint == '/api/system/settings':
                 body = json.dumps({'auth': {'type': None}}).encode()
             elif endpoint.endswith('/config/host'):
-                username = '' if 'prowlarr' in base else 'admin'
+                # Prowlarr has no login yet; Radarr has one under another name, as an adopted stack's would.
+                username = '' if 'prowlarr' in base else 'martin' if 'radarr' in base else 'admin'
                 body = json.dumps({'id': 1, 'username': username, 'authenticationMethod': 'forms' if username else 'none'}).encode()
             else:
                 body = json.dumps([{'id': 7, 'name': 'MartinFlix Transmission', 'implementation': 'Transmission',
@@ -102,7 +103,7 @@ class PasswordSyncTests(unittest.TestCase):
         hosts = {base: payload for base, endpoint, payload in writes if 'config/host' in endpoint}
         self.assertEqual(set(hosts), {'http://sonarr:8989', 'http://radarr:7878', 'http://prowlarr:9696'})
         self.assertTrue(all(payload['password'] == 'new shared password' for payload in hosts.values()))
-        self.assertEqual(hosts['http://prowlarr:9696']['username'], 'admin')
+        self.assertTrue(all(payload['username'] == 'admin' for payload in hosts.values()), 'one username for every app')
         self.assertEqual(hosts['http://prowlarr:9696']['authenticationMethod'], 'forms')
         clients = [(base, endpoint, payload) for base, endpoint, payload in writes if 'downloadclient' in endpoint]
         self.assertEqual([(base, endpoint) for base, endpoint, _ in clients], [

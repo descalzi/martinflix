@@ -372,8 +372,9 @@ def sync_app_passwords(password):
         if not isinstance(config, dict) or type(config.get('id')) is not int or config['id'] < 1:
             raise ValueError('Invalid application host settings')
         if not isinstance(config.get('username'), str) or not config['username'].strip():
-            config.update(username=ADMIN_APP_USER, authenticationMethod='forms', authenticationRequired='enabled')
-        config.update(password=password, passwordConfirmation=password)
+            config.update(authenticationMethod='forms', authenticationRequired='enabled')
+        # One login for every app: an app adopted from another stack keeps its own username until now.
+        config.update(username=ADMIN_APP_USER, password=password, passwordConfirmation=password)
         hosts.append((connection, f'/api/{version}/config/host/{config["id"]}', config))
     bazarr = None
     if 'bazarr' in apps:
