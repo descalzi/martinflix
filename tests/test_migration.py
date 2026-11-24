@@ -301,5 +301,27 @@ class FinishTests(unittest.TestCase):
             manager.start('finish')
 
 
+
+class ReportTests(unittest.TestCase):
+    def test_steps_apps_and_outcome_are_saved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'progress.json'
+            report = install.Report(path, clock=iter(range(0, 1000, 5)).__next__)
+            report.step('VPN. Connecting can take a minute or two…')
+            report.apps({'Bazarr': 'starting…'})
+            report.note('   Download apps…')
+            report.step('Plex…')
+            report.finish(False, 'Plex did not start.')
+            saved = json.loads(path.read_text())
+        self.assertEqual([(step['title'], step['state']) for step in saved['steps']], [('VPN', 'done'), ('Plex', 'failed')])
+        self.assertEqual(saved['steps'][0]['apps'], {'Bazarr': 'starting…'})
+        self.assertEqual((saved['state'], saved['message']), ('failed', 'Plex did not start.'))
+
+    def test_nothing_is_written_without_a_file(self):
+        report = install.Report(None)
+        report.step('Anything')
+        report.finish(True)
+
+
 if __name__ == '__main__':
     unittest.main()

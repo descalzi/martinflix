@@ -168,6 +168,17 @@ class Releases:
     def last_run_file(self):
         return Path(self.stack.config()['stateDir']) / 'controller' / 'last-run.json'
 
+    def progress_file(self):
+        """Where setup, run from here, reports its steps."""
+        return Path(self.stack.config()['stateDir']) / 'controller' / 'progress.json'
+
+    def progress(self):
+        try:
+            report = json.loads(self.progress_file().read_text())
+        except (OSError, ValueError):
+            return None
+        return report if isinstance(report, dict) and isinstance(report.get('steps'), list) else None
+
     def updater(self):
         """The last update, settings change or restore: its state, and the end of setup's output. None if there was
         none. Once it has finished, its result is saved and its container removed, so nothing is left behind."""
@@ -193,7 +204,7 @@ class Releases:
                   'kind': labels.get('io.martinflix.kind', 'update'), 'version': labels.get('io.martinflix.version'),
                   'detail': labels.get('io.martinflix.detail') or None,
                   'startedAt': state.get('StartedAt'), 'finishedAt': None if running else state.get('FinishedAt'),
-                  'log': text.strip()[-30000:]}
+                  'log': text.strip()[-30000:], 'progress': self.progress()}
         if not running and state.get('Status') in ('exited', 'dead'):
             try:
                 path = self.last_run_file()
@@ -255,6 +266,7 @@ class Releases:
             image = config.get('image') or f'{current["repo"]}:{version}'
         name = self.updater_name()
         self.stack.run(['rm', '--force', name], timeout=60)
+        self.progress_file().unlink(missing_ok=True)
         extra, secrets_file = [], None
         if secrets_given:
             secrets_file = Path(config['stateDir']) / 'controller' / f'settings-{secrets.token_hex(8)}.json'
@@ -267,6 +279,7 @@ class Releases:
                    '--label', f'io.martinflix.version={version}', '--label', f'io.martinflix.detail={detail}',
                    '-e', f'HOME={setup["home"]}', '-e', f'MARTINFLIX_RUN_AS={setup["runAs"]}',
                    '-e', f'MARTINFLIX_DOCKER_SOCKET={setup["socket"]}',
+                   '-e', f'MARTINFLIX_PROGRESS_FILE={self.progress_file()}',
                    '-v', f'{setup["socket"]}:/var/run/docker.sock',
                    '--mount', f'type=bind,source={setup["home"]},target={setup["home"]}',
                    *([] if Path(config['stateDir']).is_relative_to(setup['home']) else

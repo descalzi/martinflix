@@ -1487,17 +1487,50 @@ function renderRun(updater) {
   $('#setup-run-detail').textContent = updater.state === 'running'
     ? updater.kind === 'restore' ? `Started ${started}. The apps stop while their data is replaced; follow it here. The dashboard restarts at the end, and this page reconnects by itself.`
       : `Started ${started}. The dashboard restarts near the end and this page reloads by itself.`
-    : updater.state === 'failed' ? `Stopped at ${finished}. The output below says why; nothing after that step changed.`
+    : updater.state === 'failed' ? `Stopped at ${finished}, at the step marked below; nothing after it changed.`
     : `Finished at ${finished}.`;
   $('#setup-run-badge').innerHTML = updater.state === 'running' ? '<span class="badge">Running</span>'
     : updater.state === 'succeeded' ? '<span class="badge ok">Done</span>' : '<span class="badge crit">Failed</span>';
   $('#setup-run-actions').hidden = updater.state !== 'failed';
   // A second try at finishing a restore is still about that restore.
   $('#setup-again').dataset.kind = updater.kind === 'finish' ? updater.detail || 'finish' : updater.kind;
+  renderSteps(updater);
   const log = $('#setup-log');
   const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   log.textContent = updater.log || 'Starting…';
   if (atEnd || updater.state === 'running') log.scrollTop = log.scrollHeight;
+}
+
+/** Setup's steps as a checklist, from the progress it reports; the raw output stays one click away. */
+function renderSteps(updater) {
+  const steps = updater.progress?.steps;
+  const list = $('#setup-steps');
+  const raw = $('#setup-raw');
+  if (!Array.isArray(steps) || !steps.length) {
+    // An older setup, or one that hasn't reported yet: the output itself is the progress.
+    list.hidden = true;
+    $('#setup-message').hidden = true;
+    raw.open = true;
+    raw.dataset.auto = 'open';
+    return;
+  }
+  if (raw.dataset.auto === 'open') { raw.open = false; delete raw.dataset.auto; }
+  const failed = updater.state === 'failed';
+  list.innerHTML = steps.map((step, index) => {
+    // A step still "running" when setup has finished is the one it stopped at.
+    const state = step.state === 'running' && updater.state !== 'running' ? (failed ? 'failed' : 'done') : step.state;
+    const mark = {done: icon('tick'), failed: icon('alert'), running: '<span class="spinner" aria-hidden="true"></span>'}[state] || '';
+    const apps = Object.entries(step.apps || {});
+    const detail = state === 'running' && step.note ? `<p class="setup-note">${esc(step.note)}</p>` : '';
+    const appList = apps.length && (state === 'running' || state === 'failed')
+      ? `<ul class="setup-apps">${apps.map(([name, text]) => `<li><span>${esc(name)}</span> ${esc(text)}</li>`).join('')}</ul>` : '';
+    return `<li class="is-${esc(state)}"><span class="setup-mark">${mark}</span><div><p>${esc(step.title)}</p>${detail}${appList}</div>
+      <span class="sr-only">${{done: 'done', failed: 'failed', running: 'in progress'}[state] || ''}</span></li>`;
+  }).join('');
+  list.hidden = false;
+  const message = $('#setup-message');
+  message.textContent = failed ? updater.progress.message || 'Setup stopped. Its output below says why.' : '';
+  message.hidden = !failed;
 }
 
 async function system() {

@@ -144,6 +144,9 @@ def second_step(args, interactive, run=subprocess.run, command_name='install'):
                '-e', f'HOME={home}', '-e', 'MARTINFLIX_STAGE=run', '-e', f'MARTINFLIX_DOCKER_SOCKET={host_socket}',
                '-e', f'MARTINFLIX_HOST_DEV={HOST_DEV}', '-e', f'TERM={os.environ.get("TERM") or "dumb"}',
                '-e', 'PYTHONUNBUFFERED=1',
+               # Where a run started from the dashboard reports its steps, for the dashboard to draw.
+               *(['-e', f'MARTINFLIX_PROGRESS_FILE={os.environ["MARTINFLIX_PROGRESS_FILE"]}']
+                 if os.environ.get('MARTINFLIX_PROGRESS_FILE', '').startswith('/') else []),
                '-v', f'{host_socket}:/var/run/docker.sock',
                '--mount', f'type=bind,source=/dev,target={HOST_DEV},readonly']
     for folder, readonly in mounts:

@@ -672,6 +672,24 @@
   .change-list li > .muted { flex: none; white-space: nowrap; }
   .setup-run { max-width: 1320px; margin-bottom: var(--space-5); }
   .table td.row-action { text-align: right; padding-block: var(--space-2); }
+  .setup-steps { display: grid; gap: var(--space-2); margin: 0 0 var(--space-3); padding: 0; list-style: none; }
+  .setup-steps > li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: var(--space-2); align-items: start; }
+  .setup-steps p { margin: 0; }
+  .setup-steps .is-pending, .setup-steps .is-done p { color: var(--fg-muted); }
+  .setup-steps .is-running > div > p:first-child { font-weight: 600; }
+  .setup-steps .is-failed > div > p:first-child { font-weight: 600; color: var(--crit); }
+  .setup-mark { display: grid; place-items: center; width: 22px; height: 22px; }
+  .setup-mark .icon { width: 18px; height: 18px; }
+  .is-done .setup-mark { color: var(--ok, var(--accent)); }
+  .is-failed .setup-mark { color: var(--crit); }
+  .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-color: var(--accent); } }
+  .setup-note { color: var(--fg-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+  .setup-apps { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: var(--space-1) 0 0; padding: 0; list-style: none; color: var(--fg-muted); font-size: var(--text-sm); }
+  .setup-apps span { color: var(--fg); font-weight: 600; }
+  .setup-message { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--crit-bg); color: var(--crit); font-size: var(--text-sm); white-space: pre-wrap; }
+  .setup-raw summary { cursor: pointer; color: var(--fg-muted); font-size: var(--text-sm); font-weight: 600; margin-bottom: var(--space-2); }
   .setup-run-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between; margin-top: var(--space-3); }
   .setup-run-actions p { margin: 0; color: var(--fg-muted); font-size: var(--text-sm); flex: 1 1 280px; }
   .setup-log {

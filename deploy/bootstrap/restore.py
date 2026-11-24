@@ -53,6 +53,10 @@ def checksum(path):
 READ_BUFFER = 4 * 1024 * 1024
 
 
+# Where progress also goes as data (setup's report), besides the screen.
+NOTE = None
+
+
 class Progress:
     """Shows how far through a large archive a long read has got: in place on a terminal, otherwise a line every
     tenth. Small archives show nothing."""
@@ -73,6 +77,8 @@ class Progress:
         step = percent if self.live else percent // 10 * 10
         if step != self.shown:
             self.shown = step
+            if NOTE:
+                NOTE(f'{self.label} {step}%')
             self.output.write(f'\r   {self.label} {step}%' if self.live else f'   {self.label} {step}%\n')
             self.output.flush()
 

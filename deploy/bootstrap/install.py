@@ -601,6 +601,60 @@ def describe_state(found, follows=None):
             'health: starting': ('starting…', False)}[health.group(1)]
 
 
+class Report:
+    """Setup's progress as data, beside its words: the steps so far, the app states within the running one, and the
+    outcome. A run started from the dashboard saves it to a file the dashboard draws as a checklist."""
+
+    def __init__(self, path=None, clock=time.monotonic):
+        self.path = Path(path) if path else None
+        self.clock = clock
+        self.steps = []
+        self.state, self.message = 'running', ''
+        self.written = 0.0
+
+    def step(self, title):
+        for step in self.steps:
+            if step['state'] == 'running':
+                step['state'] = 'done'
+        # Just the step's name: "VPN", not "VPN. Connecting can take a minute or two".
+        title = re.split(r'\.\s', title.strip(), maxsplit=1)[0].rstrip('…').rstrip('.')
+        self.steps.append({'title': title, 'state': 'running', 'note': '', 'apps': {}})
+        self.write(force=True)
+
+    def note(self, text):
+        if self.steps:
+            self.steps[-1]['note'] = text.strip()
+            self.write()
+
+    def apps(self, states):
+        """{label: text} for the apps the running step is waiting for."""
+        if self.steps:
+            self.steps[-1]['apps'].update(states)
+            self.write()
+
+    def finish(self, ok, message=''):
+        for step in self.steps:
+            if step['state'] == 'running':
+                step['state'] = 'done' if ok else 'failed'
+        self.state, self.message = ('succeeded' if ok else 'failed'), message.strip()[:4000]
+        self.write(force=True)
+
+    def write(self, force=False):
+        if self.path is None or (not force and self.clock() - self.written < 2):
+            return
+        self.written = self.clock()
+        body = json.dumps({'version': 1, 'state': self.state, 'message': self.message, 'steps': self.steps})
+        try:
+            temporary = self.path.with_name(f'.progress.{secrets.token_hex(4)}')
+            temporary.write_text(body)
+            temporary.replace(self.path)
+        except OSError:
+            pass
+
+
+REPORT = Report(os.environ.get('MARTINFLIX_PROGRESS_FILE'))
+
+
 class StepProgress:
     """Each app's progress while a step waits for it to be healthy, so a long wait never looks frozen. On a
     terminal the lines update in place with the time waited. Otherwise, as in the dashboard's updates, only an app
@@ -628,6 +682,7 @@ class StepProgress:
         if waited < 3 and not self.shown and not self.reported:
             return
         states = live_states(self.project, self.names, self.environment, self.run)
+        REPORT.apps({app_label(name): describe_state(found)[0] for name, found in states.items()})
         lines = []
         for name in self.names:
             found = states.get(name)
@@ -1370,6 +1425,7 @@ def install(args, overlay_file):
     given = read_settings_file(args.settings_file)
     print(BANNER, flush=True)
     print('1. Checking Docker, storage, and network ports…', flush=True)
+    REPORT.step('Checking Docker, storage and network ports')
     docker_root = preflight_docker()
 
     state = resolve_state_directory(args.state_dir)
@@ -1427,6 +1483,8 @@ def install(args, overlay_file):
         print(f'The fresh installation moves to {target}. The archive of the current one stays in {state}.\n', flush=True)
     backup = None
     if args.restore:
+        REPORT.step('Checking the backup')
+        restore.NOTE = REPORT.note
         print(f'Checking the backup in {args.restore}: every archive is read against its checksum'
               + (f' ({size})' if (size := restore.backup_size(args.restore)) else '') + '. A large one takes a few minutes…',
               flush=True)
@@ -1510,6 +1568,7 @@ def restore_backup(args, backup, state, previous, plan, project, overlay_file):
         if input('Type RESTORE to continue: ') != 'RESTORE':
             raise ValueError('Restore cancelled. Nothing was changed.')
     print('Restoring the backup. The apps stop while their data is replaced…', flush=True)
+    REPORT.step('Restoring the backup')
     private_directory(state)
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -1670,9 +1729,11 @@ def run_installation(plan, state, previous, mode='install'):
                 outcome = f'restarted with {app_label(follows)}'
             if outcome:
                 print(f'   {app_label(name):<20} {outcome}', flush=True)
+            REPORT.apps({app_label(name): outcome or 'running'})
 
     def compose_step(label, command, diagnose=None, watch=(), follows=None):
         print(label, flush=True)
+        REPORT.note(label) if label.startswith(' ') else REPORT.step(re.sub(r'^\d+\.\s*', '', label))
         with tempfile.TemporaryFile() as log:
             process = subprocess.Popen(compose + command, env=environment, stdout=log, stderr=subprocess.STDOUT)
             progress = StepProgress(project, watch, environment, follows=follows) if watch else None
@@ -1779,6 +1840,7 @@ def run_installation(plan, state, previous, mode='install'):
         # MartinFlix's own image is the one setup runs from, so it is already here.
         images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *(['plex'] if plan['plex'] else [])]
         print('2. Downloading the latest app images. The first download may take a few minutes…', flush=True)
+        REPORT.step('Downloading the latest app images')
         if (details := pull_images(compose, environment, images)) is not None:
             if details:
                 print(f'\nDocker details\n{details}\n', file=sys.stderr)
@@ -1840,6 +1902,7 @@ def run_installation(plan, state, previous, mode='install'):
             if bazarr:
                 bazarr = BazarrApi(download_address, ports['bazarr'], bazarr.key)
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
+        REPORT.step('Configuring the apps and checking their connections')
         if bazarr:
             configure_bazarr(bazarr, arr_keys, seed=seed_bazarr, opensubtitles=opensubtitles)
             if seed_bazarr:
@@ -1965,6 +2028,7 @@ def run_installation(plan, state, previous, mode='install'):
                 outcome = 'restarted with the new version'
             if outcome:
                 print(f'   {app_label(name):<20} {outcome}', flush=True)
+            REPORT.apps({app_label(name): outcome or 'running'})
         verify = '''
 import server
 for app in ('sonarr', 'radarr'):
@@ -2131,10 +2195,17 @@ def main(argv=None):
             install(args, Path(directory) / 'downloads.json')
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         if isinstance(exc, subprocess.CalledProcessError):
-            parser.exit(1, 'Could not check the Compose project. Run docker compose version and docker info, then try again.\n')
-        if isinstance(exc, subprocess.TimeoutExpired):
-            parser.exit(1, 'Docker did not respond. Check that Docker is running, then try again.\n')
-        parser.exit(1, f'{exc}\n')
+            message = 'Could not check the Compose project. Run docker compose version and docker info, then try again.'
+        elif isinstance(exc, subprocess.TimeoutExpired):
+            message = 'Docker did not respond. Check that Docker is running, then try again.'
+        else:
+            message = str(exc)
+        REPORT.finish(False, message)
+        parser.exit(1, message + '\n')
+    except BaseException as exc:
+        REPORT.finish(False, f'Setup stopped unexpectedly ({type(exc).__name__}).')
+        raise
+    REPORT.finish(True)
 
 
 if __name__ == '__main__':

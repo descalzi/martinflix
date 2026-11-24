@@ -69,7 +69,12 @@
       <!-- Setup running in the background, for an update, new settings or a restore. Shown on Settings and Backups. -->
       <section class="panel setup-run" id="setup-run" aria-labelledby="setup-run-title" hidden>
         <div class="panel-head"><div><h2 id="setup-run-title">Updating</h2><p id="setup-run-detail"></p></div><span id="setup-run-badge"></span></div>
-        <pre class="setup-log" id="setup-log" tabindex="0" aria-label="Setup output"></pre>
+        <ol class="setup-steps" id="setup-steps" hidden></ol>
+        <p class="setup-message" id="setup-message" role="alert" hidden></p>
+        <details class="setup-raw" id="setup-raw">
+          <summary>Setup’s output</summary>
+          <pre class="setup-log" id="setup-log" tabindex="0" aria-label="Setup output"></pre>
+        </details>
         <div class="setup-run-actions" id="setup-run-actions" hidden>
           <p>Fixed what the output says? Setup runs again on what’s here now, keeping your settings; a restore isn’t repeated.</p>
           <button class="button button-primary" type="button" id="setup-again" data-control="setup-again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Run setup again</button>
