@@ -1110,6 +1110,24 @@ PLAY_LOG_EVERY = 300
 PLAY_GAP = 15 * 60
 PLAY_RESUME = 6 * 3600
 PLAY_LOG_KEEP = 5000
+EPISODE_CODE = re.compile(r'S[0-9]{2}E[0-9]{2}')
+HISTORY_PAGE = 30
+
+
+def history_page(rows, query):
+    """One page of the merged history, narrowed to a person, series or films, or a title."""
+    def first(name):
+        return (query.get(name) or [''])[0]
+    users = sorted({row.get('user') or 'Someone' for row in rows}, key=str.casefold)
+    who, kind, text = first('who')[:60], first('kind'), first('q').strip().casefold()[:80]
+    try:
+        offset = max(0, min(int(first('offset') or 0), 100_000))
+    except ValueError:
+        offset = 0
+    chosen = [row for row in rows if (not who or row.get('user') == who) and (kind not in ('series', 'film') or row['kind'] == kind)
+              and (not text or text in (row.get('title') or '').casefold() or text in (row.get('detail') or '').casefold())]
+    return {'history': chosen[offset:offset + HISTORY_PAGE], 'total': len(chosen), 'offset': offset,
+            'more': offset + HISTORY_PAGE < len(chosen), 'users': users}
 
 
 def play_key(account, rating):
@@ -1209,7 +1227,7 @@ class PlayLog:
                             title=session.get('title'), detail=session.get('detail'), poster=session.get('poster'),
                             user=session.get('user'))
 
-    def merged(self, history, limit=30):
+    def merged(self, history, limit=None):
         """The log and Plex's finished views together: a play Plex says was finished shows as finished, and a
         finished view the log never saw still shows."""
         with self.lock:
@@ -1240,7 +1258,8 @@ class PlayLog:
         for row in rows:
             for name in ('key', 'startedAt', 'imported'):
                 row.pop(name, None)
-        return rows[:limit]
+            row['kind'] = 'series' if EPISODE_CODE.match(row.get('detail') or '') else 'film'
+        return rows[:limit] if limit else rows
 
 
 def tautulli_plays(base, key, page=1000, opener=None):
@@ -2022,17 +2041,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'configured': False})
             else:
                 try:
-                    history = plex_history(limit=50)
+                    history = plex_history(limit=500)
                 except (OSError, ValueError, AttributeError):
                     history = None
                 try:
                     # The play log still shows if Plex doesn't answer.
-                    rows = PLAYS.merged(history or [])
+                    page = history_page(PLAYS.merged(history or []), urllib.parse.parse_qs(url.query))
                 except (KeyError, TypeError, ValueError) as exc:
                     print(f'Play log: {exc!r}', flush=True)
                     self.send_json({'configured': True, 'error': 'The watch history could not be put together.'})
                 else:
-                    self.send_json({'configured': True, 'history': rows,
+                    self.send_json({'configured': True, **page,
                                     **({'notice': 'Plex isn’t answering, so finished plays may show as partial.'} if history is None else {})})
         elif path == '/api/plex-art':
             art = plex_art((urllib.parse.parse_qs(url.query).get('path') or [''])[0])

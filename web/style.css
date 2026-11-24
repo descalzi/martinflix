@@ -287,6 +287,12 @@
   .chart-tip .legend-key { margin-right: 6px; }
   .chart-x { display: flex; justify-content: space-between; margin-top: var(--space-1); padding-left: 4.5em; color: var(--fg-muted); font-size: var(--text-xs); }
   .live-list { display: grid; gap: var(--space-3); }
+  .history-filters { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center; margin-bottom: var(--space-3); }
+  .history-filters .history-who { flex: 0 1 170px; }
+  .history-filters .search { flex: 1 1 200px; }
+  .history-filters .search input { width: 100%; }
+  .history-more { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-3); }
+  .history-more p { margin: 0; color: var(--fg-muted); font-size: var(--text-sm); }
   .history-wrap { overflow-x: auto; }
   .history { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
   .history thead th { padding: 0 var(--space-2) var(--space-2); color: var(--fg-muted); font-weight: 600; font-size: var(--text-xs); text-align: left; border-bottom: 1px solid var(--border); }

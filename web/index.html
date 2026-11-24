@@ -159,7 +159,22 @@
 
         <section class="panel" id="live-history-panel" aria-labelledby="live-history-title" hidden>
           <div class="panel-head"><div><h2 id="live-history-title">Recently watched</h2><p>Everyone’s plays, newest first, including ones stopped part-way</p></div></div>
+          <div class="history-filters">
+            <div class="field history-who"><label class="sr-only" for="history-who">Who</label>
+            <select id="history-who"><option value="">Everyone</option></select></div>
+            <fieldset class="segmented">
+              <legend class="sr-only">Series or films</legend>
+              <label><input type="radio" name="history-kind" value="" checked><span>All</span></label>
+              <label><input type="radio" name="history-kind" value="series"><span>Series</span></label>
+              <label><input type="radio" name="history-kind" value="film"><span>Films</span></label>
+            </fieldset>
+            <label class="search"><span class="sr-only">Find a title</span><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="history-search" placeholder="Find a title" autocomplete="off" maxlength="80"></label>
+          </div>
           <div id="live-history"><p class="empty">Loading…</p></div>
+          <div class="history-more">
+            <p id="history-count" aria-live="polite"></p>
+            <button class="button button-quiet" type="button" id="history-more" hidden>Show more</button>
+          </div>
         </section>
 
         <div class="empty-state" id="live-empty" hidden><h3>Nothing to show yet</h3><p>Live needs Transmission or a Plex connection. Connect a Plex server under <a href="/settings">Settings</a>.</p></div>

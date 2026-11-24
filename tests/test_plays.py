@@ -104,5 +104,25 @@ class TautulliImportTests(unittest.TestCase):
         self.assertTrue(rows[0]['finished'])
 
 
+
+class HistoryPageTests(unittest.TestCase):
+    rows = [{'title': 'Slow Horses', 'detail': f'S04E0{n} · T', 'user': 'Martin', 'watchedAt': 100 - n, 'kind': 'series'} for n in range(1, 6)] + \
+           [{'title': 'Hamnet', 'detail': '2025', 'user': 'Sofia', 'watchedAt': 50, 'kind': 'film'}] * 40
+
+    def page(self, **query):
+        return server.history_page(self.rows, {key: [str(value)] for key, value in query.items()})
+
+    def test_filters_and_pages(self):
+        everything = self.page()
+        self.assertEqual((len(everything['history']), everything['total'], everything['more'], everything['users']), (30, 45, True, ['Martin', 'Sofia']))
+        self.assertEqual(len(self.page(offset=30)['history']), 15)
+        self.assertEqual(self.page(who='Martin')['total'], 5)
+        self.assertEqual(self.page(kind='film')['total'], 40)
+        self.assertEqual(self.page(q='slow')['total'], 5)
+        self.assertEqual(self.page(q='S04E03')['total'], 1)
+        self.assertEqual(self.page(who='Martin', kind='film')['total'], 0)
+        self.assertEqual(self.page(offset='x')['offset'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -785,18 +785,48 @@ function historyTable(history) {
     <tbody>${rows}</tbody></table></div>`;
 }
 
-async function watchHistory() {
+const historyView = {rows: [], request: 0};
+
+/** Recently watched, narrowed by who, series or films, and title; Show more adds the next page. */
+async function watchHistory({more = false} = {}) {
+  const request = ++historyView.request;
+  const query = new URLSearchParams({who: $('#history-who').value, kind: document.querySelector('[name=history-kind]:checked')?.value || '',
+    q: $('#history-search').value.trim(), offset: more ? historyView.rows.length : 0});
+  $('#history-more').disabled = true;
   try {
-    const data = await get('/api/watch-history');
+    const data = await get('/api/watch-history?' + query);
+    if (request !== historyView.request) return;
     $('#live-history-panel').hidden = !data.configured;
     if (!data.configured) return;
-    const history = data.history || [];
-    $('#live-history').innerHTML = data.error ? `<p class="error error-inline">${esc(data.error)}</p>`
-      : history.length ? historyTable(history) : '<p class="empty">Nothing watched yet.</p>';
+    if (data.error) {
+      $('#live-history').innerHTML = `<p class="error error-inline">${esc(data.error)}</p>`;
+      return;
+    }
+    historyView.rows = more ? [...historyView.rows, ...data.history] : data.history;
+    const who = $('#history-who');
+    const chosen = who.value;
+    who.innerHTML = '<option value="">Everyone</option>' + data.users.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
+    who.value = data.users.includes(chosen) ? chosen : '';
+    const filtered = query.get('who') || query.get('kind') || query.get('q');
+    $('#live-history').innerHTML = (data.notice ? `<p class="option-help">${esc(data.notice)}</p>` : '')
+      + (historyView.rows.length ? historyTable(historyView.rows)
+        : `<p class="empty">${filtered ? 'No plays match.' : 'Nothing watched yet.'}</p>`);
+    $('#history-count').textContent = data.total ? `${historyView.rows.length} of ${data.total} ${data.total === 1 ? 'play' : 'plays'}` : '';
+    $('#history-more').hidden = !data.more;
   } catch {
     $('#live-history-panel').hidden = false;
     $('#live-history').innerHTML = '<p class="error error-inline">Could not load the watch history.</p>';
+  } finally {
+    $('#history-more').disabled = false;
   }
+}
+
+function setupHistory() {
+  let typing;
+  $('#history-who').addEventListener('change', () => watchHistory());
+  for (const choice of document.querySelectorAll('[name=history-kind]')) choice.addEventListener('change', () => watchHistory());
+  $('#history-search').addEventListener('input', () => { clearTimeout(typing); typing = setTimeout(() => watchHistory(), 250); });
+  $('#history-more').addEventListener('click', () => watchHistory({more: true}));
 }
 
 /** The Overview's compact view: speeds and what's downloading, with the last hour faintly behind them. */
@@ -1866,7 +1896,10 @@ async function refresh() {
 }
 
 if (page === 'services' || page === 'backups' || page === 'settings') setupControls();
-if (page === 'live') setupSpeedChart();
+if (page === 'live') {
+  setupSpeedChart();
+  setupHistory();
+}
 if (page === 'discover') setupDiscover();
 if (page === 'settings') {
   setupSettings();
