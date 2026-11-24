@@ -877,6 +877,15 @@ function posterDetails(item, kind) {
   return {meta: 'Release date unknown', extra: ''};
 }
 
+const LINK_NAMES = {imdb: 'IMDb', tmdb: 'TMDB', tvdb: 'TheTVDB'};
+
+/** IMDb and TMDB links for a poster, opening in a new tab. */
+function titleLinks(links, title) {
+  return Object.entries(links || {}).filter(([site, url]) => LINK_NAMES[site] && /^https:\/\//.test(url))
+    .map(([site, url]) => `<a class="poster-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(title)} on ${LINK_NAMES[site]}">${LINK_NAMES[site]}${icon('external')}</a>`)
+    .join('');
+}
+
 function posterCard(item, kind, {all = false, deletable = false} = {}) {
   const {meta, extra} = all ? libraryDetails(item, kind) : posterDetails(item, kind);
   const problem = posterProblem(item, kind);
@@ -884,12 +893,14 @@ function posterCard(item, kind, {all = false, deletable = false} = {}) {
   const remove = deletable && item.id
     ? `<button class="poster-delete" type="button" data-delete="${esc(kind)}" data-id="${esc(item.id)}" aria-label="Delete ${esc(title)}" title="Delete">${icon('trash')}</button>`
     : '';
+  const links = titleLinks(item.links, title);
   return `<li class="poster-card${problem ? ' has-problem' : ''}">
-    <div class="poster-art">
+    <div class="poster-art"${links ? ` tabindex="0" aria-label="${esc(title)}: show links"` : ''}>
       <span class="poster-placeholder" aria-hidden="true">${esc(item.title)}</span>
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async" width="250" height="375">` : ''}
       ${problem ? `<span class="poster-flag">${icon('alert')}${esc(problem.flag)}</span>` : ''}
       ${remove}
+      ${links ? `<div class="poster-links">${links}</div>` : ''}
     </div>
     <h3 class="poster-title">${esc(title)}</h3>
     ${problem ? `<p class="poster-problem">${esc(problem.text)}</p>` : ''}
@@ -1775,7 +1786,8 @@ function discoverCard(item) {
         <p>${esc(item.overview || 'No synopsis yet.')}</p>
         <div class="discover-hover-action">${item.inLibrary ? discoverOwned()
           : `<button class="button button-primary button-small" type="button" data-discover-add aria-label="Add ${esc(item.title)}">${icon('plus')}Add</button>
-             <a class="discover-options" href="${esc(options)}" aria-label="Add ${esc(item.title)} with options">Options</a>`}</div>
+             <a class="discover-options" href="${esc(options)}" aria-label="Add ${esc(item.title)} with options">Options</a>`}
+          <a class="discover-options" href="https://www.themoviedb.org/${item.kind === 'sonarr' ? 'tv' : 'movie'}/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(item.title)} on TMDB">TMDB${icon('external')}</a></div>
         <p class="discover-problem" role="alert" hidden></p>
       </div>
     </div>

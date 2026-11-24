@@ -848,6 +848,22 @@ def arr_problems(kind, connection, now):
     return {'missing': missing}
 
 
+IMDB_ID = re.compile(r'tt[0-9]{5,10}')
+
+
+def title_links(kind, item):
+    """Where to read about a series or film: IMDb and TMDB, or TheTVDB for a series TMDB doesn't know."""
+    links = {}
+    imdb, tmdb, tvdb = item.get('imdbId'), item.get('tmdbId'), item.get('tvdbId')
+    if isinstance(imdb, str) and IMDB_ID.fullmatch(imdb):
+        links['imdb'] = f'https://www.imdb.com/title/{imdb}/'
+    if type(tmdb) is int and 0 < tmdb < 100_000_000:
+        links['tmdb'] = f'https://www.themoviedb.org/{"tv" if kind == "sonarr" else "movie"}/{tmdb}'
+    elif kind == 'sonarr' and type(tvdb) is int and 0 < tvdb < 100_000_000:
+        links['tvdb'] = f'https://thetvdb.com/dereferrer/series/{tvdb}'
+    return links
+
+
 def arr_items(kind, raw, now, episodes=None, problems=None, everything=False):
     """The titles worth showing: by default those coming up or with something missing; with `everything`, all of them."""
     last_day = calendar.monthrange(now.year + 1, now.month)[1]
@@ -885,6 +901,7 @@ def arr_items(kind, raw, now, episodes=None, problems=None, everything=False):
             'releaseDate': movie_release(item) if kind == 'radarr' else None,
             'poster': poster,
         }
+        entry['links'] = title_links(kind, item)
         if everything:
             # What deleting it would free, and what it holds.
             statistics = item.get('statistics') if isinstance(item.get('statistics'), dict) else {}

@@ -340,6 +340,18 @@
   .discover-card:hover .discover-hover, .discover-card .poster-art:focus-within .discover-hover { opacity: 1; }
   .discover-hover-action { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
   .discover-options { color: #f3efe4; font-size: var(--text-sm); font-weight: 600; }
+  .discover-options { display: inline-flex; align-items: center; gap: 3px; }
+  .discover-options .icon, .poster-link .icon { width: 12px; height: 12px; }
+  .poster-links { position: absolute; inset: auto 0 0 0; z-index: 1; display: flex; gap: var(--space-1); justify-content: center; flex-wrap: wrap;
+    padding: var(--space-4) var(--space-2) var(--space-2); opacity: 0; transition: opacity 150ms var(--ease-out);
+    background: linear-gradient(to top, rgb(12 26 20 / .92) 0%, rgb(12 26 20 / .6) 70%, transparent 100%); }
+  .poster-links { pointer-events: none; }
+  .poster-card:hover .poster-links, .poster-card .poster-art:focus-within .poster-links { opacity: 1; pointer-events: auto; }
+  @media (hover: none) { .poster-card:hover .poster-links { opacity: 0; pointer-events: none; } .poster-card .poster-art:focus-within .poster-links { opacity: 1; pointer-events: auto; } }
+  .poster-link { display: inline-flex; align-items: center; gap: 3px; padding: 3px var(--space-2); border-radius: 999px;
+    background: rgb(243 239 228 / .14); color: #f3efe4; font-size: var(--text-xs); font-weight: 600; text-decoration: none; }
+  .poster-link:hover { background: rgb(243 239 228 / .28); }
+  .poster-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .discover-owned { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: 600; font-size: var(--text-sm); color: var(--mint); }
   .discover-owned .icon { width: 18px; height: 18px; }
   .discover-problem { padding: var(--space-1) var(--space-2); border-radius: 6px; background: var(--crit-bg); color: var(--crit); -webkit-line-clamp: unset !important; }
