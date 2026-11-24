@@ -28,7 +28,7 @@ PLEX_IDENTITY = ('MachineIdentifier', 'ProcessedMachineIdentifier', 'AnonymousMa
                  'PublishServerOnPlexOnlineKey', 'ManualPortMappingMode', 'ManualPortMappingPort',
                  'LastAutomaticMappedPort', 'customConnections')
 # MartinFlix's own files in its archive. Options that belong to this machine are kept as they are (see options).
-MARTINFLIX_ENTRIES = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
+MARTINFLIX_ENTRIES = ('install-options.json', 'dashboard-auth', 'dashboard-data', 'dashboard-secrets', 'download-secrets',
                       'controller/pin-hash')
 # Settings that describe this machine rather than the stack: where things are and how they're reached.
 MACHINE_OPTIONS = ('project', 'container_prefix', 'media_path', 'backup_dir', 'dashboard_bind', 'ports', 'channel')

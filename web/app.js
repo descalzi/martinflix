@@ -768,18 +768,20 @@ function watchedWhen(epoch) {
 function historyTable(history) {
   const rows = history.map(item => {
     const when = item.watchedAt ? watchedWhen(item.watchedAt) : '';
+    const watched = item.finished !== false ? 'Finished' : `${Math.round(item.progress || 0)}%`;
     const full = item.watchedAt ? new Date(item.watchedAt * 1000).toLocaleString([], {dateStyle: 'full', timeStyle: 'short'}) : '';
     return `<tr>
       <td class="history-art"><div class="live-thumb">${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async">` : ''}</div></td>
       <th scope="row" class="history-title"><span>${esc(item.title)}</span>${item.detail ? `<span class="history-sub">${esc(item.detail)}</span>` : ''}</th>
       <td class="history-episode"><span>${esc(item.detail || '')}</span></td>
       <td class="history-who">${esc(item.user || '')}</td>
-      <td class="history-when"><time${full ? ` title="${esc(full)}"` : ''}>${esc(when)}</time><span class="history-sub">${esc(item.user || '')}</span></td>
+      <td class="history-watched${item.finished !== false ? '' : ' is-partial'}">${esc(watched)}</td>
+      <td class="history-when"><time${full ? ` title="${esc(full)}"` : ''}>${esc(when)}</time><span class="history-sub">${esc([item.user, watched].filter(Boolean).join(' · '))}</span></td>
     </tr>`;
   }).join('');
   return `<div class="history-wrap"><table class="history">
     <thead><tr><th scope="col"><span class="sr-only">Poster</span></th><th scope="col">Title</th><th scope="col" class="history-episode">Episode</th>
-      <th scope="col" class="history-who">Who</th><th scope="col" class="history-when">When</th></tr></thead>
+      <th scope="col" class="history-who">Who</th><th scope="col" class="history-watched">Watched</th><th scope="col" class="history-when">When</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 

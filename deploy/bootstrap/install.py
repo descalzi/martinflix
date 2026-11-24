@@ -1152,7 +1152,7 @@ def reset_installation(state, project):
         subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE),
                         'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
-        managed = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
+        managed = ('install-options.json', 'dashboard-auth', 'dashboard-data', 'dashboard-secrets', 'download-secrets',
                    'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun',
                    'controller', 'plex', 'plex-gpu-compose.json')
         moved = []
@@ -1314,7 +1314,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     environment.update(MARTINFLIX_DOCKER_SOCKET=str(control_socket[0]), MARTINFLIX_DOCKER_GID=str(control_socket[1]))
     app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS))
 
-    for name in ('dashboard-secrets', 'dashboard-auth', *app_dirs):
+    for name in ('dashboard-secrets', 'dashboard-auth', 'dashboard-data', *app_dirs):
         check_directory(state / name)
     check_directory(state)
     if vpn or downloads:
@@ -1722,6 +1722,8 @@ def run_installation(plan, state, previous, mode='install'):
         private_directory(secret_dir)
         auth_dir = state / 'dashboard-auth'
         private_directory(auth_dir)
+        # The dashboard's own records, such as its log of what's been watched.
+        private_directory(state / 'dashboard-data')
         password = secret_dir / 'admin-password'
         if password.exists() or password.is_symlink():
             if password.is_symlink() or not password.is_file() or password.stat().st_uid != os.getuid() or password.stat().st_mode & 0o077:

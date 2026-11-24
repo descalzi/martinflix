@@ -33,7 +33,7 @@ PLEX_DATABASES = 'Library/Application Support/Plex Media Server/Plug-in Support/
 PLEX_PREFERENCES = 'Library/Application Support/Plex Media Server/Preferences.xml'
 PLEX_SQLITE = '/usr/lib/plexmediaserver/Plex SQLite'
 # Setup's own files: options, the dashboard's password hash and keys, VPN credentials and the PIN hash.
-MARTINFLIX_FILES = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
+MARTINFLIX_FILES = ('install-options.json', 'dashboard-auth', 'dashboard-data', 'dashboard-secrets', 'download-secrets',
                     'controller/pin-hash')
 
 

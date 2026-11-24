@@ -298,11 +298,13 @@
   .history-title > span:first-child, td.history-episode > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td.history-episode { max-width: 0; width: 34%; color: var(--fg-muted); }
   .history-who { white-space: nowrap; }
+  .history-watched { white-space: nowrap; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+  .history-watched.is-partial { color: var(--fg); }
   .history-when { white-space: nowrap; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
   .history-sub { display: none; }
   @media (max-width: 640px) {
     .history thead { display: none; }
-    .history .history-episode, .history .history-who { display: none; }
+    .history .history-episode, .history .history-who, .history .history-watched { display: none; }
     .history-title { width: 100%; }
     .history-when { width: 1%; }
     .history-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-weight: 400; font-size: var(--text-xs); }

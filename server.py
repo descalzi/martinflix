@@ -1069,6 +1069,8 @@ def plex_sessions():
             'percent': round(offset / duration * 100) if type(offset) is int and type(duration) is int and duration > 0 else None,
             'stream': {'transcode': 'Transcoding', 'copy': 'Direct stream'}.get(decision, 'Direct play'),
             'local': player.get('local') is True,
+            # For the play log: who, and which title.
+            'account': (item.get('User') or {}).get('id'), 'ratingKey': item.get('ratingKey'),
         })
     return sessions
 
@@ -1094,8 +1096,112 @@ def plex_history(limit=24):
         viewed = item.get('viewedAt')
         history.append({'title': title, 'detail': detail, 'poster': plex_poster(item),
                         'user': names.get(item.get('accountID')) or 'Someone',
-                        'watchedAt': viewed if type(viewed) is int else None})
+                        'watchedAt': viewed if type(viewed) is int else None,
+                        'account': item.get('accountID'), 'ratingKey': item.get('ratingKey')})
     return history
+
+
+# The dashboard's own log of plays. Plex's history keeps only plays watched to the end, and misses some; every five
+# minutes the dashboard notes what is playing, so partial plays are known too. Plex's finished views are merged in.
+PLAY_LOG_EVERY = 300
+# A play seen again within this long is the same play carrying on. So is one picked up again within a few hours from
+# where it was or further on, after a pause. Anything else, such as the next day or starting over, is a new play.
+PLAY_GAP = 15 * 60
+PLAY_RESUME = 6 * 3600
+PLAY_LOG_KEEP = 1000
+
+
+def play_key(account, rating):
+    """Who and which title, as both Plex's sessions and its history name them."""
+    return (str(account) if account is not None else '', str(rating) if rating is not None else '')
+
+
+class PlayLog:
+    def __init__(self, path):
+        self.path = Path(path) if path else None
+        self.lock = threading.Lock()
+        self.plays = self.load()
+
+    def load(self):
+        if self.path is None:
+            return []
+        try:
+            plays = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return []
+        return [play for play in plays if isinstance(play, dict) and isinstance(play.get('seen'), int)] \
+            if isinstance(plays, list) else []
+
+    def save(self):
+        if self.path is None:
+            return
+        temporary = self.path.with_name(f'.plays.{secrets.token_hex(4)}')
+        try:
+            temporary.write_text(json.dumps(self.plays[-PLAY_LOG_KEEP:]))
+            temporary.replace(self.path)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+
+    def record(self, sessions, now=None):
+        """Note what is playing now: a play seen recently carries on, anything else starts a new one."""
+        now = int(now if now is not None else time.time())
+        with self.lock:
+            for session in sessions:
+                key = play_key(session.get('account'), session.get('ratingKey'))
+                if not key[1]:
+                    continue
+                percent = session.get('percent') if type(session.get('percent')) is int else 0
+                play = next((play for play in reversed(self.plays) if play_key(play.get('account'), play.get('ratingKey')) == key
+                             and (now - play['seen'] <= PLAY_GAP or
+                                  (now - play['seen'] <= PLAY_RESUME and percent >= play.get('progress', 0) - 2))), None)
+                if play is None:
+                    play = {'account': key[0], 'ratingKey': key[1], 'started': now, 'progress': 0}
+                    self.plays.append(play)
+                play.update(seen=now, progress=max(play.get('progress', 0), min(100, max(0, percent))),
+                            title=session.get('title'), detail=session.get('detail'), poster=session.get('poster'),
+                            user=session.get('user'))
+            self.plays = self.plays[-PLAY_LOG_KEEP:]
+            self.save()
+
+    def merged(self, history, limit=30):
+        """The log and Plex's finished views together: a play Plex says was finished shows as finished, and a
+        finished view the log never saw still shows."""
+        with self.lock:
+            plays = [dict(play) for play in self.plays]
+        rows = [{'title': play.get('title') or 'Untitled', 'detail': play.get('detail') or '', 'poster': play.get('poster'),
+                 'user': play.get('user') or 'Someone', 'watchedAt': play['seen'], 'startedAt': play.get('started'),
+                 'progress': play.get('progress', 0), 'finished': False, 'key': play_key(play.get('account'), play.get('ratingKey'))}
+                for play in plays]
+        for view in history:
+            viewed = view.get('watchedAt')
+            key = play_key(view.get('account'), view.get('ratingKey'))
+            match = None
+            if type(viewed) is int:
+                match = next((row for row in rows if row['key'] == key and not row['finished']
+                              and (row['startedAt'] or row['watchedAt']) - PLAY_GAP <= viewed <= row['watchedAt'] + PLAY_GAP), None)
+            if match:
+                match.update(finished=True, progress=100, watchedAt=max(match['watchedAt'], viewed))
+            else:
+                rows.append({**{name: view.get(name) for name in ('title', 'detail', 'poster', 'user', 'watchedAt')},
+                             'progress': 100, 'finished': True, 'key': key})
+        rows.sort(key=lambda row: row.get('watchedAt') or 0, reverse=True)
+        for row in rows:
+            row.pop('key', None)
+            row.pop('startedAt', None)
+        return rows[:limit]
+
+
+PLAYS = PlayLog(Path(os.environ['MARTINFLIX_DATA_DIR']) / 'plays.json' if os.environ.get('MARTINFLIX_DATA_DIR') else None)
+
+
+def log_plays_forever(sleep=time.sleep):
+    while True:
+        try:
+            if plex_configured():
+                PLAYS.record(plex_sessions())
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        sleep(PLAY_LOG_EVERY)
 
 
 def live_playing():
@@ -1794,7 +1900,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'configured': False})
             else:
                 try:
-                    self.send_json({'configured': True, 'history': plex_history()})
+                    self.send_json({'configured': True, 'history': PLAYS.merged(plex_history(limit=50))})
                 except (OSError, ValueError, AttributeError):
                     self.send_json({'configured': True, 'error': 'Plex is not answering right now.'})
         elif path == '/api/plex-art':
@@ -2463,5 +2569,7 @@ if __name__ == '__main__':
     server.password_setup_lock = threading.Lock()
     server.session_key = load_session_key(state_file)
     threading.Thread(target=sample_speeds_forever, daemon=True, name='speed-samples').start()
+    if PLAYS.path is not None:
+        threading.Thread(target=log_plays_forever, daemon=True, name='play-log').start()
     print('MartinFlix listening on %s:%d' % (host, port), flush=True)
     server.serve_forever()
