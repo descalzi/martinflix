@@ -1647,10 +1647,10 @@ class HookMessages:
                          f'{"series" if app == "sonarr" else "films"} will be posted here.', None)
         elif kind == 'SeriesAdd' and app == 'sonarr':
             series = event.get('series') or {}
-            self.deliver(f'{hook_heading(series)}\nAdded · series', hook_poster(series))
+            self.deliver(f'{hook_heading(series)}\nNow monitored: episodes will download as they become available', hook_poster(series))
         elif kind == 'MovieAdded' and app == 'radarr':
             movie = event.get('movie') or {}
-            self.deliver(f'{hook_heading(movie)}\nAdded · film', hook_poster(movie))
+            self.deliver(f'{hook_heading(movie)}\nNow monitored: it will download once it’s available', hook_poster(movie))
         elif kind == 'Download' and app == 'radarr':
             movie = event.get('movie') or {}
             state = 'Upgraded' if event.get('isUpgrade') else 'Ready to watch'
