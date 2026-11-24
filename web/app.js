@@ -1438,6 +1438,33 @@ function changeList(changes, available) {
     ${changes.url ? `<a class="text-link" href="${esc(changes.url)}" target="_blank" rel="noopener noreferrer">Compare on GitHub${icon('external')}</a>` : ''}`;
 }
 
+// A check started from this page: the button says it's checking, then how it went, for a few seconds.
+const releaseCheck = {pending: false, startedAt: 0, before: null, result: null, until: 0};
+
+function renderCheckButton(data) {
+  const button = $('#release-check');
+  if (releaseCheck.pending) {
+    // Done once the controller has finished a check it hadn't before; a minute at most.
+    if (data.checking) releaseCheck.seen = true;
+    const finished = !data.checking && (releaseCheck.seen || data.checkedAt !== releaseCheck.before || data.problem
+      || Date.now() - releaseCheck.startedAt > 60000);
+    if (finished && Date.now() - releaseCheck.startedAt > 1000) {
+      releaseCheck.pending = false;
+      releaseCheck.result = data.available ? 'available' : data.problem ? 'problem' : 'current';
+      releaseCheck.until = Date.now() + 6000;
+      setTimeout(() => systemData && renderCheckButton(systemData), 6100);
+    }
+  }
+  const checking = releaseCheck.pending || data.checking;
+  const result = !checking && Date.now() < releaseCheck.until ? releaseCheck.result : null;
+  const [glyph, text] = checking ? ['refresh', 'Checking…'] : result === 'current' ? ['tick', 'Up to date']
+    : result === 'problem' ? ['alert', 'Couldn’t check'] : ['refresh', 'Check for updates'];
+  button.innerHTML = `${icon(glyph)}${text}`;
+  button.disabled = checking;
+  button.classList.toggle('is-busy', checking);
+  button.classList.toggle('is-done', result === 'current');
+}
+
 function renderRelease(data) {
   const current = data.current;
   const channel = CHANNEL_NAMES[current.channel] || current.channel;
@@ -1446,7 +1473,7 @@ function renderRelease(data) {
     ? `Version ${current.version}, built on this machine. It isn’t offered updates.`
     : `Version ${current.version} · ${channel} channel${current.revision ? ` · ${current.revision.slice(0, 7)}` : ''}`;
   $('#release-check').hidden = current.channel === 'dev' || running;
-  $('#release-check').disabled = Boolean(data.checking);
+  renderCheckButton(data);
   const available = data.available;
   let body = '';
   // A newer version already here can be installed even when the registry can't be reached right now.
@@ -1459,7 +1486,7 @@ function renderRelease(data) {
     </div>${changeList(data.changes, available)}`;
   } else if (current.channel !== 'dev') {
     const checked = when(data.checkedAt, {weekday: 'short', hour: '2-digit', minute: '2-digit'});
-    body += `<p class="release-current">${icon('check')}<span>${data.checking ? 'Checking for a newer version…'
+    body += `<p class="release-current">${icon('check')}<span>${data.checking || releaseCheck.pending ? 'Checking for a newer version…'
       : checked ? `Up to date. Last checked ${esc(checked)}; MartinFlix checks again every six hours.` : 'Checks for updates a couple of minutes after starting, then every six hours.'}</span></p>`;
   }
   $('#release-content').innerHTML = body;
@@ -1570,7 +1597,9 @@ async function system() {
     if (page === 'backups') status();
   }
   lastRunState = state;
-  if (running || following || data.checking) followTimer = setTimeout(system, running || following ? 3000 : 5000);
+  if (running || following || data.checking || releaseCheck.pending) {
+    followTimer = setTimeout(system, running || following ? 3000 : releaseCheck.pending ? 1500 : 5000);
+  }
 }
 
 function startRestore(name, created) {
@@ -1788,12 +1817,16 @@ function setupSettings() {
   form.addEventListener('change', showSettingsChanges);
   form.addEventListener('reset', () => setTimeout(() => settingsData && fillSettings(settingsData)));
   $('#release-check').addEventListener('click', async () => {
-    $('#release-check').disabled = true;
+    Object.assign(releaseCheck, {pending: true, seen: false, startedAt: Date.now(), before: systemData?.checkedAt ?? null, result: null, until: 0});
+    if (systemData) renderRelease(systemData);
     try {
       await post('/api/system/check', {});
     } catch (error) {
+      releaseCheck.pending = false;
       $('#settings-notice').textContent = error.message;
       $('#settings-notice').hidden = false;
+      if (systemData) renderRelease(systemData);
+      return;
     }
     setTimeout(system, 1500);
   });
