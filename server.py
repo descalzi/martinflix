@@ -1227,14 +1227,15 @@ class PlayLog:
             if type(viewed) is int:
                 # Tautulli names the server's owner by their plex.tv account, Plex by 1: an imported play matches by
                 # title and time alone.
-                match = next((row for row in rows if (row['key'] == key or (row['imported'] and row['key'][1] == key[1]))
-                              and (row['startedAt'] or row['watchedAt']) - PLAY_GAP <= viewed <= row['watchedAt'] + PLAY_GAP), None)
+                match = next((row for row in rows if (row['key'] == key or (row.get('imported') and row['key'][1] == key[1]))
+                              and type(row.get('watchedAt')) is int
+                              and (row.get('startedAt') or row['watchedAt']) - PLAY_GAP <= viewed <= row['watchedAt'] + PLAY_GAP), None)
             if match:
                 if not match['finished']:
                     match.update(finished=True, progress=100, watchedAt=max(match['watchedAt'], viewed))
             else:
                 rows.append({**{name: view.get(name) for name in ('title', 'detail', 'poster', 'user', 'watchedAt')},
-                             'progress': 100, 'finished': True, 'key': key})
+                             'progress': 100, 'finished': True, 'imported': False, 'startedAt': None, 'key': key})
         rows.sort(key=lambda row: row.get('watchedAt') or 0, reverse=True)
         for row in rows:
             for name in ('key', 'startedAt', 'imported'):
@@ -2021,9 +2022,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'configured': False})
             else:
                 try:
-                    self.send_json({'configured': True, 'history': PLAYS.merged(plex_history(limit=50))})
+                    history = plex_history(limit=50)
                 except (OSError, ValueError, AttributeError):
-                    self.send_json({'configured': True, 'error': 'Plex is not answering right now.'})
+                    history = None
+                try:
+                    # The play log still shows if Plex doesn't answer.
+                    rows = PLAYS.merged(history or [])
+                except (KeyError, TypeError, ValueError) as exc:
+                    print(f'Play log: {exc!r}', flush=True)
+                    self.send_json({'configured': True, 'error': 'The watch history could not be put together.'})
+                else:
+                    self.send_json({'configured': True, 'history': rows,
+                                    **({'notice': 'Plex isn’t answering, so finished plays may show as partial.'} if history is None else {})})
         elif path == '/api/plex-art':
             art = plex_art((urllib.parse.parse_qs(url.query).get('path') or [''])[0])
             if art is None:

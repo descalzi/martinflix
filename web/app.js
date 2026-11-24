@@ -794,6 +794,7 @@ async function watchHistory() {
     $('#live-history').innerHTML = data.error ? `<p class="error error-inline">${esc(data.error)}</p>`
       : history.length ? historyTable(history) : '<p class="empty">Nothing watched yet.</p>';
   } catch {
+    $('#live-history-panel').hidden = false;
     $('#live-history').innerHTML = '<p class="error error-inline">Could not load the watch history.</p>';
   }
 }

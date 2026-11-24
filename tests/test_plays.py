@@ -87,6 +87,14 @@ class TautulliImportTests(unittest.TestCase):
         dashboard.record([{**FILM, 'percent': 20}], now=3_000_300)
         self.assertEqual(len(server.PlayLog(self.path).plays), 3, 'the dashboard read the import before saving')
 
+    def test_several_finished_views_the_log_never_saw(self):
+        log = server.PlayLog(self.path)
+        log.add([server.tautulli_play(self.rows[1])])
+        views = [{'account': 1, 'ratingKey': str(number), 'title': f'T{number}', 'user': 'Martin', 'watchedAt': 1_000_000 + number}
+                 for number in range(5)] + [{'account': 1, 'ratingKey': '7', 'title': 'No date', 'user': 'Martin', 'watchedAt': None}]
+        rows = log.merged(views)
+        self.assertEqual(len(rows), 7)
+
     def test_the_owners_imported_plays_are_not_doubled_by_plexs_history(self):
         log = server.PlayLog(self.path)
         log.add([server.tautulli_play(self.rows[0])])
