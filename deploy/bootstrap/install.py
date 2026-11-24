@@ -34,7 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'controller'))
 from controller import hash_pin, valid_pin  # noqa: E402
 import restore  # noqa: E402
 from configure import (AppApi, BazarrApi, TransmissionRpc, adopt_legacy, configure_apps, configure_webhooks, configure_bazarr, ensure_arr_login,
-                       ensure_bazarr_login, seed_transmission_defaults)
+                       ensure_bazarr_login, seed_transmission_defaults, ensure_audiobookshelf, ensure_listenarr_login,
+                       configure_listenarr)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
 APP_DIR = COMPOSE_FILE.parents[2]
@@ -67,7 +68,13 @@ DOWNLOAD_APPS = ('transmission', 'prowlarr', 'flaresolverr', 'bazarr')
 # --enable-downloads and installs made before Bazarr joined mean exactly these three.
 LEGACY_DOWNLOADS = ('transmission', 'prowlarr', 'flaresolverr')
 DOWNLOAD_PORTS = {'transmission': 9091, 'prowlarr': 9696, 'bazarr': 6767}
-CONTAINER_PORTS = {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, **DOWNLOAD_PORTS}
+# Audiobooks: Audiobookshelf to listen, Listenarr to find and download, installed together.
+AUDIOBOOK_APPS = ('audiobookshelf', 'listenarr')
+AUDIOBOOK_PORTS = {'audiobookshelf': 13378, 'listenarr': 4545}
+AUDIOBOOKS_FOLDER = 'Audiobooks'
+# Transmission files Listenarr's downloads under this category, beside Sonarr's and Radarr's.
+AUDIOBOOK_DOWNLOADS = 'downloads/complete/listenarr'
+CONTAINER_PORTS = {'dashboard': 8765, 'sonarr': 8989, 'radarr': 7878, **DOWNLOAD_PORTS, **AUDIOBOOK_PORTS}
 DEFAULT_PORTS = {**CONTAINER_PORTS, 'transmission_peer': 51155}
 TRANSMISSION_SETTINGS = Path(__file__).resolve().with_name('transmission-settings.json')
 
@@ -154,12 +161,60 @@ def media_root(value, state):
         raise ValueError('Choose a dedicated media directory separate from the installer state.')
     if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
         raise ValueError(f'The media directory must already exist and be writable: {path}')
-    for name in (*MEDIA_FOLDERS, *DOWNLOAD_FOLDERS):
+    for name in (*MEDIA_FOLDERS, *DOWNLOAD_FOLDERS, AUDIOBOOK_DOWNLOADS):
         folder = path / name
         if folder.is_symlink() or (folder.exists() and (
                 not folder.is_dir() or not os.access(folder, os.W_OK | os.X_OK))):
             raise ValueError(f'The media subdirectory must be writable and cannot be a link: {folder}')
     return path
+
+
+def audiobooks_folder(media, previous):
+    """The folder in the media directory that holds the audiobooks: the one chosen before, else one already there under
+    any capitalisation (an older stack's AudioBooks, say), else a new Audiobooks."""
+    saved = previous.get('audiobooks_folder')
+    if saved:
+        if not isinstance(saved, str) or not re.fullmatch(r'[\w][\w .()\'-]{0,99}', saved):
+            raise ValueError('The saved audiobooks folder is not valid. Remove audiobooks_folder from install-options.json '
+                             'and rerun.')
+        name = saved
+    else:
+        found = sorted(entry.name for entry in media.iterdir()
+                       if entry.name.casefold() == AUDIOBOOKS_FOLDER.casefold() and entry.is_dir()) if media.is_dir() else []
+        name = found[0] if found else AUDIOBOOKS_FOLDER
+    folder = media / name
+    if folder.is_symlink() or (folder.exists() and (not folder.is_dir() or not os.access(folder, os.W_OK | os.X_OK))):
+        raise ValueError(f'The audiobooks folder must be a writable folder, not a link: {folder}')
+    return name
+
+
+def listenarr_config(state_dir):
+    """Listenarr's startup settings, which it writes when it first starts: its API key and whether it asks for a login."""
+    try:
+        config = json.loads((state_dir / 'config.json').read_text())
+    except (OSError, ValueError):
+        return {}
+    return {key.casefold(): value for key, value in config.items()} if isinstance(config, dict) else {}
+
+
+def listenarr_needs_login(state_dir):
+    return str(listenarr_config(state_dir).get('authenticationrequired') or '').strip().casefold() not in ('true', 'enabled', 'yes', '1')
+
+
+def wait_for_listenarr_key(state_dir):
+    for _ in range(60):
+        key = listenarr_config(state_dir).get('apikey')
+        if isinstance(key, str) and key.strip():
+            return key.strip()
+        time.sleep(1)
+    raise ValueError('Listenarr did not write its API key in time. Check its Compose logs and rerun.')
+
+
+def audiobooks_need_login(state, options):
+    """Audiobookshelf lets anyone who reaches it first create its admin account, and Listenarr starts with no login, so
+    both stay on loopback until setup has given them one."""
+    return not options.get('audiobookshelf_admin') or not (state / 'audiobookshelf/config/absdatabase.sqlite').is_file() \
+        or listenarr_needs_login(state / 'listenarr')
 
 
 def private_secret(path):
@@ -743,7 +798,8 @@ def backup_folder(requested, previous):
 
 PLEX_PORT = 32400
 APP_IMAGES = {'sonarr': 'lscr.io/linuxserver/sonarr', 'radarr': 'lscr.io/linuxserver/radarr',
-              'prowlarr': 'lscr.io/linuxserver/prowlarr', 'bazarr': 'lscr.io/linuxserver/bazarr'}
+              'prowlarr': 'lscr.io/linuxserver/prowlarr', 'bazarr': 'lscr.io/linuxserver/bazarr',
+              'audiobookshelf': 'ghcr.io/advplyr/audiobookshelf', 'listenarr': 'ghcr.io/listenarrs/listenarr'}
 IMAGE_TAG = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
 PLEX_CLAIM_HELP = """
 Link the new Plex server to your Plex account with a claim code: sign in at https://plex.tv/claim and copy the
@@ -1209,7 +1265,7 @@ def reset_installation(state, project):
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
         managed = ('install-options.json', 'dashboard-auth', 'dashboard-data', 'dashboard-secrets', 'download-secrets',
                    'downloads-compose.json', 'sonarr', 'radarr', 'prowlarr', 'transmission', 'bazarr', 'gluetun',
-                   'controller', 'plex', 'plex-gpu-compose.json')
+                   'controller', 'plex', 'plex-gpu-compose.json', *AUDIOBOOK_APPS)
         moved = []
         try:
             for name in managed:
@@ -1250,6 +1306,10 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         raise ValueError('To install Transmission, specify your dedicated media directory with --media-path.')
     if 'bazarr' in enabled and not media:
         raise ValueError('Bazarr saves subtitles beside your videos. Specify your media directory with --media-path.')
+    audiobooks = bool(getattr(args, 'enable_audiobooks', False) or previous.get('audiobooks'))
+    if audiobooks and not media:
+        raise ValueError('Audiobooks are kept in your media directory. Specify it with --media-path.')
+    audiobooks_name = audiobooks_folder(media, previous) if audiobooks else previous.get('audiobooks_folder')
     plex = bool(args.enable_plex or previous.get('plex'))
     plex_name = (args.plex_name if args.plex_name is not None else previous.get('plex_name') or PLEX_DEFAULT_NAME).strip()
     if not re.fullmatch(r'[\w][\w .()\'-]{0,49}', plex_name):
@@ -1274,7 +1334,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     saved_ports = previous.get('ports') or {}
     ports = {}
     for name in ('dashboard', 'sonarr', 'radarr', *(app for app in downloads if app in DOWNLOAD_PORTS),
-                 *(['transmission_peer'] if 'transmission' in downloads else [])):
+                 *(['transmission_peer'] if 'transmission' in downloads else []), *(AUDIOBOOK_APPS if audiobooks else ())):
         requested = getattr(args, name + '_port')
         ports[name] = requested if requested is not None else saved_ports.get(name, DEFAULT_PORTS[name])
     if len(set(ports.values())) != len(ports) or any(not 1024 <= port <= 65535 for port in ports.values()):
@@ -1289,7 +1349,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     options = {**previous, 'media_path': str(media) if media else None, 'downloads': bool(downloads),
                'download_apps': downloads, 'project': project, 'dashboard_bind': str(bind), 'ports': ports}
     options.update(vpn=vpn, vpn_country=vpn_country, vpn_city=vpn_city, vpn_protocol=vpn_protocol,
-                   download_network=download_network, plex=plex, plex_name=plex_name)
+                   download_network=download_network, plex=plex, plex_name=plex_name, audiobooks=audiobooks)
+    if audiobooks_name:
+        options['audiobooks_folder'] = audiobooks_name
 
     compose = ['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE)]
     if media:
@@ -1301,11 +1363,13 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         compose += ['-f', str(COMPOSE_FILE.with_name('compose.downloads.yaml')), '-f', str(overlay_file)]
         for app in downloads:
             compose += ['--profile', app]
+    if audiobooks:
+        compose += ['-f', str(COMPOSE_FILE.with_name('compose.audiobooks.yaml'))]
     image_tags = previous.get('image_tags') or {}
     if not isinstance(image_tags, dict) or any(app not in APP_IMAGES or not isinstance(tag, str) or not IMAGE_TAG.fullmatch(tag)
                                                for app, tag in image_tags.items()):
         raise ValueError('The saved image tags are not valid. Remove image_tags from install-options.json and rerun.')
-    running = {*APPS, *downloads}
+    running = {*APPS, *downloads, *(AUDIOBOOK_APPS if audiobooks else ())}
     if tagged := {app: tag for app, tag in image_tags.items() if app in running}:
         # Apps that came from another stack on another tag of the same image (Radarr's nightly, say) stay on it: their
         # databases may be newer than the latest release understands.
@@ -1335,7 +1399,9 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
             compose += ['-f', str(gpu_overlay)]
     environment = dict(os.environ, MARTINFLIX_STATE_DIR=str(state),
                        MARTINFLIX_UID=str(os.getuid()), MARTINFLIX_GID=str(os.getgid()),
-                       MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_MEDIA_PATH=str(media) if media else '')
+                       MARTINFLIX_DASHBOARD_BIND=str(bind), MARTINFLIX_MEDIA_PATH=str(media) if media else '',
+                       MARTINFLIX_AUDIOBOOKS_BIND=str(bind),
+                       MARTINFLIX_AUDIOBOOKS_PATH=str(media / audiobooks_name) if audiobooks else '')
     environment.update(MARTINFLIX_VPN_PROVIDER=args.vpn_provider, MARTINFLIX_VPN_COUNTRY=vpn_country, MARTINFLIX_VPN_CITY=vpn_city,
                        MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
@@ -1367,7 +1433,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         raise ValueError('Setup needs Docker on this machine’s local socket. Start it with the docker run command in '
                          'the MartinFlix setup guide, which passes /var/run/docker.sock.')
     environment.update(MARTINFLIX_DOCKER_SOCKET=str(control_socket[0]), MARTINFLIX_DOCKER_GID=str(control_socket[1]))
-    app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS))
+    app_dirs = (*APPS, *(app for app in downloads if app in DOWNLOAD_PORTS), *(AUDIOBOOK_APPS if audiobooks else ()))
 
     for name in ('dashboard-secrets', 'dashboard-auth', 'dashboard-data', *app_dirs):
         check_directory(state / name)
@@ -1378,6 +1444,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
     # Prowlarr and Bazarr start without a login, so they stay on loopback until setup has given them one.
     bootstrapping_prowlarr = (('prowlarr' in downloads and (fresh_arr or arr_needs_login(state / 'prowlarr/config.xml')))
                               or ('bazarr' in downloads and (fresh_arr or bazarr_needs_login(state / 'bazarr'))))
+    bootstrapping_audiobooks = audiobooks and (fresh_arr or audiobooks_need_login(state, previous))
     environment['MARTINFLIX_DOWNLOAD_BIND'] = str(bind)
     bindings = [(service, str(bind), port) for service, port in ports.items() if service != 'transmission_peer']
     if 'transmission_peer' in ports and download_network != 'vpn':
@@ -1389,11 +1456,14 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         bindings.extend((app, '127.0.0.1', ports[app]) for app in APPS)
     if bootstrapping_prowlarr and str(bind) != '127.0.0.1':
         bindings.extend((app, '127.0.0.1', ports[app]) for app in downloads if app in DOWNLOAD_PORTS)
+    if bootstrapping_audiobooks and str(bind) != '127.0.0.1':
+        bindings.extend((app, '127.0.0.1', ports[app]) for app in AUDIOBOOK_APPS)
     return {
         'media': media, 'enabled': enabled, 'downloads': downloads, 'download_network': download_network,
         'vpn': vpn, 'vpn_country': vpn_country, 'vpn_city': vpn_city, 'options': options, 'ports': ports,
         'bind': bind, 'compose': compose, 'environment': environment, 'app_dirs': app_dirs,
         'bootstrapping_arr': bootstrapping_arr, 'bootstrapping_prowlarr': bootstrapping_prowlarr, 'bindings': bindings,
+        'audiobooks': audiobooks, 'bootstrapping_audiobooks': bootstrapping_audiobooks,
         'control': True, 'change_pin': bool(getattr(args, 'change_pin', False)),
         'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
         'set_plex_token': bool(getattr(args, 'set_plex_token', False)),
@@ -1615,6 +1685,7 @@ def current_settings(options):
         'VPN': f'NordVPN · {options.get("vpn_city") or options.get("vpn_country") or "Automatic"}' if vpn else 'Not installed',
         'Download apps': ', '.join(apps) or 'None',
         'Download route': (options.get('download_network') or ('vpn' if options.get('downloads') else 'direct')) if apps else 'None',
+        'Audiobooks': 'Audiobookshelf and Listenarr' if options.get('audiobooks') else 'Not installed',
         'Release channel': options.get('channel') or 'Not set',
         'Discover': ('Off' if options.get('discover') == 'off' else f'On · {options.get("discover_region") or "GB"}'),
         'Backup folder': options.get('backup_dir') or 'Not set',
@@ -1658,6 +1729,8 @@ def keep_flags(options):
         flags.append('--enable-flaresolverr')
     if 'bazarr' in apps:
         flags.append('--enable-bazarr')
+    if options.get('audiobooks'):
+        flags.append('--enable-audiobooks')
     if options.get('plex'):
         flags.append('--enable-plex')
         if options.get('plex_name', PLEX_DEFAULT_NAME) != PLEX_DEFAULT_NAME:
@@ -1698,6 +1771,8 @@ def describe_plan(plan, state, args, current=None):
     if plan['downloads']:
         route = 'VPN' if plan['download_network'] == 'vpn' else 'normal internet connection'
         print(f'Download apps     {", ".join(plan["downloads"])} via {route}')
+    if plan.get('audiobooks'):
+        print(f'Audiobooks        Audiobookshelf and Listenarr · {plan["environment"]["MARTINFLIX_AUDIOBOOKS_PATH"]}')
     print('Ports             ' + ', '.join(f'{name} {port}' for name, port in plan['ports'].items()))
     if plan['vpn']:
         print('VPN selected. Setup will use your NordVPN OpenVPN service credentials.')
@@ -1712,6 +1787,7 @@ def run_installation(plan, state, previous, mode='install'):
     ports, bind, compose, environment = plan['ports'], plan['bind'], plan['compose'], plan['environment']
     app_dirs, bootstrapping_arr = plan['app_dirs'], plan['bootstrapping_arr']
     bootstrapping_prowlarr = plan['bootstrapping_prowlarr']
+    audiobooks, bootstrapping_audiobooks = plan.get('audiobooks'), plan.get('bootstrapping_audiobooks')
     project = options['project']
     private_directory(state)
 
@@ -1822,10 +1898,17 @@ def run_installation(plan, state, previous, mode='install'):
             if 'transmission' in downloads:
                 for folder in DOWNLOAD_FOLDERS:
                     (media / folder).mkdir(mode=0o700, exist_ok=True)
+            if audiobooks:
+                (media / options['audiobooks_folder']).mkdir(mode=0o700, exist_ok=True)
+                if 'transmission' in downloads:
+                    (media / AUDIOBOOK_DOWNLOADS).mkdir(mode=0o700, exist_ok=True)
         keep_overlays(compose, state, plan['overlay_dir'])
         options.setdefault('radarr_indexer_defaults_pending', not (state / 'radarr/config.xml').exists())
         for app in app_dirs:
             private_directory(state / app)
+        if audiobooks:
+            for folder in ('config', 'metadata'):
+                private_directory(state / 'audiobookshelf' / folder)
         if 'transmission' in downloads and not (state / 'transmission/settings.json').exists():
             # The image copies its own defaults only when this file is missing, so ours win on a new install.
             write_secret(state / 'transmission/settings.json', TRANSMISSION_SETTINGS.read_text(), trailing_newline=False)
@@ -1838,7 +1921,8 @@ def run_installation(plan, state, previous, mode='install'):
             arr_address = '127.0.0.1'
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
         # MartinFlix's own image is the one setup runs from, so it is already here.
-        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *(['plex'] if plan['plex'] else [])]
+        images = [*APPS, *(['gluetun'] if vpn else []), *downloads, *(AUDIOBOOK_APPS if audiobooks else ()),
+                  *(['plex'] if plan['plex'] else [])]
         print('2. Downloading the latest app images. The first download may take a few minutes…', flush=True)
         REPORT.step('Downloading the latest app images')
         if (details := pull_images(compose, environment, images)) is not None:
@@ -1901,6 +1985,30 @@ def run_installation(plan, state, previous, mode='install'):
                          follows='gluetun' if vpn and download_network == 'vpn' else None)
             if bazarr:
                 bazarr = BazarrApi(download_address, ports['bazarr'], bazarr.key)
+        listenarr = None
+        audiobooks_new_login = False
+        if audiobooks:
+            audiobooks_address = '127.0.0.1' if bootstrapping_audiobooks else str(bind)
+            environment['MARTINFLIX_AUDIOBOOKS_BIND'] = audiobooks_address
+            started_step(f'{step}. Audiobookshelf and Listenarr…', ['up', '-d', '--wait', '--wait-timeout', '360', *AUDIOBOOK_APPS],
+                         AUDIOBOOK_APPS)
+            step += 1
+            had_admin = bool(options.get('audiobookshelf_admin'))
+            key = ensure_audiobookshelf(audiobooks_address, ports['audiobookshelf'], private_secret(secret_dir / 'audiobookshelf-key'),
+                                        lambda: temporary_password, options.get('discover_region') or 'GB')
+            write_secret(secret_dir / 'audiobookshelf-key', key)
+            if not had_admin:
+                options['audiobookshelf_admin'] = True
+                write_secret(state / 'install-options.json', json.dumps(options))
+            listenarr_key = wait_for_listenarr_key(state / 'listenarr')
+            write_secret(secret_dir / 'listenarr-key', listenarr_key)
+            listenarr = AppApi('Listenarr', ports['listenarr'], listenarr_key, version=1, address=audiobooks_address)
+            audiobooks_new_login = ensure_listenarr_login(listenarr, lambda: temporary_password) or not had_admin
+            if audiobooks_address != str(bind):
+                environment['MARTINFLIX_AUDIOBOOKS_BIND'] = str(bind)
+                compose_step('   Opening the protected Audiobookshelf and Listenarr logins on your LAN…',
+                             ['up', '-d', '--wait', '--wait-timeout', '360', *AUDIOBOOK_APPS], watch=AUDIOBOOK_APPS)
+                listenarr = AppApi('Listenarr', ports['listenarr'], listenarr_key, version=1, address=str(bind))
         print(f'{step}. Configuring library defaults and checking app connections…', flush=True)
         REPORT.step('Configuring the apps and checking their connections')
         if bazarr:
@@ -1939,6 +2047,16 @@ def run_installation(plan, state, previous, mode='install'):
         configure_webhooks(arr_keys, ports, arr_address=arr_address,
                            password=(secret_dir / 'hook-password').read_text().strip(),
                            enabled=(secret_dir / 'telegram-token').is_file() and (secret_dir / 'telegram-chat').is_file())
+        if listenarr:
+            # Listenarr files audiobooks in the folder Audiobookshelf reads, downloads with Transmission and searches
+            # Prowlarr's indexers that carry audiobooks.
+            seed_listenarr = not options.get('listenarr_defaults_applied')
+            configure_listenarr(listenarr, root=f'/data/{options["audiobooks_folder"]}', region=options.get('discover_region') or 'GB',
+                                transmission_password=transmission_password, downloads_behind_vpn=download_network == 'vpn',
+                                prowlarr_key=prowlarr_key, seed=seed_listenarr)
+            if seed_listenarr:
+                options['listenarr_defaults_applied'] = True
+                write_secret(state / 'install-options.json', json.dumps(options))
         if seed_prowlarr or enable_prowlarr_indexers or address_prowlarr_indexers:
             options.update(prowlarr_indexer_defaults_applied=True, prowlarr_indexers_enabled=True,
                            prowlarr_indexers_addressed=True)
@@ -2039,7 +2157,8 @@ for app in ('sonarr', 'radarr'):
 '''
         compose_step(f'{step + 2}. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
     print_summary(mode, plan, password, (auth_dir / 'password-hash').is_file(), personal_password_set,
-                  old_logins=bool(options.get('legacy_media')) and not personal_password_set)
+                  old_logins=bool(options.get('legacy_media')) and not personal_password_set,
+                  temporary_logins=['Audiobookshelf', 'Listenarr'] if audiobooks_new_login and personal_password_set else [])
 
 
 DONE = r"""
@@ -2055,7 +2174,7 @@ def heading(title, output):
     output.write(f'\n{title}\n{"─" * len(title)}\n')
 
 
-def print_summary(mode, plan, password, password_set, apps_use_it, output=None, old_logins=False):
+def print_summary(mode, plan, password, password_set, apps_use_it, output=None, old_logins=False, temporary_logins=()):
     """The end of a successful run: a clear Done, then where everything is and how to sign in."""
     output = output or sys.stdout
     enabled, ports, bind = plan['enabled'], plan['ports'], plan['bind']
@@ -2064,6 +2183,7 @@ def print_summary(mode, plan, password, password_set, apps_use_it, output=None, 
     apps = [('sonarr', 'Sonarr'), ('radarr', 'Radarr'), ('prowlarr', 'Prowlarr'), ('transmission', 'Transmission'),
             ('bazarr', 'Bazarr'), ('flaresolverr', 'FlareSolverr')]
     names = [name for app, name in apps if app in ('sonarr', 'radarr') or app in plan['downloads']]
+    names += ['Audiobookshelf', 'Listenarr'] if plan.get('audiobooks') else []
     names += ['Plex'] if plan['plex'] else []
     names += ['Gluetun (VPN)'] if plan['vpn'] else []
     listed = ', '.join(names[:-1]) + ' and ' + names[-1]
@@ -2087,6 +2207,11 @@ def print_summary(mode, plan, password, password_set, apps_use_it, output=None, 
     else:
         output.write(('Each signs in with admin and your dashboard password.\n' if apps_use_it else
                       'Each signs in with admin and the temporary password, until you choose your own in the dashboard.\n'))
+    if temporary_logins and not old_logins:
+        # Setup only knows the temporary password; the dashboard gives every app the personal one when it is saved.
+        listed = ' and '.join(temporary_logins)
+        output.write(f'{listed} are new, so they sign in with the temporary password for now. Save your dashboard '
+                     'password again (Change password in the dashboard) to give it to them too.\n')
     for app in plan['app_dirs']:
         output.write(f'{app.capitalize():13} http://{bind}:{ports[app]}\n')
     if plan['plex']:
@@ -2166,6 +2291,11 @@ def build_parser():
     parser.add_argument('--enable-bazarr', action='store_true',
                         help='Install Bazarr for subtitles. Requires --media-path. Follows the download network route.')
     parser.add_argument('--bazarr-port', type=int)
+    parser.add_argument('--enable-audiobooks', action='store_true',
+                        help='Install Audiobookshelf, to listen, and Listenarr, to find and download audiobooks. '
+                             'Requires --media-path; they use an Audiobooks folder in it.')
+    parser.add_argument('--audiobookshelf-port', type=int)
+    parser.add_argument('--listenarr-port', type=int)
     parser.add_argument('--prowlarr-port', type=int)
     parser.add_argument('--transmission-port', type=int)
     parser.add_argument('--transmission-peer-port', type=int,

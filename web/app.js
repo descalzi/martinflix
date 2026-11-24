@@ -294,6 +294,7 @@ function renderOverview(docker, services, backups, probes) {
 }
 
 const BACKUP_APPS = {sonarr: 'Sonarr', radarr: 'Radarr', prowlarr: 'Prowlarr', bazarr: 'Bazarr', transmission: 'Transmission',
+  audiobookshelf: 'Audiobookshelf', listenarr: 'Listenarr',
   plex: 'Plex', martinflix: 'MartinFlix'};
 
 function renderBackups(backups, schedule, problem) {
@@ -1415,7 +1416,8 @@ if (page === 'add') {
 const CHANNEL_NAMES = {stable: 'Stable', edge: 'Edge', dev: 'Development'};
 const SETTING_LABELS = {discover: 'Discover', discoverRegion: 'Discover country', tmdbKey: 'TMDB key', plexName: 'Plex server name',
   plexUrl: 'Plex address', plexToken: 'Plex token', backupDir: 'Backup folder', vpnLocation: 'VPN exit',
-  vpnProtocol: 'VPN connection', vpnUser: 'VPN credentials', channel: 'Release channel', telegramToken: 'Telegram'};
+  vpnProtocol: 'VPN connection', vpnUser: 'VPN credentials', channel: 'Release channel', telegramToken: 'Telegram',
+  audiobooks: 'Audiobooks'};
 let systemData = null;
 let settingsData = null;
 let loadedVersion = null;
@@ -1668,6 +1670,11 @@ function fillSettings(data) {
   setOptions(form.vpnLocation, data.choices.vpnLocations, data.vpnLocation);
   form.vpnProtocol.value = data.vpnProtocol;
   form.channel.value = data.channel;
+  // Setup installs apps but never removes them, so once on, the switch stays on.
+  form.audiobooks.checked = form.audiobooks.disabled = Boolean(data.audiobooks);
+  $('#setting-audiobooks-help').textContent = data.audiobooks
+    ? 'Installed. Your audiobooks are in the Audiobooks folder of your media folder; both apps are on the Services page.'
+    : 'Installs both, with an Audiobooks folder in your media folder. Afterwards, save your dashboard password again (Change password) so they sign in with it too.';
   form.hidden = false;
   settingsData = data;
   showSettingsChanges();
@@ -1701,6 +1708,7 @@ function settingsChanges() {
     }
   }
   if (form.channel.value !== data.channel) settings.channel = form.channel.value;
+  if (!data.audiobooks && form.audiobooks.checked) settings.audiobooks = 'on';
   const telegramToken = form.telegramToken.value.trim();
   const telegramChat = form.telegramChat.value.trim();
   if (!form.telegramOn.checked) {

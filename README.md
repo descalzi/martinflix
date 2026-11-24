@@ -66,7 +66,7 @@ See the [first-run guide](docs/first-run.md) for using different ports or storag
 
 ### 4. Updates and settings
 
-MartinFlix updates itself. The dashboard checks for a new version every six hours and shows it on the Overview; open **Settings** to see what changed and press **Update now**, with your PIN. The same page changes Discover, Plex, the backup folder, the VPN exit and credentials, and the release channel, without a terminal.
+MartinFlix updates itself. The dashboard checks for a new version every six hours and shows it on the Overview; open **Settings** to see what changed and press **Update now**, with your PIN. The same page changes Discover, Plex, the backup folder, the VPN exit and credentials, and the release channel, and installs audiobooks, without a terminal.
 
 To add apps or change the address or ports, rerun setup with `update` in place of `install`, adding only the options that change:
 
@@ -79,7 +79,7 @@ Add `--state-dir` if you installed to a custom location. To start fresh with the
 
 ## What’s included
 
-- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. The installer adds a MartinFlix HD quality profile and can also set up media folders, Gluetun, Transmission, Prowlarr, FlareSolverr, and Bazarr. Every app signs in with `admin` and your dashboard password, and changing the password in the dashboard updates them all. Full Docker status collection is a later stage.
+- **First-run stack** starts the dashboard, Sonarr, and Radarr, with live health checks for both apps. Fresh libraries start empty. The installer adds a MartinFlix HD quality profile and can also set up media folders, Gluetun, Transmission, Prowlarr, FlareSolverr, Bazarr, and audiobooks with Audiobookshelf and Listenarr. Every app signs in with `admin` and your dashboard password, and changing the password in the dashboard updates them all. Full Docker status collection is a later stage.
 - **Dashboard** opens on what’s coming next: each monitored series’ next episode and each film’s next release, under a status strip that names any problem. **Add** searches for series and films through Sonarr and Radarr and adds them with the MartinFlix profile, so no separate request app is needed.
 - **Existing-host dashboard** adds Docker status and dependency groups. Use the [dashboard runbook](docs/dashboard.md) when connecting an existing stack.
 - **Recovery tools** capture and verify selected app-generated archives. The [recovery notes](docs/backups.md) cover scope and restore rehearsals.

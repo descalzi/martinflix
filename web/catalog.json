@@ -20,6 +20,8 @@
     "bazarr": {"name": "Bazarr", "role": "Subtitles", "icon": "bazarr", "web": {"port": 6767}, "installer": {"env": "BAZARR", "localOnly": true}},
     "sonarr": {"name": "Sonarr", "role": "TV library", "icon": "sonarr", "web": {"port": 8989}, "installer": {"env": "SONARR"}},
     "radarr": {"name": "Radarr", "role": "Film library", "icon": "radarr", "web": {"port": 7878}, "installer": {"env": "RADARR"}},
+    "audiobookshelf": {"name": "Audiobookshelf", "role": "Audiobook player", "icon": "audiobookshelf", "web": {"port": 13378}, "installer": {"env": "AUDIOBOOKSHELF"}},
+    "listenarr": {"name": "Listenarr", "role": "Audiobook library", "icon": "listenarr", "web": {"port": 4545}, "installer": {"env": "LISTENARR"}},
     "bookorbit-db": {"name": "PostgreSQL", "role": "BookOrbit database", "icon": "postgresql", "note": "No web page. BookOrbit stores its library here."},
     "bookorbit-app": {"name": "BookOrbit", "role": "Book library", "icon": "bookorbit", "web": {"port": 3001}},
     "homepage": {"name": "Homepage", "role": "App launcher", "icon": "homepage", "web": {"port": 3000}},
@@ -33,13 +35,15 @@
   },
   "startAfter": {
     "sonarr": ["prowlarr", "transmission-daemon"],
-    "radarr": ["prowlarr", "transmission-daemon"]
+    "radarr": ["prowlarr", "transmission-daemon"],
+    "listenarr": ["prowlarr", "transmission-daemon"]
   },
   "uses": {
     "sonarr": ["prowlarr", "transmission-daemon"],
     "radarr": ["prowlarr", "transmission-daemon"],
     "prowlarr": ["flaresolverr"],
-    "bazarr": ["sonarr", "radarr"]
+    "bazarr": ["sonarr", "radarr"],
+    "listenarr": ["prowlarr", "transmission-daemon"]
   },
   "groupRest": {
     "Downloads & automation": {"title": "Library", "description": "Sonarr and Radarr find, download and organise your series and films."}

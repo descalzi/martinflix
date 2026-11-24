@@ -1,9 +1,10 @@
 """Backups of a MartinFlix stack, taken by the controller.
 
 Each backup is a folder named by its start time, holding one archive per app and a manifest with sizes and SHA-256
-checksums. Apps with their own backup feature (Sonarr, Radarr, Prowlarr, Bazarr) are asked to make one, so their
-databases are copied consistently while they run. Plex's databases are copied with Plex's own SQLite. Transmission's
-settings and torrent list, and MartinFlix's options and secrets, are copied as files.
+checksums. Apps with their own backup feature (Sonarr, Radarr, Prowlarr, Bazarr, Audiobookshelf) are asked to make
+one, so their databases are copied consistently while they run. Plex's databases are copied with Plex's own SQLite.
+Listenarr has no backup feature, so it is paused for the moment its files are copied. Transmission's settings and
+torrent list, and MartinFlix's options and secrets, are copied as files.
 
 The folder is written as a hidden ".partial" folder and renamed when complete, so a backup either exists whole or not
 at all. Old backups are thinned to the last 14 plus one a week for 8 weeks.
@@ -32,6 +33,9 @@ ARR_APPS = {'sonarr': (8989, 'v3'), 'radarr': (7878, 'v3'), 'prowlarr': (9696, '
 PLEX_DATABASES = 'Library/Application Support/Plex Media Server/Plug-in Support/Databases'
 PLEX_PREFERENCES = 'Library/Application Support/Plex Media Server/Preferences.xml'
 PLEX_SQLITE = '/usr/lib/plexmediaserver/Plex SQLite'
+# Listenarr's settings, database and the keys its logins are signed with. Its caches and logs are left out.
+LISTENARR_FILES = ('config.json', 'database', 'dataprotection-keys', 'appsettings')
+AUDIOBOOKSHELF_PORT = 13378
 # Setup's own files: options, the dashboard's password hash and keys, VPN credentials and the PIN hash.
 MARTINFLIX_FILES = ('install-options.json', 'dashboard-auth', 'dashboard-data', 'dashboard-secrets', 'download-secrets',
                     'controller/pin-hash')
@@ -160,6 +164,39 @@ class Backups:
         shutil.copy2(made, destination)
         return destination
 
+    def capture_audiobookshelf(self, state, target):
+        """Audiobookshelf's own backup: its database plus each book's and author's details and covers."""
+        started = self.clock()
+        # Node's fetch, as the image has no curl; the key goes in as an environment variable.
+        script = (f"fetch('http://127.0.0.1:{AUDIOBOOKSHELF_PORT}/api/backups', {{method: 'POST', headers: "
+                  "{Authorization: 'Bearer ' + process.env.MARTINFLIX_KEY}})"
+                  ".then(r => process.exit(r.ok ? 0 : (console.error('HTTP ' + r.status), 1)), e => (console.error(String(e)), process.exit(1)))")
+        result = self.stack.compose('exec', '-T', '-e', f'MARTINFLIX_KEY={self.key(state, "audiobookshelf")}', 'audiobookshelf',
+                                    'node', '-e', script, timeout=600)
+        if result.returncode:
+            raise BackupError(f'its backup failed: {(result.stderr or result.stdout or "").strip()[-200:] or result.returncode}')
+        made = newest(self.config_dir(state, 'audiobookshelf') / 'metadata' / 'backups', '*.audiobookshelf', started)
+        if made is None:
+            raise BackupError('its backup file could not be found')
+        destination = target / 'audiobookshelf.zip'
+        shutil.copy2(made, destination)
+        return destination
+
+    def capture_listenarr(self, state, target):
+        """Listenarr's files, copied while it is paused so its database is caught between writes."""
+        folder = self.config_dir(state, 'listenarr')
+        paused = self.stack.compose('pause', 'listenarr', timeout=60)
+        if paused.returncode:
+            raise BackupError('it could not be paused to copy its database')
+        destination = target / 'listenarr.tar.gz'
+        try:
+            with tarfile.open(destination, 'w:gz') as archive:
+                for name in LISTENARR_FILES:
+                    add_tree(archive, folder / name, name)
+        finally:
+            self.stack.compose('unpause', 'listenarr', timeout=60)
+        return destination
+
     def capture_transmission(self, state, target):
         destination = target / 'transmission.tar.gz'
         with tarfile.open(destination, 'w:gz') as archive:
@@ -207,6 +244,10 @@ class Backups:
             steps.append(('bazarr', lambda target: self.capture_bazarr(state, target)))
         if 'transmission' in services:
             steps.append(('transmission', lambda target: self.capture_transmission(state, target)))
+        if 'audiobookshelf' in services:
+            steps.append(('audiobookshelf', lambda target: self.capture_audiobookshelf(state, target)))
+        if 'listenarr' in services:
+            steps.append(('listenarr', lambda target: self.capture_listenarr(state, target)))
         if 'plex' in services:
             steps.append(('plex', lambda target: self.capture_plex(state, target)))
         steps.append(('martinflix', lambda target: self.capture_martinflix(state, target)))

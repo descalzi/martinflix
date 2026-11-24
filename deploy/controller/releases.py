@@ -58,7 +58,12 @@ def setup_arguments(settings):
     for name, value in settings.items():
         if not isinstance(value, str):
             raise UpdateError(400, f'The {name} setting is not valid.')
-        if name == 'vpnLocation':
+        if name == 'audiobooks':
+            # Installing only: setup never removes apps, and their data stays when they are.
+            if value != 'on':
+                raise UpdateError(400, 'Audiobooks can only be turned on here.')
+            arguments.append('--enable-audiobooks')
+        elif name == 'vpnLocation':
             if value in VPN_CITIES:
                 arguments += ['--vpn-city', value]
             elif value in VPN_COUNTRIES:
@@ -321,6 +326,7 @@ class Releases:
             'vpnProtocol': options.get('vpn_protocol') or 'udp',
             'channel': options.get('channel') or self.current()['channel'],
             'mediaPath': options.get('media_path') or '',
+            'audiobooks': bool(options.get('audiobooks')),
             'telegram': (secrets_dir / 'telegram-token').is_file(),
             'telegramChat': read_short(secrets_dir / 'telegram-chat'),
             'choices': {'vpnLocations': [*VPN_CITIES, *VPN_COUNTRIES], 'channels': list(CHANNELS)},

@@ -37,6 +37,8 @@ ARR_HEALTH_ENDPOINTS = {
     'prowlarr': (9696, '/api/v1/health'),
     'bazarr': (6767, '/api/system/health'),
 }
+# Audiobookshelf and Listenarr, when setup installed them, on the stack's network.
+AUDIOBOOK_ADDRESSES = {'audiobookshelf': 'http://audiobookshelf:13378', 'listenarr': 'http://listenarr:4545'}
 CATALOG = json.loads((WEB / 'catalog.json').read_text(encoding='utf-8'))
 STACKS = {group['name']: group['services'] for group in CATALOG['groups']}
 PAGES = ('overview', 'live', 'library', 'discover', 'add', 'services', 'backups', 'settings')
@@ -250,6 +252,25 @@ def release_changes(base, head):
     return result
 
 
+def audiobooks_installed():
+    return os.environ.get('MARTINFLIX_ARR_COMPOSE_NETWORK') == '1' and os.environ.get('MARTINFLIX_AUDIOBOOKS') == '1'
+
+
+def audiobook_open(kind, endpoint, *, payload=None, method=None, timeout=10):
+    """Call Audiobookshelf (a bearer API key) or Listenarr (an X-Api-Key, like Sonarr's) with its saved key."""
+    key = read_secret('MARTINFLIX_' + kind.upper() + '_KEY')
+    if not key:
+        raise ValueError('Missing application API key')
+    headers = {'Accept': 'application/json'}
+    headers.update({'Authorization': f'Bearer {key}'} if kind == 'audiobookshelf' else {'X-Api-Key': key})
+    body = None
+    if payload is not None:
+        headers['Content-Type'] = 'application/json'
+        body = json.dumps(payload).encode()
+    request = urllib.request.Request(AUDIOBOOK_ADDRESSES[kind] + endpoint, data=body, headers=headers, method=method)
+    return ARR_OPENER.open(request, timeout=timeout)
+
+
 def installer_downloads():
     """The download apps the installer enabled, whether they share Gluetun's network, and whether a VPN runs."""
     enabled = os.environ.get('MARTINFLIX_DOWNLOAD_APPS')
@@ -278,6 +299,9 @@ def container_status():
         probes['flaresolverr'] = (f'http://{"gluetun" if behind_vpn else "flaresolverr"}:8191/', 200)
     if 'bazarr' in downloads:
         probes['bazarr'] = (f'http://{"gluetun" if behind_vpn else "bazarr"}:6767/api/system/ping', 200)
+    if audiobooks_installed():
+        probes['audiobookshelf'] = (AUDIOBOOK_ADDRESSES['audiobookshelf'] + '/healthcheck', 200)
+        probes['listenarr'] = (AUDIOBOOK_ADDRESSES['listenarr'] + '/', 200)
     # Plex runs on the host's network, so it is checked at its host address. /identity needs no token.
     if os.environ.get('MARTINFLIX_PLEX_INSTALLED') == '1' and os.environ.get('MARTINFLIX_PLEX_URL'):
         probes['plex'] = (os.environ['MARTINFLIX_PLEX_URL'].rstrip('/') + '/identity', 200)
@@ -297,9 +321,12 @@ def container_status():
             'status': 'Responded to health check' if reachable else 'Health check did not respond',
         })
     media_server = [service for service in services if service['name'] == 'plex']
-    others = [service for service in services if service['name'] != 'plex']
+    audiobooks = [service for service in services if service['name'] in AUDIOBOOK_ADDRESSES]
+    others = [service for service in services if service['name'] != 'plex' and service['name'] not in AUDIOBOOK_ADDRESSES]
     groups = [{'name': 'Media server', 'services': media_server}] if media_server else []
     groups.append({'name': 'Downloads & automation' if downloads else 'Library apps', 'services': others})
+    if audiobooks:
+        groups.append({'name': 'Audiobooks', 'services': audiobooks})
     return {'available': True, 'source': 'app-probes', 'downloadsBehindVpn': bool(downloads) and behind_vpn, 'groups': groups}
 
 
@@ -349,6 +376,8 @@ def synced_apps():
         apps.append('prowlarr')
     if 'bazarr' in downloads:
         apps.append('bazarr')
+    if audiobooks_installed():
+        apps += ['audiobookshelf', 'listenarr']
     if 'transmission' in downloads and os.environ.get('MARTINFLIX_TRANSMISSION_PASSWORD_FILE'):
         apps.append('transmission')
     return apps
@@ -363,7 +392,7 @@ def sync_app_passwords(password):
     apps = synced_apps()
     _, behind_vpn, _ = installer_downloads()
     hosts = []
-    for kind in (app for app in apps if app not in ('transmission', 'bazarr')):
+    for kind in (app for app in apps if app not in ('transmission', 'bazarr', *AUDIOBOOK_ADDRESSES)):
         connection = arr_connection(kind, prowlarr_via_vpn=behind_vpn)
         if connection is None:
             raise ValueError('Missing application API key')
@@ -385,6 +414,23 @@ def sync_app_passwords(password):
         with arr_open(bazarr, '/api/system/settings') as response:
             if not isinstance(json.load(response), dict):
                 raise ValueError('Invalid Bazarr settings')
+    audiobook_writes = []
+    if 'audiobookshelf' in apps:
+        # The key belongs to Audiobookshelf's admin account, so it can change that account's own password.
+        with audiobook_open('audiobookshelf', '/api/me') as response:
+            account = json.load(response)
+        if not isinstance(account, dict) or not isinstance(account.get('id'), str) or not account['id']:
+            raise ValueError('Invalid Audiobookshelf account')
+        audiobook_writes.append(('audiobookshelf', f'/api/users/{urllib.parse.quote(account["id"])}',
+                                 {'username': ADMIN_APP_USER, 'password': password}, 'PATCH'))
+    if 'listenarr' in apps:
+        # Listenarr's settings carry its admin login: saving them with a password sets it.
+        with audiobook_open('listenarr', '/api/v1/configuration/settings') as response:
+            settings = json.load(response)
+        if not isinstance(settings, dict):
+            raise ValueError('Invalid Listenarr settings')
+        settings.update(adminUsername=ADMIN_APP_USER, adminPassword=password)
+        audiobook_writes.append(('listenarr', '/api/v1/configuration/settings', settings, 'POST'))
     clients = []
     if 'transmission' in apps:
         # Sonarr, Radarr and Prowlarr each keep the Transmission login, to send releases to it.
@@ -401,6 +447,15 @@ def sync_app_passwords(password):
                         elif field.get('name') == 'password':
                             field['value'] = password
                     clients.append((connection, f'/api/{version}/downloadclient/{entry["id"]}?forceSave=true', entry))
+        if 'listenarr' in apps:
+            # So does Listenarr, for audiobooks.
+            with audiobook_open('listenarr', '/api/v1/download-clients') as response:
+                entries = json.load(response)
+            for entry in entries if isinstance(entries, list) else []:
+                if isinstance(entry, dict) and entry.get('name') == SHARED_TRANSMISSION_CLIENT:
+                    entry = {key: value for key, value in entry.items() if key != 'settingsJson'}
+                    entry.update(username=ADMIN_APP_USER, password=password)
+                    clients.append(('listenarr', '/api/v1/download-clients', entry))
     for connection, endpoint, payload in hosts:
         with arr_open(connection, endpoint, payload=payload, method='PUT'):
             pass
@@ -413,6 +468,9 @@ def sync_app_passwords(password):
             'X-Api-Key': key, 'Content-Type': 'application/x-www-form-urlencoded'})
         with ARR_OPENER.open(request, timeout=10):
             pass
+    for kind, endpoint, payload, method in audiobook_writes:
+        with audiobook_open(kind, endpoint, payload=payload, method=method):
+            pass
     if 'transmission' in apps:
         # Transmission reads this bind-mounted file when it starts, so it is rewritten in place to stay mounted.
         with open(os.environ['MARTINFLIX_TRANSMISSION_PASSWORD_FILE'], 'r+', encoding='utf-8') as secret:
@@ -424,6 +482,10 @@ def sync_app_passwords(password):
         except ControllerError as exc:
             raise ValueError(f'Transmission: {exc}') from None
     for connection, endpoint, payload in clients:
+        if connection == 'listenarr':
+            with audiobook_open('listenarr', endpoint, payload=payload, method='POST'):
+                pass
+            continue
         with arr_open(connection, endpoint, payload=payload, method='PUT'):
             pass
 

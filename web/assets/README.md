@@ -2,7 +2,7 @@
 
 MartinFlix masthead and mark generated with the built-in image generation tool and optimized as WebP for the dashboard.
 
-App icons are sourced from [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons/tree/main/png). The Bookshelf icon comes from the [Bookshelf project](https://github.com/pennydreadful/bookshelf/blob/HEAD/Logo/128.png). Images are served locally so clients do not need access to either repository.
+App icons are sourced from [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons/tree/main/png). The Bookshelf icon comes from the [Bookshelf project](https://github.com/pennydreadful/bookshelf/blob/HEAD/Logo/128.png). The Listenarr icon comes from the [Listenarr project](https://github.com/Listenarrs/Listenarr/blob/canary/.github/logo-icon.png). Images are served locally so clients do not need access to either repository.
 
 ## Image generation prompts
 

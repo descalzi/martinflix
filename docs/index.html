@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-24">
-  <script src="./setup.js?v=wizard-24" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-25">
+  <script src="./setup.js?v=wizard-25" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -143,6 +143,10 @@
               <label class="toggle"><input id="bazarr" type="checkbox" checked aria-describedby="bazarr-help"><span><strong>Bazarr <span class="tag">Default</span></strong><span id="bazarr-help">Finds subtitles in English, French, Brazilian Portuguese and Spanish. Needs the media directory.</span></span></label>
             </fieldset>
             <fieldset class="toggles">
+              <legend>Audiobooks</legend>
+              <label class="toggle"><input id="audiobooks" type="checkbox" aria-describedby="audiobooks-help"><span><strong>Audiobookshelf and Listenarr</strong><span id="audiobooks-help">Listenarr finds and downloads audiobooks; Audiobookshelf plays them in the browser and its phone apps. Needs the media directory.</span></span></label>
+            </fieldset>
+            <fieldset class="toggles">
               <legend>Discover</legend>
               <label class="toggle"><input id="discover" type="checkbox" checked><span><strong>Trending and upcoming titles <span class="tag">Default</span></strong><span>A Discover page with what’s trending and coming to cinemas and streaming, from TMDB. Works straight away with MartinFlix’s TMDB key.</span></span></label>
               <label class="toggle"><input id="tmdb-own" type="checkbox"><span><strong>Use my own TMDB key</strong><span>Setup asks for it. Get a free key in your TMDB account under Settings → API.</span></span></label>
@@ -235,6 +239,7 @@
               <label class="toggle"><input id="u-flaresolverr" type="checkbox"><span><strong>FlareSolverr</strong><span>Helps Prowlarr reach indexers behind browser checks. Needs Prowlarr.</span></span></label>
               <label class="toggle"><input id="u-plex" type="checkbox"><span><strong>Plex</strong><span>Media server. Setup asks for a claim code from plex.tv/claim. Needs a media directory.</span></span></label>
               <label class="toggle"><input id="u-bazarr" type="checkbox"><span><strong>Bazarr</strong><span>Subtitles in English, French, Brazilian Portuguese and Spanish. Needs a media directory.</span></span></label>
+              <label class="toggle"><input id="u-audiobooks" type="checkbox"><span><strong>Audiobookshelf and Listenarr</strong><span>Finds, downloads and plays audiobooks, kept in an Audiobooks folder in the media directory. Needs a media directory.</span></span></label>
             </fieldset>
             <fieldset class="toggles">
               <legend>Discover</legend>

@@ -92,7 +92,7 @@ Existing logins are preserved when you rerun the installer. Installations made b
 
 Transmission has no API for changing its own password, but it takes the shared password from its private file each time it starts. When you change your password, the dashboard asks the controller to restart Transmission as part of the change, so it takes the new password straight away; downloads pause briefly and resume on their own.
 
-The dashboard, Sonarr, Radarr, Prowlarr, Transmission, and Bazarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
+The dashboard, Sonarr, Radarr, Prowlarr, Transmission, Bazarr, Audiobookshelf and Listenarr publish on loopback by default. Pass `--dashboard-bind` with the host’s LAN IPv4 address to open them all from another machine. Every app has the shared login, and setup keeps each app on loopback until its login is in place. Gluetun and FlareSolverr have no web page.
 
 ### Start from scratch
 
@@ -177,6 +177,24 @@ Add `--enable-bazarr` (with `--media-path`) to install Bazarr on port 6767. It u
 - **Sync:** Sonarr and Radarr are synced every 180 minutes.
 
 OpenSubtitles.com needs an account, so setup asks for its username and password in the terminal. Leave the username blank to skip it; the other providers still work, and you can add the login later under Bazarr's **Settings → Providers**. Later changes you make in Bazarr are kept.
+
+### Audiobooks with Audiobookshelf and Listenarr
+
+Add `--enable-audiobooks` (with `--media-path`), or turn on **Audiobooks** under **Settings** in the dashboard, to install two apps together:
+
+- **Listenarr** (port 4545) finds and downloads audiobooks, as Sonarr and Radarr do for series and films. It looks books up on Audible, can follow authors and series, and files each book under author and series.
+- **Audiobookshelf** (port 13378) plays them: in the browser, and in its phone apps, which remember where you stopped and can download books to listen offline. In the app, add your server by the dashboard’s address with port 13378.
+
+Both keep the audiobooks in an `Audiobooks` folder in the media directory. If the media directory already has one under other capitals, such as `AudioBooks`, setup uses that. Setup:
+
+- gives both the shared `admin` login. Audiobookshelf lets whoever opens it first create its admin, and Listenarr starts with no login, so both stay on loopback until setup has given them one;
+- adds an **Audiobooks** library over the folder to Audiobookshelf, with book details from Audible in the Discover country’s store (Audible UK for GB), and the same store for Listenarr’s searches;
+- connects Listenarr to Transmission, with a `listenarr` category and the same `/downloads` path mapping as Sonarr’s, and imports Prowlarr’s indexers that carry audiobooks. If none does, setup says so: add one in Prowlarr, then run setup again;
+- backs both up each night: Audiobookshelf through its own backup, and Listenarr, which has none, by pausing it for the moment its files are copied.
+
+Listenarr only publishes test builds, so setup installs one version it has been checked against, not the newest; MartinFlix releases move it on. Audiobookshelf follows its latest release, like the other apps.
+
+Added to an installation whose dashboard password you already chose, both start with the temporary password, because setup only knows that one. Save your dashboard password again under **Change password** and they get it too. Setup installs apps but never removes them: to stop using audiobooks, stop both on the Services page.
 
 Select individual apps with `--download-client transmission`, `--enable-prowlarr`, `--enable-flaresolverr`, and `--enable-bazarr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects Transmission, Prowlarr, and FlareSolverr.
 

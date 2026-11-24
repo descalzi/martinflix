@@ -1,0 +1,65 @@
+services:
+  # Audiobookshelf plays and serves the audiobooks, to its web player and its phone apps.
+  audiobookshelf:
+    container_name: ${MARTINFLIX_NAMES:?}-audiobookshelf
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    restart: unless-stopped
+    # Runs as the installation's account, so its files are the account's like every other app's.
+    user: "${MARTINFLIX_UID:?Run the bootstrap script}:${MARTINFLIX_GID:?Run the bootstrap script}"
+    environment:
+      # A port above 1024, which an account other than root may listen on.
+      PORT: "13378"
+    ports:
+      - "${MARTINFLIX_AUDIOBOOKS_BIND}:${MARTINFLIX_AUDIOBOOKSHELF_PORT}:13378"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/audiobookshelf/config:/config"
+      - "${MARTINFLIX_STATE_DIR}/audiobookshelf/metadata:/metadata"
+      - type: bind
+        source: ${MARTINFLIX_AUDIOBOOKS_PATH}
+        target: /audiobooks
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:13378/healthcheck').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
+
+  # Listenarr finds and downloads audiobooks, as Sonarr and Radarr do for series and films. It sees the media folder
+  # at /data like them, so the audiobooks folder and the downloads are at the same paths in all three.
+  listenarr:
+    container_name: ${MARTINFLIX_NAMES:?}-listenarr
+    # Listenarr publishes test builds only, so this is one version setup has been checked against, not the newest.
+    image: ghcr.io/listenarrs/listenarr:canary-1.10.6
+    restart: unless-stopped
+    environment:
+      PUID: "${MARTINFLIX_UID:?Run the bootstrap script}"
+      PGID: "${MARTINFLIX_GID:?Run the bootstrap script}"
+      UMASK: "022"
+    ports:
+      - "${MARTINFLIX_AUDIOBOOKS_BIND}:${MARTINFLIX_LISTENARR_PORT}:4545"
+    volumes:
+      - "${MARTINFLIX_STATE_DIR}/listenarr:/app/config"
+      - type: bind
+        source: ${MARTINFLIX_MEDIA_PATH}
+        target: /data
+        bind:
+          create_host_path: false
+    healthcheck:
+      # The image has neither curl nor wget, so bash asks for the web page itself.
+      test: [CMD, bash, -c, "exec 3<>/dev/tcp/127.0.0.1/4545 && printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3 && head -c 12 <&3 | grep -q ' 200'"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 5m
+
+  dashboard:
+    environment:
+      MARTINFLIX_AUDIOBOOKS: "1"
+      MARTINFLIX_AUDIOBOOKSHELF_KEY_FILE: /run/dashboard-secrets/audiobookshelf-key
+      MARTINFLIX_LISTENARR_KEY_FILE: /run/dashboard-secrets/listenarr-key
+      MARTINFLIX_AUDIOBOOKSHELF_WEB_PORT: "${MARTINFLIX_AUDIOBOOKSHELF_PORT}"
+      MARTINFLIX_LISTENARR_WEB_PORT: "${MARTINFLIX_LISTENARR_PORT}"

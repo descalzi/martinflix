@@ -13,6 +13,8 @@ const portOptions = [
   ['transmission', 'Transmission', 9091],
   ['transmission-peer', 'Transmission peer', 51155],
   ['bazarr', 'Bazarr', 6767],
+  ['audiobookshelf', 'Audiobookshelf', 13378],
+  ['listenarr', 'Listenarr', 4545],
 ];
 const STEPS = {
   new: ['task', 'access', 'media', 'vpn', 'downloads', 'options', 'review'],
@@ -50,7 +52,8 @@ function checkPath(value, label) {
 
 function enabledPorts(options) {
   return portOptions.filter(([name]) => name === 'prowlarr' ? options.prowlarr : name.startsWith('transmission')
-    ? options.downloader : name === 'bazarr' ? options.bazarr : true);
+    ? options.downloader : name === 'bazarr' ? options.bazarr
+      : name === 'audiobookshelf' || name === 'listenarr' ? options.audiobooks : true);
 }
 
 function checkPorts(options) {
@@ -78,6 +81,9 @@ function validateStep(step, options) {
   }
   if (step === 'downloads' && options.bazarr && !options.media) {
     throw new Error('Bazarr needs a media directory. Add one in the Media step or turn Bazarr off.');
+  }
+  if (step === 'downloads' && options.audiobooks && !options.media) {
+    throw new Error('Audiobooks need a media directory. Add one in the Media step or turn audiobooks off.');
   }
   if (step === 'options') {
     checkPath(options.state, 'State directory');
@@ -111,6 +117,7 @@ function changeArguments(change) {
   if (change.prowlarr) args.push('--enable-prowlarr');
   if (change.flaresolverr) args.push('--enable-flaresolverr');
   if (change.bazarr) args.push('--enable-bazarr');
+  if (change.audiobooks) args.push('--enable-audiobooks');
   if (change.plex) args.push('--enable-plex');
   if (change.plexName) args.push('--plex-name=' + shellQuote(change.plexName));
   if (change.route && change.route !== 'keep') args.push('--download-network=' + change.route);
@@ -146,6 +153,7 @@ function installArguments(options) {
   if (options.prowlarr) args.push('--enable-prowlarr');
   if (options.prowlarr && options.flaresolverr) args.push('--enable-flaresolverr');
   if (options.bazarr) args.push('--enable-bazarr');
+  if (options.audiobooks) args.push('--enable-audiobooks');
   if (options.plex) args.push('--enable-plex');
   if (options.plex && options.plexName && options.plexName !== 'martinflix') args.push('--plex-name=' + shellQuote(options.plexName));
   if (options.downloader || options.prowlarr || options.bazarr) args.push('--download-network=' + (options.behindVpn ? 'vpn' : 'direct'));
@@ -228,6 +236,8 @@ if (typeof document !== 'undefined') {
       flaresolverr: byId('prowlarr').checked && byId('flaresolverr').checked,
       // Bazarr needs the media directory, so it only counts once one is set.
       bazarr: byId('bazarr').checked && Boolean(byId('media').value.trim()),
+      // Audiobooks are kept in the media directory, so like Bazarr they only count once one is set.
+      audiobooks: byId('audiobooks').checked && Boolean(byId('media').value.trim()),
       // Plex shows the media directory, so like Bazarr it only counts once one is set.
       plex: byId('plex').checked && Boolean(byId('media').value.trim()),
       plexName: byId('plex-name').value.trim(),
@@ -251,6 +261,7 @@ if (typeof document !== 'undefined') {
         prowlarr: byId('u-prowlarr').checked,
         flaresolverr: byId('u-flaresolverr').checked,
         bazarr: byId('u-bazarr').checked,
+        audiobooks: byId('u-audiobooks').checked,
         plex: byId('u-plex').checked,
         plexName: byId('u-plex-name').value.trim(),
         discover: byId('u-discover').checked,
@@ -363,7 +374,7 @@ if (typeof document !== 'undefined') {
       if (change.access === 'lan') summary.push(['Open apps from', change.address]);
       if (change.vpn) summary.push(['Add', `VPN gateway · ${byId('u-vpn-exit').selectedOptions[0].textContent.replace(' (default)', '')}`]);
       const added = [change.transmission && 'Transmission', change.prowlarr && 'Prowlarr', change.flaresolverr && 'FlareSolverr',
-        change.bazarr && 'Bazarr', change.plex && 'Plex'].filter(Boolean);
+        change.bazarr && 'Bazarr', change.audiobooks && 'Audiobookshelf and Listenarr', change.plex && 'Plex'].filter(Boolean);
       if (added.length) summary.push(['Add apps', added.join(', ')]);
       if (change.route !== 'keep') summary.push(['Download traffic', change.route === 'vpn' ? 'Move through the VPN' : 'Move to the normal connection']);
       if (change.media) summary.push(['Media directory', change.media]);
@@ -387,6 +398,7 @@ if (typeof document !== 'undefined') {
         options.bazarr && 'Bazarr'].filter(Boolean);
       summary.push(['Download apps', apps.join(', ') || 'None yet']);
       if (apps.length) summary.push(['Download traffic', options.behindVpn ? 'Through the VPN' : 'Normal internet connection']);
+      summary.push(['Audiobooks', options.audiobooks ? 'Audiobookshelf and Listenarr' : 'Not installed']);
       summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
       summary.push(['Plex', options.plex ? `Installed here as ${options.plexName || 'martinflix'} · setup asks for a claim code`
         : options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not installed']);
@@ -434,6 +446,10 @@ if (typeof document !== 'undefined') {
     byId('bazarr-help').textContent = options.media
       ? 'Finds subtitles in English, French, Brazilian Portuguese and Spanish, and saves them beside your videos.'
       : 'Needs the media directory from the Media step.';
+    byId('audiobooks').disabled = !options.media;
+    byId('audiobooks-help').textContent = options.media
+      ? `Listenarr finds and downloads audiobooks into ${(options.media || '').replace(/\/+$/, '')}/Audiobooks; Audiobookshelf plays them in the browser and its phone apps.`
+      : 'Needs the media directory from the Media step.';
     byId('plex').disabled = !options.media;
     byId('plex-help').textContent = options.media
       ? 'Streams your library to TVs, phones and browsers. Setup asks for a claim code from plex.tv/claim to link it to your account.'
@@ -455,6 +471,7 @@ if (typeof document !== 'undefined') {
     byId('transmission-port').parentElement.hidden = !options.downloader;
     byId('transmission-peer-port').parentElement.hidden = !options.downloader;
     byId('bazarr-port').parentElement.hidden = !options.bazarr;
+    byId('audiobookshelf-port').parentElement.hidden = byId('listenarr-port').parentElement.hidden = !options.audiobooks;
     byId('commands-lede').textContent = options.mode === 'update'
       ? 'Run these on the Linux host as the account that installed MartinFlix, not with sudo. To update MartinFlix itself, or change Discover, Plex, backups or the VPN, use Settings in the dashboard instead.'
       : 'Run these on the Linux host as your normal user, not with sudo. Docker is all it needs: it downloads MartinFlix by itself, with no copy of the code to keep.';

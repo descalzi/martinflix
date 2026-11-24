@@ -32,9 +32,13 @@ MARTINFLIX_ENTRIES = ('install-options.json', 'dashboard-auth', 'dashboard-data'
                       'controller/pin-hash')
 # Settings that describe this machine rather than the stack: where things are and how they're reached.
 MACHINE_OPTIONS = ('project', 'container_prefix', 'media_path', 'backup_dir', 'dashboard_bind', 'ports', 'channel')
-ORDER = ('martinflix', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'transmission', 'plex')
+ORDER = ('martinflix', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'transmission', 'audiobookshelf', 'listenarr', 'plex')
 LABELS = {'martinflix': 'MartinFlix', 'sonarr': 'Sonarr', 'radarr': 'Radarr', 'prowlarr': 'Prowlarr',
-          'bazarr': 'Bazarr', 'transmission': 'Transmission', 'plex': 'Plex'}
+          'bazarr': 'Bazarr', 'transmission': 'Transmission', 'audiobookshelf': 'Audiobookshelf',
+          'listenarr': 'Listenarr', 'plex': 'Plex'}
+# Audiobookshelf's backup: its database, and each book's and author's details and covers by folder.
+AUDIOBOOKSHELF_FOLDERS = {'metadata-items/': 'metadata/items', 'metadata-authors/': 'metadata/authors'}
+LISTENARR_ENTRIES = ('config.json', 'database', 'dataprotection-keys', 'appsettings')
 
 
 class RestoreError(ValueError):
@@ -296,6 +300,32 @@ class Restorer:
             self.move_aside(folder / name)
         for name, source, _ in self.tar_entries(archive_path):
             if name.parts[0] in ('settings.json', 'resume', 'torrents'):
+                self.write(source, folder / name)
+
+    def audiobookshelf(self, archive_path):
+        folder = self.state / 'audiobookshelf'
+        with zipfile.ZipFile(archive_path) as archive:
+            names = [name for name in archive.namelist() if not name.endswith('/')]
+            if 'absdatabase.sqlite' not in names:
+                raise RestoreError('Audiobookshelf’s archive has no database.')
+            with archive.open('absdatabase.sqlite') as source:
+                self.database(source, folder / 'config/absdatabase.sqlite')
+            for prefix, target in AUDIOBOOKSHELF_FOLDERS.items():
+                self.move_aside(folder / target)
+                for name in names:
+                    if name.startswith(prefix):
+                        with archive.open(name) as source:
+                            self.write(source, folder / target / safe_name(name[len(prefix):]))
+
+    def listenarr(self, archive_path):
+        folder = self.state / 'listenarr'
+        entries = list(self.tar_entries(archive_path))
+        if not any(str(name) == 'config.json' for name, _, _ in entries):
+            raise RestoreError('Listenarr’s archive has no config.json.')
+        for top in LISTENARR_ENTRIES:
+            self.move_aside(folder / top)
+        for name, source, _ in self.tar_entries(archive_path):
+            if name.parts[0] in LISTENARR_ENTRIES:
                 self.write(source, folder / name)
 
     def plex(self, archive_path):

@@ -114,3 +114,12 @@ test('a backup folder is passed on and must be an absolute path', () => {
     ['--backup-dir=/mnt/nas/Backups']);
   assert.throws(() => wizard.validateStep('options', {...defaults, backupDir: 'Backups'}), /Backup folder must be an absolute/);
 });
+
+test('Audiobooks are added with the media directory, with their own ports', () => {
+  const args = wizard.installArguments({...defaults, prowlarr: false, flaresolverr: false, audiobooks: true,
+    ports: {listenarr: '14545'}});
+  assert.deepStrictEqual(args, ['--media-path=/mnt/media', '--enable-audiobooks', '--listenarr-port=14545']);
+  assert.throws(() => wizard.validateStep('downloads', {...defaults, media: '', audiobooks: true}), /Audiobooks need a media directory/);
+  const update = wizard.installArguments({mode: 'update', state: '', changes: {audiobooks: true}});
+  assert.deepStrictEqual(update, ['--enable-audiobooks']);
+});

@@ -735,3 +735,193 @@ def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_
     for api in (*(AppApi(name, ports[app], arr_keys[app], address=arr_address) for app, name in ARR_NAMES.items()),
                 *([prowlarr] if prowlarr else [])):
         refresh_health(api)
+
+
+# Audiobooks: Audiobookshelf plays them, Listenarr finds and downloads them.
+AUDIOBOOKS_USER = 'admin'
+AUDIOBOOKSHELF_LIBRARY = 'Audiobooks'
+AUDIOBOOKSHELF_FOLDER = '/audiobooks'
+AUDIOBOOKSHELF_KEY_NAME = 'MartinFlix'
+# Audible's stores, by the Discover country, for book details in Audiobookshelf and searches in Listenarr.
+AUDIBLE_STORES = {'GB': 'uk', 'IE': 'uk', 'US': 'us', 'CA': 'ca', 'AU': 'au', 'NZ': 'au', 'FR': 'fr', 'DE': 'de',
+                  'ES': 'es', 'IT': 'it', 'JP': 'jp', 'IN': 'in'}
+
+
+def audible_store(region):
+    return AUDIBLE_STORES.get((region or '').upper(), 'us')
+
+
+class AudiobookshelfApi:
+    """Audiobookshelf's API: JSON, signed in with a bearer token (an API key, or a login's access token)."""
+
+    def __init__(self, address, port, token=None):
+        self.name = 'Audiobookshelf'
+        self.root = f'http://{address}:{port}'
+        self.token = token
+
+    def signed(self, token):
+        """The same server, signed in with another token."""
+        other = AudiobookshelfApi('', 0, token)
+        other.root = self.root
+        return other
+
+    def request(self, route, payload=None, method=None, timeout=30):
+        headers = {'Accept': 'application/json'}
+        if self.token:
+            headers['Authorization'] = f'Bearer {self.token}'
+        body = None
+        if payload is not None:
+            body = json.dumps(payload).encode()
+            headers['Content-Type'] = 'application/json'
+        request = urllib.request.Request(self.root + route, data=body, headers=headers, method=method)
+        try:
+            with OPENER.open(request, timeout=timeout) as response:
+                data = response.read()
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            raise AppApiHttpError(self.name, route, exc.code) from None
+        except OSError:
+            raise ValueError(f'{self.name}: could not read {route}. Check the app is running and rerun.') from None
+        try:
+            return json.loads(data) if data.strip().startswith((b'{', b'[')) else None
+        except ValueError:
+            raise ValueError(f'{self.name}: {route} sent an answer setup could not read.') from None
+
+
+def audiobookshelf_key_works(api, key):
+    if not key:
+        return False
+    try:
+        api.signed(key).request('/api/me')
+        return True
+    except AppApiHttpError as exc:
+        if exc.status in (401, 403):
+            return False
+        raise
+
+
+def ensure_audiobookshelf(address, port, key, initial_password, region, log=print, wait=60, sleep=__import__('time').sleep):
+    """Give Audiobookshelf its admin account (the shared login), an API key for MartinFlix, and a library over the
+    audiobooks folder. Returns the API key. The account and the library are only made if missing, so changes made
+    in Audiobookshelf stay."""
+    api = AudiobookshelfApi(address, port)
+    for attempt in range(wait):
+        try:
+            status = api.request('/status')
+            break
+        except ValueError:
+            if attempt == wait - 1:
+                raise
+            sleep(1)
+    if not (status or {}).get('isInit'):
+        # Audiobookshelf has no account at all until this: the first caller becomes its owner.
+        api.request('/init', {'newRoot': {'username': AUDIOBOOKS_USER, 'password': initial_password()}})
+        log('   Audiobookshelf: admin account created.', flush=True)
+        key = None
+    if not audiobookshelf_key_works(api, key):
+        try:
+            login = api.request('/login', {'username': AUDIOBOOKS_USER, 'password': initial_password()})
+        except AppApiHttpError as exc:
+            if exc.status != 401:
+                raise
+            raise ValueError('Audiobookshelf: MartinFlix has no working API key for it, and its admin no longer signs in '
+                             'with the temporary password. Sign in to Audiobookshelf, create an API key for admin under '
+                             'Settings → API Keys, save it in the file dashboard-secrets/audiobookshelf-key in the state '
+                             'folder, and rerun setup.') from None
+        user = (login or {}).get('user') or {}
+        signed_in = api.signed(user.get('accessToken'))
+        created = signed_in.request('/api/api-keys', {'name': AUDIOBOOKSHELF_KEY_NAME, 'userId': user.get('id'),
+                                                      'isActive': True})
+        key = ((created or {}).get('apiKey') or {}).get('apiKey')
+        if not key:
+            raise ValueError('Audiobookshelf did not return the API key setup asked for. Check its logs and rerun.')
+    api.token = key
+    libraries = (api.request('/api/libraries') or {}).get('libraries') or []
+    if not any(folder.get('fullPath', '').rstrip('/') == AUDIOBOOKSHELF_FOLDER
+               for library in libraries for folder in library.get('folders') or []):
+        store = audible_store(region)
+        api.request('/api/libraries', {
+            'name': AUDIOBOOKSHELF_LIBRARY, 'folders': [{'fullPath': AUDIOBOOKSHELF_FOLDER}], 'mediaType': 'book',
+            'icon': 'audiobookshelf', 'provider': 'audible' if store == 'us' else f'audible.{store}'})
+        log(f'   Audiobookshelf: {AUDIOBOOKSHELF_LIBRARY} library added, with book details from Audible ({store.upper()}).',
+            flush=True)
+    return key
+
+
+def truthy(value):
+    return str(value or '').strip().casefold() in ('true', 'enabled', 'yes', '1')
+
+
+def folded(item):
+    """Listenarr writes some keys in PascalCase and others in camelCase; read either."""
+    return {key.casefold(): value for key, value in (item or {}).items()} if isinstance(item, dict) else {}
+
+
+def ensure_listenarr_login(api, initial_password):
+    """Listenarr starts with no login. Give it the shared admin account and turn its login on. Returns True when it
+    did, False when Listenarr already had one."""
+    if truthy(folded(api.request('configuration/startupconfig')).get('authenticationrequired')):
+        return False
+    settings = api.request('configuration/settings')
+    settings.update(adminUsername=AUDIOBOOKS_USER, adminPassword=initial_password())
+    api.request('configuration/settings', settings)
+    api.request('configuration/startupconfig', {'AuthenticationRequired': 'true'})
+    return True
+
+
+LISTENARR_CLIENT = 'MartinFlix Transmission'
+LISTENARR_CATEGORY = 'listenarr'
+
+
+def configure_listenarr(api, *, root, region, transmission_password=None, downloads_behind_vpn=True, prowlarr_key=None,
+                        seed=False, log=print):
+    """Listenarr's root folder, its Transmission connection and Prowlarr's audiobook indexers, on every run; its
+    Audible store once."""
+    if not any((folder.get('path') or '').rstrip('/') == root for folder in api.request('rootfolders') or []):
+        api.request('rootfolders', {'name': 'Audiobooks', 'path': root, 'isDefault': True})
+        log(f'   Listenarr: audiobooks go to {root}.', flush=True)
+    if seed:
+        settings = api.request('configuration/settings')
+        settings['defaultSearchRegion'] = audible_store(region)
+        api.request('configuration/settings', settings)
+    if transmission_password:
+        host = 'gluetun' if downloads_behind_vpn else 'transmission'
+        clients = [item for item in api.request('download-clients') or [] if (item.get('type') or '').casefold() == 'transmission']
+        client = next((item for item in clients if item.get('name') == LISTENARR_CLIENT), None) or \
+            next((item for item in clients if item.get('host') in ROUTE_HOSTS['transmission']), None)
+        entry = {**(client or {}), 'name': LISTENARR_CLIENT, 'type': 'transmission', 'host': host, 'port': 9091,
+                 'username': TRANSMISSION_USER, 'password': transmission_password, 'useSSL': False, 'isEnabled': True,
+                 # Transmission's own path; Listenarr finds it under /data through the mapping below.
+                 'downloadPath': f'/downloads/complete/{LISTENARR_CATEGORY}',
+                 'removeCompletedDownloads': (client or {}).get('removeCompletedDownloads') or 'remove_and_delete',
+                 'settings': {**((client or {}).get('settings') or {}), 'category': LISTENARR_CATEGORY}}
+        entry.pop('settingsJson', None)
+        saved = api.request('download-clients', entry)
+        client_id = (client or {}).get('id') or (saved or {}).get('id')
+        if not client:
+            log('   Listenarr: downloads go to Transmission.', flush=True)
+        mappings = api.request('remotepathmappings') or []
+        if client_id and not any(item.get('downloadClientId') == client_id and
+                                 (item.get('remotePath') or '').rstrip('/') == '/downloads' for item in mappings):
+            api.request('remotepathmappings', {'downloadClientId': client_id, 'name': 'MartinFlix downloads',
+                                               'remotePath': '/downloads/', 'localPath': '/data/downloads/'})
+    if prowlarr_key:
+        host = 'gluetun' if downloads_behind_vpn else 'prowlarr'
+        stale = [f'http://{other}:9696/' for other in ROUTE_HOSTS['prowlarr'] if other != host]
+        for item in api.request('indexers') or []:
+            # Indexers imported before the download route changed point at Prowlarr's old address.
+            if any((item.get('url') or '').startswith(prefix) for prefix in stale):
+                api.request(f'indexers/{item["id"]}', method='DELETE')
+        try:
+            result = api.request('indexers/prowlarr/import', {'url': f'http://{host}:9696', 'apiKey': prowlarr_key})
+        except AppApiHttpError as exc:
+            log(f'   Listenarr: could not import Prowlarr’s indexers (HTTP {exc.status}). Import them under Settings → '
+                'Indexers in Listenarr.', flush=True)
+            return
+        added = (result or {}).get('addedCount') or 0
+        if added:
+            log(f'   Listenarr: {added} of Prowlarr’s indexers added for audiobooks.', flush=True)
+        elif not any((item.get('url') or '').startswith(f'http://{host}:9696/') for item in api.request('indexers') or []):
+            # Prowlarr only passes on indexers that list an audiobook category.
+            log('   Listenarr: none of Prowlarr’s indexers lists audiobooks. Add one that does in Prowlarr, then rerun setup.',
+                flush=True)

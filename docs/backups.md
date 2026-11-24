@@ -11,6 +11,8 @@ Each backup is a folder named by its start time, with one archive per app and a 
 | `sonarr.zip`, `radarr.zip`, `prowlarr.zip` | The app's own backup (database and settings), made through its API so the database is consistent while the app runs. Sonarr's and Radarr's databases hold every series and film they track, including ones not released yet, with their monitoring, quality profiles, tags and history |
 | `bazarr.zip` | Bazarr's own backup |
 | `transmission.tar.gz` | `settings.json` and the torrent list, so seeding can resume |
+| `audiobookshelf.zip` | Audiobookshelf's own backup: its database (accounts, libraries, listening progress) and each book's and author's details and covers. The audiobooks themselves are media, so not part of it |
+| `listenarr.tar.gz` | Listenarr's `config.json`, database and login keys, copied while Listenarr is paused for a moment, as it has no backup feature of its own. Its image cache and logs are left out |
 | `plex.tar.gz` | `Preferences.xml` and Plex's library and blobs databases (libraries, watch history, watched status), copied with Plex's own SQLite while Plex runs. Plex's caches and downloaded artwork are left out; Plex rebuilds them |
 | `martinflix.tar.gz` | Setup's options, the dashboard password hash, app keys, VPN credentials and the PIN hash. **Private**: readable only by your account |
 
@@ -24,7 +26,7 @@ A checksum proves each archive matches what was saved, not that it restores; a r
 
 1. checks every archive against the backup's checksums, and that none would write outside the state folder, before it changes anything;
 2. stops the apps. The dashboard and controller keep running, so the page shows the restore as it goes, with the progress of any large archive;
-3. puts each app's data back: Sonarr's, Radarr's and Prowlarr's database and `config.xml`, Bazarr's database and `config.yaml`, Transmission's settings and torrent list, Plex's `Preferences.xml` and databases, and MartinFlix's options, keys, VPN credentials, dashboard password and PIN;
+3. puts each app's data back: Sonarr's, Radarr's and Prowlarr's database and `config.xml`, Bazarr's database and `config.yaml`, Transmission's settings and torrent list, Audiobookshelf's database and book details, Listenarr's settings and database, Plex's `Preferences.xml` and databases, and MartinFlix's options, keys, VPN credentials, dashboard password and PIN;
 4. starts the apps on the restored data and reconnects them, as an update does. The dashboard restarts last, and the page reconnects by itself.
 
 Everything the restore replaces is moved, not deleted, into a `before-restore-<date>` folder in the state directory. Only the newest such folder is kept. Media files are never part of a backup, so they stay as they are. Options that describe the machine rather than the stack (its address and ports, the media and backup folders, the release channel) stay as they are now; everything else comes from the backup, including which apps are installed. The PIN and dashboard password become the ones from the backup.
