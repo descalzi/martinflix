@@ -100,11 +100,25 @@ def resolve_state_directory(requested):
     return current.resolve()
 
 
-def container_prefix(state, project):
-    """Containers are named <prefix>-<app>: plain martinflix for the usual installation, and its project name for
-    another one beside it (with its own --state-dir), so the two never clash."""
-    usual = {path.resolve() for path in default_state_directories()}
-    return 'martinflix' if Path(state).resolve() in usual else project
+CONTAINER_PREFIX = 'martinflix'
+
+
+def container_prefix(project, previous):
+    """Containers are named <prefix>-<app>: plain martinflix, unless another installation on this machine already
+    has those names, when this one uses its project name so the two never clash. Decided once, then kept."""
+    saved = previous.get('container_prefix')
+    if saved in (CONTAINER_PREFIX, project):
+        return saved
+    try:
+        listed = subprocess.run(['docker', 'ps', '-a', '--filter', f'name=^{CONTAINER_PREFIX}-(dashboard|controller|sonarr)$',
+                                 '--format', '{{.Label "com.docker.compose.project"}}'],
+                                capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return project
+    if listed.returncode:
+        return project
+    owners = {line.strip() for line in listed.stdout.splitlines() if line.strip()}
+    return CONTAINER_PREFIX if owners <= {project} else project
 
 
 def project_exists(project):
@@ -1051,7 +1065,7 @@ def reset_installation(state, project):
                            MARTINFLIX_GID=str(os.getgid()), MARTINFLIX_DASHBOARD_BIND='127.0.0.1',
                            MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878',
                            MARTINFLIX_IMAGE=OWN_IMAGE, MARTINFLIX_BACKUP_DIR='/nonexistent',
-                           MARTINFLIX_BACKUP_HOST_DIR='/nonexistent', MARTINFLIX_NAMES=container_prefix(state, project))
+                           MARTINFLIX_BACKUP_HOST_DIR='/nonexistent', MARTINFLIX_NAMES=container_prefix(project, saved_options(state)))
         subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE),
                         'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
@@ -1188,7 +1202,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
                        MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
     environment['MARTINFLIX_IMAGE'] = OWN_IMAGE
-    environment['MARTINFLIX_NAMES'] = container_prefix(state, project)
+    options['container_prefix'] = environment['MARTINFLIX_NAMES'] = container_prefix(project, previous)
     channel = args.channel or previous.get('channel') or (os.environ.get('MARTINFLIX_CHANNEL') if
                                                           os.environ.get('MARTINFLIX_CHANNEL') in CHANNELS else 'edge')
     options['channel'] = channel

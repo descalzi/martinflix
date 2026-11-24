@@ -31,7 +31,7 @@ PLEX_IDENTITY = ('MachineIdentifier', 'ProcessedMachineIdentifier', 'AnonymousMa
 MARTINFLIX_ENTRIES = ('install-options.json', 'dashboard-auth', 'dashboard-secrets', 'download-secrets',
                       'controller/pin-hash')
 # Settings that describe this machine rather than the stack: where things are and how they're reached.
-MACHINE_OPTIONS = ('project', 'media_path', 'backup_dir', 'dashboard_bind', 'ports', 'channel')
+MACHINE_OPTIONS = ('project', 'container_prefix', 'media_path', 'backup_dir', 'dashboard_bind', 'ports', 'channel')
 ORDER = ('martinflix', 'sonarr', 'radarr', 'prowlarr', 'bazarr', 'transmission', 'plex')
 LABELS = {'martinflix': 'MartinFlix', 'sonarr': 'Sonarr', 'radarr': 'Radarr', 'prowlarr': 'Prowlarr',
           'bazarr': 'Bazarr', 'transmission': 'Transmission', 'plex': 'Plex'}

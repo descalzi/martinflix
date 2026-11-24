@@ -239,13 +239,19 @@ class AdoptTests(Folder):
 
 
 class ContainerNameTests(unittest.TestCase):
-    def test_the_usual_installation_has_plain_names_and_another_keeps_its_project(self):
-        with tempfile.TemporaryDirectory() as folder:
-            usual, legacy, other = Path(folder) / 'state', Path(folder) / 'old', Path(folder) / 'other'
-            with patch.object(install, 'default_state_directories', return_value=(usual, legacy)):
-                self.assertEqual(install.container_prefix(usual, 'martinflix-abc'), 'martinflix')
-                self.assertEqual(install.container_prefix(legacy, 'martinflix-first-run-abc'), 'martinflix')
-                self.assertEqual(install.container_prefix(other, 'martinflix-def'), 'martinflix-def')
+    def names(self, previous, listed):
+        result = type('Result', (), {'returncode': 0, 'stdout': listed})()
+        with patch.object(install.subprocess, 'run', return_value=result):
+            return install.container_prefix('martinflix-abc', previous)
+
+    def test_plain_names_unless_another_installation_has_them(self):
+        self.assertEqual(self.names({}, ''), 'martinflix', 'a custom state folder alone keeps plain names')
+        self.assertEqual(self.names({}, 'martinflix-abc\n'), 'martinflix', 'its own containers are no clash')
+        self.assertEqual(self.names({}, 'martinflix-other\n'), 'martinflix-abc')
+
+    def test_the_choice_is_kept(self):
+        self.assertEqual(self.names({'container_prefix': 'martinflix-abc'}, ''), 'martinflix-abc')
+        self.assertEqual(self.names({'container_prefix': 'martinflix'}, 'martinflix-other\n'), 'martinflix')
 
 
 if __name__ == '__main__':
