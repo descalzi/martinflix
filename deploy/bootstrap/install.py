@@ -16,6 +16,8 @@ import re
 import secrets
 import shlex
 import shutil
+import tarfile
+import zipfile
 import socket
 import subprocess
 import sys
@@ -1368,8 +1370,25 @@ def install(args, overlay_file):
         previous = {}
     if backup:
         previous, plan = restore_backup(args, backup, target, previous, plan, project, overlay_file)
-    run_installation(plan, target, previous,
-                     mode='restore' if backup else 'reset' if args.reset else 'update' if existing else 'install')
+    try:
+        run_installation(plan, target, previous,
+                         mode='restore' if backup else 'reset' if args.reset else 'update' if existing else 'install')
+    except ValueError as exc:
+        if backup:
+            # The data is already the backup's; running setup again finishes the job without restoring again.
+            raise ValueError(f'{exc}\n\nThe backup’s data is restored, but setup stopped before every app was running. '
+                             'Running setup again finishes the restore; it doesn’t restore the backup a second time.') from None
+        raise
+
+
+def setup_again(state):
+    """How to finish an installation whose setup stopped part-way, from wherever the person is."""
+    channel = os.environ.get('MARTINFLIX_CHANNEL') if os.environ.get('MARTINFLIX_CHANNEL') in CHANNELS else 'edge'
+    usual = Path(state).resolve() in {path.resolve() for path in default_state_directories()}
+    return ('in the dashboard, choose Run setup again where this run is shown, under Settings or Backups. If the '
+            'dashboard doesn’t open, run in a terminal on this machine:\n'
+            '  docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME:$HOME" -e HOME \\\n'
+            f'    {IMAGE_REPO}:{channel} update' + ('' if usual else f' --state-dir {shlex.quote(str(state))}'))
 
 
 # Kept running through a restore, to report it.
@@ -1427,7 +1446,16 @@ def restore_backup(args, backup, state, previous, plan, project, overlay_file):
                              + (stopped.stderr or stopped.stdout).strip()[-600:])
         aside = state / datetime.datetime.now().strftime('before-restore-%Y-%m-%d_%H%M%S')
         private_directory(aside)
-        restore.Restorer(state, aside, keep_plex_identity=args.keep_plex_identity).restore(backup)
+        try:
+            restore.Restorer(state, aside, keep_plex_identity=args.keep_plex_identity).restore(backup)
+        except (restore.RestoreError, OSError, ValueError, tarfile.TarError, zipfile.BadZipFile) as exc:
+            # Everything replaced was put back, so the apps can carry on as they were.
+            started = subprocess.run(plan['compose'] + ['start', *apps], env=plan['environment'], capture_output=True,
+                                     text=True, timeout=600)
+            shutil.rmtree(aside, ignore_errors=True)
+            raise ValueError(f'The restore failed: {exc}\nNothing was changed: every app’s data was put back as it '
+                             'was' + (', and the apps are running again.' if not started.returncode else
+                                      '. Start the apps again by running setup ' + setup_again(state))) from None
         restore.prune_aside(state, aside)
         merge = restore.merge_exported if backup.exported else restore.merge_options
         options = merge(saved_options(state), previous)
@@ -1592,8 +1620,8 @@ def run_installation(plan, state, previous, mode='install'):
         raise ValueError('This step could not finish. Check the Docker details above. '
                          'If an image could not be downloaded, check this VM’s internet connection and Docker storage.\n'
                          f'To find the containers, run: {list_command}\n'
-                         'For a failed container, run docker logs followed by its name. '
-                         'Then rerun setup with the same options.')
+                         'For a failed container, run docker logs followed by its name. Then run setup again: '
+                         + setup_again(state))
 
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

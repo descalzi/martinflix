@@ -231,6 +231,17 @@ class Releases:
             tagged = self.stack.run(['image', 'tag', self.available['id'], image], timeout=60)
             if tagged.returncode:
                 raise UpdateError(502, 'Docker could not prepare the new version: ' + tail(tagged))
+        elif kind == 'finish':
+            # Setup again after a run that stopped part-way, from the same version that run used if it is here
+            # (an update may have stopped before this controller was replaced), without that run's options.
+            last = self.updater() or {}
+            if last.get('state') != 'failed':
+                raise UpdateError(409, 'The last run of setup finished, so there is nothing to finish.')
+            version = last.get('version') or current['version']
+            image = f'{current["repo"]}:{version}'
+            if self.stack.run(['image', 'inspect', image], timeout=30).returncode:
+                version = current['version']
+                image = config.get('image') or f'{current["repo"]}:{version}'
         else:
             version = current['version']
             image = config.get('image') or f'{current["repo"]}:{version}'

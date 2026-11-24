@@ -324,15 +324,34 @@ class Restorer:
         progress.finish()
 
     def restore(self, backup):
-        for app in ORDER:
-            if app not in backup.apps:
+        try:
+            for app in ORDER:
+                if app not in backup.apps:
+                    continue
+                archive = backup.apps[app]
+                if app in ARR_APPS:
+                    self.arr(app, archive)
+                else:
+                    getattr(self, app)(archive)
+                self.log(f'   {LABELS[app]:<20} restored')
+        except BaseException:
+            self.roll_back()
+            raise
+
+    def roll_back(self):
+        """Put back everything moved aside, so a restore that fails part-way leaves each app's data as it was."""
+        for target in sorted(self.moved, key=lambda path: len(path.parts), reverse=True):
+            kept = self.aside / target.relative_to(self.state)
+            if not (kept.exists() or kept.is_symlink()):
                 continue
-            archive = backup.apps[app]
-            if app in ARR_APPS:
-                self.arr(app, archive)
-            else:
-                getattr(self, app)(archive)
-            self.log(f'   {LABELS[app]:<20} restored')
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            elif target.exists() or target.is_symlink():
+                target.unlink()
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            kept.rename(target)
+        self.moved.clear()
+        # Anything the restore wrote where nothing was before is left; it is unused data, harmless to the apps.
 
 
 def safe_link(name, target):

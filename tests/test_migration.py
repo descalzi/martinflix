@@ -254,5 +254,52 @@ class ContainerNameTests(unittest.TestCase):
         self.assertEqual(self.names({'container_prefix': 'martinflix'}, 'martinflix-other\n'), 'martinflix')
 
 
+
+class RollBackTests(Folder):
+    def test_a_restore_that_fails_part_way_puts_everything_back(self):
+        state, aside = self.root / 'state', self.root / 'aside'
+        (state / 'sonarr').mkdir(parents=True)
+        (state / 'sonarr/config.xml').write_text('mine')
+        (state / 'install-options.json').write_text('{"mine": true}')
+        restorer = restore.Restorer(state, aside, log=lambda *a: None)
+
+        def broken_sonarr(app, archive):
+            restorer.write(io.BytesIO(b'backup'), state / 'sonarr/config.xml')
+            raise restore.RestoreError('disk full')
+
+        def martinflix(archive):
+            restorer.write(io.BytesIO(b'{}'), state / 'install-options.json')
+        restorer.martinflix, restorer.arr = martinflix, broken_sonarr
+        backup = type('Backup', (), {'apps': {'martinflix': 'm', 'sonarr': 's'}})()
+        with self.assertRaises(restore.RestoreError):
+            restorer.restore(backup)
+        self.assertEqual((state / 'sonarr/config.xml').read_text(), 'mine')
+        self.assertEqual((state / 'install-options.json').read_text(), '{"mine": true}')
+
+
+class FinishTests(unittest.TestCase):
+    def test_finishing_reruns_setup_from_the_failed_runs_version_without_its_options(self):
+        import releases
+        stack = type('Stack', (), {})()
+        runs = []
+
+        def run(args, timeout=0):
+            runs.append(args)
+            return type('Result', (), {'returncode': 0, 'stdout': '', 'stderr': ''})()
+        stack.run = run
+        stack.config = lambda: {'project': 'p', 'names': 'martinflix', 'stateDir': '/state', 'image': 'repo:1',
+                                'setup': {'home': '/home/m', 'runAs': '1000:1000', 'socket': '/var/run/docker.sock'}}
+        manager = releases.Releases(stack, environ={'MARTINFLIX_VERSION': '1', 'MARTINFLIX_IMAGE_REPO': 'repo'})
+        with patch.object(manager, 'updater', return_value={'state': 'failed', 'version': '2'}):
+            manager.start('finish', detail='restore')
+        command = runs[-1]
+        self.assertIn('repo:2', command)
+        self.assertEqual(command[command.index('repo:2') + 1:], ['update', '--state-dir', '/state'])
+        self.assertIn('io.martinflix.detail=restore', command)
+        with patch.object(manager, 'updater', return_value={'state': 'succeeded'}), \
+                self.assertRaises(releases.UpdateError):
+            manager.start('finish')
+
+
 if __name__ == '__main__':
     unittest.main()

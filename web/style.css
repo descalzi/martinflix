@@ -622,6 +622,8 @@
   .change-list li > .muted { flex: none; white-space: nowrap; }
   .setup-run { max-width: 1320px; margin-bottom: var(--space-5); }
   .table td.row-action { text-align: right; padding-block: var(--space-2); }
+  .setup-run-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between; margin-top: var(--space-3); }
+  .setup-run-actions p { margin: 0; color: var(--fg-muted); font-size: var(--text-sm); flex: 1 1 280px; }
   .setup-log {
     max-height: 420px; overflow: auto; margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
     background: var(--forest); color: var(--rail-fg); font: .8125rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;

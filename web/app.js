@@ -425,6 +425,10 @@ function setupControls() {
       startUpdate();
       return;
     }
+    if (action === 'setup-again') {
+      setupAgain();
+      return;
+    }
     if (action === 'restore') {
       startRestore(button.dataset.backup, button.dataset.created);
       return;
@@ -1390,15 +1394,18 @@ function renderRelease(data) {
 function renderRun(updater) {
   const panel = $('#setup-run');
   // Backups shows restores; Settings shows updates and settings changes.
-  const here = updater && (page === 'backups') === (updater.kind === 'restore');
+  // Finishing a stopped restore shows on Backups too.
+  const restoreSide = updater && (updater.kind === 'restore' || (updater.kind === 'finish' && updater.detail === 'restore'));
+  const here = updater && (page === 'backups') === restoreSide;
   const recent = here && (updater.state === 'running' || Date.now() - new Date(updater.finishedAt) < 86400000);
   panel.hidden = !recent;
   if (!recent) return;
-  const taken = updater.detail ? when(updater.detail.replace(/^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$/, '$1T$2:$3:$4')) || updater.detail : '';
+  const taken = updater.detail && updater.kind === 'restore' ? when(updater.detail.replace(/^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})$/, '$1T$2:$3:$4')) || updater.detail : '';
   const titles = {
     update: {running: `Updating to ${updater.version}…`, succeeded: `Updated to ${updater.version}`, failed: 'The update did not finish'},
     settings: {running: 'Applying your settings…', succeeded: 'Settings applied', failed: 'The settings could not be applied'},
     restore: {running: `Restoring the backup from ${taken}…`, succeeded: `Restored the backup from ${taken}`, failed: 'The restore did not finish'},
+    finish: {running: 'Running setup again…', succeeded: 'Setup finished', failed: 'Setup still did not finish'},
   }[updater.kind] || {running: 'Running setup…', succeeded: 'Setup finished', failed: 'Setup did not finish'};
   $('#setup-run-title').textContent = titles[updater.state];
   const started = when(updater.startedAt, {hour: '2-digit', minute: '2-digit'});
@@ -1406,10 +1413,13 @@ function renderRun(updater) {
   $('#setup-run-detail').textContent = updater.state === 'running'
     ? updater.kind === 'restore' ? `Started ${started}. The apps stop while their data is replaced; follow it here. The dashboard restarts at the end, and this page reconnects by itself.`
       : `Started ${started}. The dashboard restarts near the end and this page reloads by itself.`
-    : updater.state === 'failed' ? `Stopped at ${finished}. The output below says why; nothing after that step changed. Fix it, then try again.`
+    : updater.state === 'failed' ? `Stopped at ${finished}. The output below says why; nothing after that step changed.`
     : `Finished at ${finished}.`;
   $('#setup-run-badge').innerHTML = updater.state === 'running' ? '<span class="badge">Running</span>'
     : updater.state === 'succeeded' ? '<span class="badge ok">Done</span>' : '<span class="badge crit">Failed</span>';
+  $('#setup-run-actions').hidden = updater.state !== 'failed';
+  // A second try at finishing a restore is still about that restore.
+  $('#setup-again').dataset.kind = updater.kind === 'finish' ? updater.detail || 'finish' : updater.kind;
   const log = $('#setup-log');
   const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   log.textContent = updater.log || 'Starting…';
@@ -1461,6 +1471,16 @@ function startRestore(name, created) {
   askPin({title: `Restore the backup from ${taken}?`, verb: 'Restore', busy: 'Starting…', icon: 'refresh',
     detail: `Every app’s settings and data go back to how they were on ${taken}: series and films added since are forgotten, and the PIN and dashboard password become the ones from then. What it replaces is kept aside on the VM, not deleted. Media files stay as they are. The apps stop for a few minutes; follow it here.`},
   code => post('/api/restore', {pin: code, backup: name}),
+  () => { following = true; lastRunState = 'running'; system(); });
+}
+
+function setupAgain() {
+  const kind = $('#setup-again').dataset.kind;
+  askPin({title: 'Run setup again?', verb: 'Run setup', busy: 'Starting…', icon: 'refresh',
+    detail: kind === 'restore' || kind === 'finish'
+      ? 'Setup starts every app on the data that’s here now and finishes connecting them. The backup isn’t restored a second time. The dashboard restarts near the end, and this page reloads by itself.'
+      : 'Setup runs again with your current settings and starts anything that isn’t running. The dashboard restarts near the end, and this page reloads by itself.'},
+  code => post('/api/system/finish', {pin: code, kind}),
   () => { following = true; lastRunState = 'running'; system(); });
 }
 

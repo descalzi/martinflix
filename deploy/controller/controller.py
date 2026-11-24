@@ -327,7 +327,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'ok': True, 'checking': True}, 202)
             return
         action = {'/restart': 'restart', '/update': 'update', '/pin': 'pin', '/backup': 'backup',
-                  '/release/update': 'release', '/settings': 'settings', '/restore': 'restore'}.get(self.path)
+                  '/release/update': 'release', '/release/finish': 'finish', '/settings': 'settings',
+                  '/restore': 'restore'}.get(self.path)
         if action is None:
             self.send_json({'error': 'Not found.'}, 404)
             return
@@ -347,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
         if problem := self.server.pins.check(pin):
             self.send_json({'error': problem[1]}, problem[0])
             return
-        if action in ('release', 'settings', 'restore'):
+        if action in ('release', 'settings', 'restore', 'finish'):
             self.start_setup(action, request)
             return
         if updating(self.server):
@@ -400,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({'error': 'Nothing changed.'}, 400)
                     return
                 result = self.server.releases.start('settings', arguments, given)
+            elif action == 'finish':
+                result = self.server.releases.start('finish', detail=str(request.get('kind') or '')[:20])
             else:
                 result = self.server.releases.start('update')
             self.send_json({'ok': True, **result}, 202)

@@ -29,6 +29,12 @@ A checksum proves each archive matches what was saved, not that it restores; a r
 
 Everything the restore replaces is moved, not deleted, into a `before-restore-<date>` folder in the state directory. Only the newest such folder is kept. Media files are never part of a backup, so they stay as they are. Options that describe the machine rather than the stack (its address and ports, the media and backup folders, the release channel) stay as they are now; everything else comes from the backup, including which apps are installed. The PIN and dashboard password become the ones from the backup.
 
+**If a restore stops part-way**, what to do depends on where:
+
+- While the data is being put back (a damaged archive, a full disk): setup moves everything it replaced back where it was and starts the apps again. Nothing changed.
+- After the data is back, while the apps start or reconnect: the restore itself is done. The dashboard keeps running, and the failed run shows a **Run setup again** button (PIN). It starts every app on the restored data and finishes connecting them, without restoring the backup a second time.
+- While the dashboard itself restarts, near the very end: run the update from a terminal, as setup's output says.
+
 **From a terminal**, add `--restore` with the backup's folder to setup. On the same machine:
 
 ```sh

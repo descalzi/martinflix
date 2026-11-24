@@ -1684,7 +1684,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({**check, 'home': home, 'verdict': vpn_verdict(check, home) if check.get('installed') else None,
                             'checkedAt': datetime.now(timezone.utc).isoformat(timespec='seconds')})
             return
-        if path in ('/api/system/check', '/api/system/update', '/api/settings', '/api/restore'):
+        if path in ('/api/system/check', '/api/system/update', '/api/system/finish', '/api/settings', '/api/restore'):
             self.system_request(path)
             return
         if self.server.admin_state_file is None or path not in ('/login', '/setup-password', '/change-password', '/change-pin'):
@@ -1790,8 +1790,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'Choose a backup to restore.'}, 400)
                 return
             payload['backup'] = backup
+        if path == '/api/system/finish':
+            kind = request.get('kind')
+            payload['kind'] = kind if kind in ('update', 'settings', 'restore', 'finish') else ''
         target = {'/api/system/check': '/release/check', '/api/system/update': '/release/update',
-                  '/api/settings': '/settings', '/api/restore': '/restore'}[path]
+                  '/api/system/finish': '/release/finish', '/api/settings': '/settings', '/api/restore': '/restore'}[path]
         try:
             result = controller_request(target, payload, timeout=60)
         except ControllerError as exc:
