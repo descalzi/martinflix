@@ -1199,13 +1199,18 @@ class PlayLog:
         """Add plays from elsewhere (an import), skipping any already here. Returns how many were new."""
         added = 0
         with self.changing():
-            known = {(play.get('ratingKey'), play.get('started') // 60 if isinstance(play.get('started'), int) else None)
+            known = {(play.get('ratingKey'), play.get('started') // 60 if isinstance(play.get('started'), int) else None): play
                      for play in self.plays}
             for play in plays:
-                if (play['ratingKey'], play['started'] // 60) not in known:
-                    self.plays.append(play)
-                    known.add((play['ratingKey'], play['started'] // 60))
-                    added += 1
+                key = (play['ratingKey'], play['started'] // 60)
+                if key in known:
+                    # Already here: an earlier import's details (such as who) are brought up to date.
+                    if known[key].get('imported'):
+                        known[key]['user'] = play['user']
+                    continue
+                self.plays.append(play)
+                known[key] = play
+                added += 1
         return added
 
     def record(self, sessions, now=None):
@@ -1227,14 +1232,16 @@ class PlayLog:
                             title=session.get('title'), detail=session.get('detail'), poster=session.get('poster'),
                             user=session.get('user'))
 
-    def merged(self, history, limit=None):
+    def merged(self, history, limit=None, names=None):
         """The log and Plex's finished views together: a play Plex says was finished shows as finished, and a
         finished view the log never saw still shows."""
         with self.lock:
             self.refresh()
             plays = [dict(play) for play in self.plays]
+        names = {str(account): name for account, name in (names or {}).items() if name}
         rows = [{'title': play.get('title') or 'Untitled', 'detail': play.get('detail') or '', 'poster': play.get('poster'),
-                 'user': play.get('user') or 'Someone', 'watchedAt': play['seen'], 'startedAt': play.get('started'),
+                 # Plex's own name for the account, so one person has one name whichever way the play was recorded.
+                 'user': names.get(str(play.get('account'))) or play.get('user') or 'Someone', 'watchedAt': play['seen'], 'startedAt': play.get('started'),
                  'progress': 100 if play.get('finished') else play.get('progress', 0), 'finished': bool(play.get('finished')),
                  'imported': bool(play.get('imported')), 'key': play_key(play.get('account'), play.get('ratingKey'))}
                 for play in plays]
@@ -1311,7 +1318,8 @@ def tautulli_play(row):
     return {'account': str(row.get('user_id') or ''), 'ratingKey': str(rating), 'started': started, 'seen': stopped,
             'progress': 100 if finished else max(0, min(100, int(percent))) if isinstance(percent, (int, float)) else 0,
             'finished': finished, 'imported': True, 'title': title, 'detail': detail, 'poster': poster,
-            'user': short_text(row.get('friendly_name') or row.get('user'), 60) or 'Someone'}
+            # The Plex username, as Plex itself names people; Tautulli's friendly name is only its own alias.
+            'user': short_text(row.get('user') or row.get('friendly_name'), 60) or 'Someone'}
 
 
 def import_tautulli(argv):
@@ -2046,7 +2054,11 @@ class Handler(BaseHTTPRequestHandler):
                     history = None
                 try:
                     # The play log still shows if Plex doesn't answer.
-                    page = history_page(PLAYS.merged(history or []), urllib.parse.parse_qs(url.query))
+                    try:
+                        names = plex_accounts()
+                    except (OSError, ValueError, AttributeError):
+                        names = {}
+                    page = history_page(PLAYS.merged(history or [], names=names), urllib.parse.parse_qs(url.query))
                 except (KeyError, TypeError, ValueError) as exc:
                     print(f'Play log: {exc!r}', flush=True)
                     self.send_json({'configured': True, 'error': 'The watch history could not be put together.'})

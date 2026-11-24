@@ -55,10 +55,10 @@ class PlayLogTests(unittest.TestCase):
 
 class TautulliImportTests(unittest.TestCase):
     rows = [
-        {'media_type': 'episode', 'user_id': 1234567, 'friendly_name': 'Martin', 'rating_key': 900, 'grandparent_title': 'Slow Horses',
+        {'media_type': 'episode', 'user_id': 1234567, 'user': 'MartinDesc', 'friendly_name': 'Martin', 'rating_key': 900, 'grandparent_title': 'Slow Horses',
          'parent_media_index': '4', 'media_index': '6', 'title': 'Hello Goodbye', 'started': 1_000_000, 'stopped': 1_003_000,
          'percent_complete': 98, 'watched_status': 1, 'thumb': '/library/metadata/77/thumb/1700000000'},
-        {'media_type': 'movie', 'user_id': 555, 'friendly_name': 'Sofia', 'rating_key': '500', 'title': 'Hamnet', 'year': 2025,
+        {'media_type': 'movie', 'user_id': 555, 'user': 'sofia_m', 'friendly_name': 'Sofia', 'rating_key': '500', 'title': 'Hamnet', 'year': 2025,
          'started': 2_000_000, 'stopped': 2_002_000, 'percent_complete': 41, 'watched_status': 0, 'thumb': '../../etc/passwd'},
         {'media_type': 'track', 'user_id': 1, 'rating_key': 3, 'started': 1, 'stopped': 2},
     ]
@@ -73,7 +73,7 @@ class TautulliImportTests(unittest.TestCase):
     def test_tautullis_rows_become_plays(self):
         plays = [play for play in map(server.tautulli_play, self.rows) if play]
         self.assertEqual([(play['title'], play['detail'], play['user'], play['progress'], play['finished']) for play in plays],
-                         [('Slow Horses', 'S04E06 · Hello Goodbye', 'Martin', 100, True), ('Hamnet', '2025', 'Sofia', 41, False)])
+                         [('Slow Horses', 'S04E06 · Hello Goodbye', 'MartinDesc', 100, True), ('Hamnet', '2025', 'sofia_m', 41, False)])
         self.assertEqual(plays[0]['poster'], '/api/plex-art?path=%2Flibrary%2Fmetadata%2F77%2Fthumb%2F1700000000')
         self.assertIsNone(plays[1]['poster'], 'only library artwork paths')
 
@@ -122,6 +122,21 @@ class HistoryPageTests(unittest.TestCase):
         self.assertEqual(self.page(q='S04E03')['total'], 1)
         self.assertEqual(self.page(who='Martin', kind='film')['total'], 0)
         self.assertEqual(self.page(offset='x')['offset'], 0)
+
+
+
+class NameTests(unittest.TestCase):
+    def test_one_person_one_name(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = server.PlayLog(Path(folder) / 'plays.json')
+            old = server.tautulli_play({**TautulliImportTests.rows[1], 'user': None})
+            self.assertEqual(old['user'], 'Sofia', 'an import from before used the alias')
+            log.add([old])
+            log.add([server.tautulli_play(TautulliImportTests.rows[1])])
+            self.assertEqual(log.plays[0]['user'], 'sofia_m', 'importing again puts the username right')
+            log.record([{**FILM, 'account': 555, 'user': 'sofia_m', 'percent': 20}], now=3_000_000)
+            rows = log.merged([], names={555: 'sofia_m', 1: 'MartinDesc'})
+            self.assertEqual({row['user'] for row in rows}, {'sofia_m'})
 
 
 if __name__ == '__main__':
