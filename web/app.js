@@ -1371,7 +1371,7 @@ if (page === 'add') {
 const CHANNEL_NAMES = {stable: 'Stable', edge: 'Edge', dev: 'Development'};
 const SETTING_LABELS = {discover: 'Discover', discoverRegion: 'Discover country', tmdbKey: 'TMDB key', plexName: 'Plex server name',
   plexUrl: 'Plex address', plexToken: 'Plex token', backupDir: 'Backup folder', vpnLocation: 'VPN exit',
-  vpnProtocol: 'VPN connection', vpnUser: 'VPN credentials', channel: 'Release channel'};
+  vpnProtocol: 'VPN connection', vpnUser: 'VPN credentials', channel: 'Release channel', telegramToken: 'Telegram'};
 let systemData = null;
 let settingsData = null;
 let loadedVersion = null;
@@ -1532,7 +1532,13 @@ function setOptions(select, values, current) {
 
 function fillSettings(data) {
   const form = $('#settings-form');
-  form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = '';
+  form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = form.telegramToken.value = '';
+  form.telegramOn.checked = Boolean(data.telegram);
+  form.telegramChat.value = data.telegramChat || '';
+  $('#setting-telegram-token-help').innerHTML = data.telegram ? 'A token is saved. Paste another to replace it.'
+    : 'In Telegram, message <strong>@BotFather</strong>, send <code>/newbot</code> and follow its questions. It replies with the token, such as <code>123456789:AAH…</code>.';
+  $('#telegram-chats').hidden = true;
+  $('#telegram-notice').hidden = true;
   form.tmdbClear.checked = false;
   form.discover.checked = data.discover !== 'off';
   if (![...form.discoverRegion.options].some(option => option.value === data.discoverRegion)) {
@@ -1559,6 +1565,7 @@ function fillSettings(data) {
   form.hidden = false;
   settingsData = data;
   showSettingsChanges();
+  showTelegram();
 }
 
 function settingsChanges() {
@@ -1588,6 +1595,16 @@ function settingsChanges() {
     }
   }
   if (form.channel.value !== data.channel) settings.channel = form.channel.value;
+  const telegramToken = form.telegramToken.value.trim();
+  const telegramChat = form.telegramChat.value.trim();
+  if (!form.telegramOn.checked) {
+    if (data.telegram) secrets.telegramToken = '';
+  } else if (telegramToken || !data.telegram) {
+    secrets.telegramToken = telegramToken;
+    secrets.telegramChat = telegramChat;
+  } else if (telegramChat !== (data.telegramChat || '')) {
+    secrets.telegramChat = telegramChat;
+  }
   return {settings, secrets};
 }
 
@@ -1597,13 +1614,17 @@ function settingsProblem({settings, secrets}) {
   if ('backupDir' in settings && (!settings.backupDir.startsWith('/') || settings.backupDir.includes(','))) return 'Use a full path for the backup folder, starting with /, without commas.';
   if (secrets.tmdbKey && !/^[A-Za-z0-9._-]{20,1024}$/.test(secrets.tmdbKey)) return 'That doesn’t look like a TMDB API key. Copy it again from TMDB’s API settings.';
   if (secrets.plexToken && !/^[A-Za-z0-9_-]{10,200}$/.test(secrets.plexToken)) return 'That doesn’t look like a Plex token.';
+  if ('telegramChat' in secrets && 'telegramToken' in secrets && !secrets.telegramToken) return 'Paste the bot token from @BotFather.';
+  if (secrets.telegramToken && !/^[0-9]{5,12}:[A-Za-z0-9_-]{30,64}$/.test(secrets.telegramToken)) return 'That doesn’t look like a Telegram bot token. Copy it again from @BotFather.';
+  if ('telegramChat' in secrets && !/^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/.test(secrets.telegramChat)) return 'Enter the chat ID, or choose Find chats.';
   if ('vpnUser' in secrets && (!secrets.vpnUser || !secrets.vpnPassword || /\s/.test(secrets.vpnUser + secrets.vpnPassword))) return 'Enter both the new NordVPN service username and password.';
   return '';
 }
 
 function showSettingsChanges() {
   const changes = settingsChanges();
-  const names = [...new Set([...Object.keys(changes.settings), ...Object.keys(changes.secrets).map(name => name === 'vpnPassword' ? 'vpnUser' : name)])]
+  const names = [...new Set([...Object.keys(changes.settings), ...Object.keys(changes.secrets)
+    .map(name => ({vpnPassword: 'vpnUser', telegramChat: 'telegramToken'})[name] || name)])]
     .map(name => SETTING_LABELS[name] || name);
   const line = $('#settings-changes');
   line.classList.remove('is-problem');
@@ -1625,8 +1646,67 @@ async function loadSettings() {
   }
 }
 
+/** Telegram's fields show when it is switched on; the test button once a saved setup is unchanged. */
+function showTelegram() {
+  const form = $('#settings-form');
+  const on = form.telegramOn.checked;
+  $('#setting-telegram-token-row').hidden = $('#setting-telegram-chat-row').hidden = !on;
+  const changed = Object.keys(settingsChanges().secrets).some(name => name.startsWith('telegram'));
+  $('#telegram-test').hidden = !(settingsData?.telegram && on && !changed);
+}
+
+function telegramNotice(text, problem = false) {
+  const notice = $('#telegram-notice');
+  notice.textContent = text;
+  notice.classList.toggle('is-problem', problem);
+  notice.hidden = !text;
+}
+
+function setupTelegram() {
+  const form = $('#settings-form');
+  form.addEventListener('input', showTelegram);
+  form.addEventListener('change', showTelegram);
+  $('#telegram-find').addEventListener('click', async () => {
+    const button = $('#telegram-find');
+    button.disabled = true;
+    telegramNotice('');
+    try {
+      const data = await post('/api/telegram/chats', {token: form.telegramToken.value.trim()});
+      const list = $('#telegram-chats');
+      list.innerHTML = data.chats.length
+        ? data.chats.map(chat => `<button class="chat-choice" type="button" data-chat="${esc(chat.id)}">${esc(chat.name)} <small>${esc(chat.id)}</small></button>`).join('')
+        : '<p class="option-help">No chats yet. Send your bot a message in Telegram, then choose Find chats again.</p>';
+      list.hidden = false;
+    } catch (error) {
+      telegramNotice(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $('#telegram-chats').addEventListener('click', event => {
+    const chip = event.target.closest('[data-chat]');
+    if (!chip) return;
+    form.telegramChat.value = chip.dataset.chat;
+    for (const other of $('#telegram-chats').querySelectorAll('[data-chat]')) other.classList.toggle('is-chosen', other === chip);
+    form.telegramChat.dispatchEvent(new Event('input', {bubbles: true}));
+  });
+  $('#telegram-test').addEventListener('click', async () => {
+    const button = $('#telegram-test');
+    button.disabled = true;
+    try {
+      await post('/api/telegram/test', {});
+      telegramNotice('Sent. Check the chat in Telegram.');
+    } catch (error) {
+      telegramNotice(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function setupSettings() {
   const form = $('#settings-form');
+  setupTelegram();
   form.addEventListener('input', showSettingsChanges);
   form.addEventListener('change', showSettingsChanges);
   form.addEventListener('reset', () => setTimeout(() => settingsData && fillSettings(settingsData)));
@@ -1656,7 +1736,13 @@ function setupSettings() {
       detail: `Setup runs again with the new ${names.join(', ').toLowerCase()}. ${vpn ? 'The VPN reconnects and downloads pause for a minute or so. ' : ''}It takes a minute or two; follow it here.`},
     code => post('/api/settings', {pin: code, ...changes}),
     () => {
-      form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = '';
+      form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = form.telegramToken.value = '';
+  form.telegramOn.checked = Boolean(data.telegram);
+  form.telegramChat.value = data.telegramChat || '';
+  $('#setting-telegram-token-help').innerHTML = data.telegram ? 'A token is saved. Paste another to replace it.'
+    : 'In Telegram, message <strong>@BotFather</strong>, send <code>/newbot</code> and follow its questions. It replies with the token, such as <code>123456789:AAH…</code>.';
+  $('#telegram-chats').hidden = true;
+  $('#telegram-notice').hidden = true;
       following = true;
       lastRunState = 'running';
       system();

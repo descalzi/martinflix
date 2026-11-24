@@ -30,6 +30,7 @@
     <symbol id="i-tunnel" viewBox="0 0 24 24"><path d="M12 3.5 5 6.5v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9v-5z"/><path d="m9 12 2 2 4-4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 3.5 3.5 10.5l7 3m10-10-7 17-3-7m10-10-10 10"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 6.5h15M9.5 6.5V4.5h5v2M6.5 6.5l1 13h9l1-13M10.5 10.5v6M13.5 10.5v6"/></symbol>
     <symbol id="i-tick" viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
@@ -301,6 +302,29 @@
                 <input id="setting-plex-token" name="plexToken" type="password" autocomplete="off" spellcheck="false" maxlength="200">
                 <p class="option-help" id="setting-plex-token-help">In Plex Web, open any title’s ⋯ → Get Info → View XML, and copy the value after X-Plex-Token= in the address.</p>
               </div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="settings-telegram-title">
+            <div class="panel-head"><div><h2 id="settings-telegram-title">Telegram</h2><p>A message with the poster when an episode or film is ready to watch, and when a series or film is added.</p></div>
+              <button class="button button-quiet" type="button" id="telegram-test" hidden><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg>Send a test message</button></div>
+            <div class="settings-fields">
+              <label class="switch"><input type="checkbox" name="telegramOn"><span>Post to Telegram</span></label>
+              <div class="field" id="setting-telegram-token-row" hidden>
+                <label for="setting-telegram-token">Bot token</label>
+                <input id="setting-telegram-token" name="telegramToken" type="password" autocomplete="off" spellcheck="false" maxlength="80">
+                <p class="option-help" id="setting-telegram-token-help">In Telegram, message <strong>@BotFather</strong>, send <code>/newbot</code> and follow its questions. It replies with the token, such as <code>123456789:AAH…</code>.</p>
+              </div>
+              <div class="field" id="setting-telegram-chat-row" hidden>
+                <label for="setting-telegram-chat">Chat ID</label>
+                <div class="input-action">
+                  <input id="setting-telegram-chat" name="telegramChat" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" maxlength="40" placeholder="123456789">
+                  <button class="button button-quiet" type="button" id="telegram-find">Find chats</button>
+                </div>
+                <p class="option-help" id="setting-telegram-chat-help">Send your bot any message (or add it to a group and say hello), then choose Find chats and pick the chat.</p>
+                <div class="telegram-chats" id="telegram-chats" hidden></div>
+              </div>
+              <p class="control-notice" id="telegram-notice" role="status" hidden></p>
             </div>
           </section>
 

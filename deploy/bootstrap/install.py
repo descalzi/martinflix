@@ -33,7 +33,7 @@ from xml.etree import ElementTree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'controller'))
 from controller import hash_pin, valid_pin  # noqa: E402
 import restore  # noqa: E402
-from configure import (AppApi, BazarrApi, TransmissionRpc, adopt_legacy, configure_apps, configure_bazarr, ensure_arr_login,
+from configure import (AppApi, BazarrApi, TransmissionRpc, adopt_legacy, configure_apps, configure_webhooks, configure_bazarr, ensure_arr_login,
                        ensure_bazarr_login, seed_transmission_defaults)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
@@ -245,6 +245,8 @@ def prepare_control_pin(path, change=False):
 
 
 TMDB_KEY = re.compile(r'[A-Za-z0-9._-]{20,1024}')
+TELEGRAM_TOKEN = re.compile(r'[0-9]{5,12}:[A-Za-z0-9_-]{30,64}')
+TELEGRAM_CHAT = re.compile(r'-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31}')
 PLEX_TOKEN = re.compile(r'[A-Za-z0-9_-]{10,200}')
 VPN_CREDENTIAL = re.compile(r'[^\s]{1,200}')
 
@@ -265,13 +267,18 @@ def read_settings_file(path):
     for name, pattern, problem in (('tmdbKey', TMDB_KEY, 'That doesn’t look like a TMDB API key.'),
                                    ('plexToken', PLEX_TOKEN, 'That doesn’t look like a Plex token.'),
                                    ('vpnUser', VPN_CREDENTIAL, 'Enter the NordVPN service username.'),
-                                   ('vpnPassword', VPN_CREDENTIAL, 'Enter the NordVPN service password.')):
+                                   ('vpnPassword', VPN_CREDENTIAL, 'Enter the NordVPN service password.'),
+                                   ('telegramToken', TELEGRAM_TOKEN, 'That doesn’t look like a Telegram bot token.'),
+                                   ('telegramChat', TELEGRAM_CHAT, 'That doesn’t look like a Telegram chat ID.')):
         value = data.get(name)
         if value and not pattern.fullmatch(value):
             raise ValueError(problem)
     if bool(data.get('vpnUser')) != bool(data.get('vpnPassword')):
         raise ValueError('Enter both the NordVPN service username and password.')
-    return {key: value for key, value in data.items() if key in ('tmdbKey', 'plexToken', 'vpnUser', 'vpnPassword')}
+    if data.get('telegramToken') and not data.get('telegramChat'):
+        raise ValueError('Enter the Telegram chat ID as well as the bot token.')
+    return {key: value for key, value in data.items()
+            if key in ('tmdbKey', 'plexToken', 'vpnUser', 'vpnPassword', 'telegramToken', 'telegramChat')}
 
 
 def apply_settings_secrets(given, secret_dir, vpn_dir):
@@ -285,6 +292,8 @@ def apply_settings_secrets(given, secret_dir, vpn_dir):
             else:
                 path.unlink(missing_ok=True)
             print(f'   {kept if given[name] else removed}', flush=True)
+    if 'telegramToken' in given or 'telegramChat' in given:
+        save_telegram(secret_dir, given.get('telegramToken'), given.get('telegramChat'))
     if given.get('vpnUser'):
         private_directory(vpn_dir)
         write_secret(vpn_dir / 'openvpn_user', given['vpnUser'], trailing_newline=False)
@@ -333,6 +342,78 @@ def prepare_plex_token(path):
     else:
         path.unlink(missing_ok=True)
     print('Plex is connected.' if token else 'Plex is disconnected.', flush=True)
+
+
+TELEGRAM_HELP = """
+MartinFlix can post to Telegram when an episode or film is ready to watch, and when a series or film is added, with
+its poster. You need a bot and the chat it posts in:
+  1. In Telegram, message @BotFather, send /newbot and follow its questions. It replies with the bot token, which
+     looks like 123456789:AAH... .
+  2. Send your new bot any message (or add it to a group and say hello there).
+  3. The chat ID: setup lists the chats your bot has heard from, so you can pick one. You can also find it later in
+     the dashboard, under Settings → Telegram.
+Leave the token blank to turn Telegram off."""
+
+
+def save_telegram(secret_dir, token, chat):
+    """Store, or with no token remove, the bot token and chat ID the dashboard posts with."""
+    if token:
+        write_secret(secret_dir / 'telegram-token', token)
+        if chat:
+            write_secret(secret_dir / 'telegram-chat', chat)
+        print('   Telegram: messages will be posted to that chat.', flush=True)
+    elif token is not None or not chat:
+        for name in ('telegram-token', 'telegram-chat'):
+            (secret_dir / name).unlink(missing_ok=True)
+        print('   Telegram is off.', flush=True)
+    else:
+        write_secret(secret_dir / 'telegram-chat', chat)
+        print('   Telegram: messages will be posted to that chat.', flush=True)
+
+
+def telegram_chats(token):
+    """The chats that have messaged the bot lately, to pick from; empty if Telegram can't say."""
+    request = urllib.request.Request(f'https://api.telegram.org/bot{token}/getUpdates?limit=100', method='GET')
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            reply = json.load(response)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code == 401:
+            raise ValueError('Telegram doesn’t recognise that bot token. Copy it again from @BotFather.') from None
+        return []
+    except (OSError, ValueError):
+        return []
+    chats = {}
+    for update in reply.get('result') or []:
+        for key in ('message', 'channel_post', 'my_chat_member'):
+            chat = (update.get(key) or {}).get('chat') if isinstance(update, dict) else None
+            if isinstance(chat, dict) and type(chat.get('id')) is int:
+                chats[str(chat['id'])] = chat.get('title') or ' '.join(filter(None, (chat.get('first_name'), chat.get('last_name')))) \
+                    or chat.get('username') or str(chat['id'])
+    return list(chats.items())
+
+
+def prepare_telegram(secret_dir):
+    if not sys.stdin.isatty():
+        raise ValueError('Run setup in a terminal to set up Telegram, or use Settings in the dashboard.')
+    print(TELEGRAM_HELP, flush=True)
+    token = getpass.getpass('Bot token (hidden as you type or paste): ').strip()
+    if not token:
+        save_telegram(secret_dir, '', None)
+        return
+    if not TELEGRAM_TOKEN.fullmatch(token):
+        raise ValueError('That doesn’t look like a Telegram bot token. Copy it again from @BotFather.')
+    chats = telegram_chats(token)
+    for number, (chat, name) in enumerate(chats, 1):
+        print(f'  {number}. {name} ({chat})')
+    answer = input('Chat: the number from the list, or the chat ID: ' if chats else
+                   'Chat ID (no chats yet: message your bot, or enter the ID): ').strip()
+    if answer.isdigit() and 1 <= int(answer) <= len(chats) and len(answer) < 4:
+        answer = chats[int(answer) - 1][0]
+    if not TELEGRAM_CHAT.fullmatch(answer):
+        raise ValueError('That doesn’t look like a Telegram chat ID. It is a number, such as 123456789 or -1001234567890.')
+    save_telegram(secret_dir, token, answer)
 
 
 # Registry answers that mean "try again shortly", including GitHub's shared limit for every LinuxServer image.
@@ -1261,6 +1342,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
         'control': True, 'change_pin': bool(getattr(args, 'change_pin', False)),
         'set_tmdb_key': bool(getattr(args, 'set_tmdb_key', False)),
         'set_plex_token': bool(getattr(args, 'set_plex_token', False)),
+        'set_telegram': bool(getattr(args, 'set_telegram', False)),
         'plex': plex, 'overlay_dir': overlay_file.parent,
     }
 
@@ -1657,6 +1739,11 @@ def run_installation(plan, state, previous, mode='install'):
             prepare_tmdb_key(secret_dir / 'tmdb-key')
         if plan['set_plex_token']:
             prepare_plex_token(secret_dir / 'plex-token')
+        if plan['set_telegram']:
+            prepare_telegram(secret_dir)
+        if not (secret_dir / 'hook-password').is_file():
+            # Sonarr and Radarr sign in to the dashboard's webhook with this, not the dashboard password.
+            write_secret(secret_dir / 'hook-password', secrets.token_urlsafe(32))
         if plan['control']:
             prepare_control_pin(state / 'controller', change=plan['change_pin'])
             if not (secret_dir / 'controller-token').is_file():
@@ -1783,6 +1870,10 @@ def run_installation(plan, state, previous, mode='install'):
                        flaresolverr=bool(prowlarr_key) and 'flaresolverr' in downloads,
                        enable_prowlarr_indexers=enable_prowlarr_indexers, address_prowlarr_indexers=address_prowlarr_indexers,
                        tag_prowlarr=tag_prowlarr)
+        # Telegram messages come from the dashboard, which Sonarr and Radarr tell about imports and additions.
+        configure_webhooks(arr_keys, ports, arr_address=arr_address,
+                           password=(secret_dir / 'hook-password').read_text().strip(),
+                           enabled=(secret_dir / 'telegram-token').is_file() and (secret_dir / 'telegram-chat').is_file())
         if seed_prowlarr or enable_prowlarr_indexers or address_prowlarr_indexers:
             options.update(prowlarr_indexer_defaults_applied=True, prowlarr_indexers_enabled=True,
                            prowlarr_indexers_addressed=True)
@@ -1983,6 +2074,8 @@ def build_parser():
                         help='Enter or replace the Plex token that lets the dashboard read Plex.')
     parser.add_argument('--discover', choices=['on', 'off'],
                         help='Show or hide the dashboard’s Discover page of trending and upcoming titles. On by default.')
+    parser.add_argument('--set-telegram', action='store_true',
+                        help='Post to Telegram when an episode or film is ready and when one is added, or turn it off.')
     parser.add_argument('--set-tmdb-key', action='store_true',
                         help='Use your own TMDB API key for Discover instead of MartinFlix’s, or go back to it.')
     parser.add_argument('--discover-region',

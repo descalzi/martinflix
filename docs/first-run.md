@@ -111,7 +111,15 @@ docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -
 
 The controller checks for a newer MartinFlix image on the installation's channel a couple of minutes after it starts and then every six hours, by asking Docker to download it; the controller itself never reaches the internet. A new version shows on the Overview and on **Settings**, with the list of changes from GitHub. **Update now** asks for your PIN, then runs setup again from the new image in a container of its own, `…-updater`, because setup recreates the controller and the dashboard on the way. Settings shows setup's output as it goes; the dashboard restarts near the end and the page reloads by itself. If an update fails, the output says why and nothing after that step changed; fix the cause and update again, from Settings or from a terminal.
 
-**Settings** also changes Discover (on or off, country, your own TMDB key), Plex (the server name, or the address and token of a Plex elsewhere), the backup folder, the VPN exit, protocol and service credentials, and the release channel. Saving runs setup the same way, with your PIN, so the change is checked and applied exactly as from a terminal and only the apps it affects restart. Secrets reach setup in a private file that it deletes as soon as it has read it.
+**Telegram.** MartinFlix can post to a Telegram chat when an episode or film is ready to watch (upgrades included) and when a series or film is added, with its poster, in the same format for both. Several episodes imported together, such as a season pack, become one message. To set it up:
+
+1. In Telegram, message **@BotFather**, send `/newbot` and follow its questions. It replies with the bot token, such as `123456789:AAH…`.
+2. Send your new bot any message, or add it to a group and say hello there.
+3. In the dashboard, open **Settings → Telegram**, switch on **Post to Telegram**, paste the token, choose **Find chats** and pick the chat, then **Save changes**. Or add `--set-telegram` to setup, which asks for the token and lists the chats.
+
+Once saved, **Send a test message** checks it. Sonarr and Radarr get a webhook connection named MartinFlix, which tells the dashboard what happened; the dashboard sends the message. Connections you made yourself in Sonarr or Radarr, including their own Telegram ones, are left as they are, so remove those if you don't want two messages.
+
+**Settings** also changes Telegram, Discover (on or off, country, your own TMDB key), Plex (the server name, or the address and token of a Plex elsewhere), the backup folder, the VPN exit, protocol and service credentials, and the release channel. Saving runs setup the same way, with your PIN, so the change is checked and applied exactly as from a terminal and only the apps it affects restart. Secrets reach setup in a private file that it deletes as soon as it has read it.
 
 The **edge** channel gets every change pushed to `main`; **stable** gets versions tagged `v1.2.0` and so on. A new installation follows the channel of the image you ran (`:edge` or `:stable`); switch under **Settings → Updates**, or with `--channel`.
 

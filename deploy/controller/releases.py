@@ -36,7 +36,7 @@ SETTINGS = {
     'vpnProtocol': ('--vpn-protocol', re.compile(r'udp|tcp')),
     'channel': ('--channel', re.compile(r'edge|stable')),
 }
-SECRETS = ('tmdbKey', 'plexToken', 'vpnUser', 'vpnPassword')
+SECRETS = ('tmdbKey', 'plexToken', 'vpnUser', 'vpnPassword', 'telegramToken', 'telegramChat')
 
 
 class UpdateError(Exception):
@@ -79,6 +79,14 @@ def secret_values(values):
                                            for name, value in values.items()):
         raise UpdateError(400, 'Invalid secret settings.')
     return values
+
+
+def read_short(path):
+    """A small saved value, such as the Telegram chat ID, or '' if there is none."""
+    try:
+        return path.read_text().strip()[:40]
+    except OSError:
+        return ''
 
 
 def now_text(clock=time.time):
@@ -300,5 +308,7 @@ class Releases:
             'vpnProtocol': options.get('vpn_protocol') or 'udp',
             'channel': options.get('channel') or self.current()['channel'],
             'mediaPath': options.get('media_path') or '',
+            'telegram': (secrets_dir / 'telegram-token').is_file(),
+            'telegramChat': read_short(secrets_dir / 'telegram-chat'),
             'choices': {'vpnLocations': [*VPN_CITIES, *VPN_COUNTRIES], 'channels': list(CHANNELS)},
         }

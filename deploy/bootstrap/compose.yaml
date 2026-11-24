@@ -73,6 +73,9 @@ services:
       MARTINFLIX_CONTROLLER_URL: http://controller:9800
       MARTINFLIX_BACKUP_DIR: /run/backups
       MARTINFLIX_CONTROLLER_TOKEN_FILE: /run/dashboard-secrets/controller-token
+      MARTINFLIX_TELEGRAM_TOKEN_FILE: /run/dashboard-secrets/telegram-token
+      MARTINFLIX_TELEGRAM_CHAT_FILE: /run/dashboard-secrets/telegram-chat
+      MARTINFLIX_HOOK_PASSWORD_FILE: /run/dashboard-secrets/hook-password
     networks: [default, control]
     volumes:
       - "${MARTINFLIX_STATE_DIR}/dashboard-secrets:/run/dashboard-secrets:ro"

@@ -10,8 +10,8 @@
   <title>Set up MartinFlix</title>
   <link rel="icon" href="./favicon.webp" type="image/webp">
   <link rel="preload" href="./fonts/figtree.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="./setup.css?v=wizard-22">
-  <script src="./setup.js?v=wizard-22" defer></script>
+  <link rel="stylesheet" href="./setup.css?v=wizard-23">
+  <script src="./setup.js?v=wizard-23" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" focusable="false">
@@ -147,6 +147,10 @@
               <label class="toggle"><input id="discover" type="checkbox" checked><span><strong>Trending and upcoming titles <span class="tag">Default</span></strong><span>A Discover page with what’s trending and coming to cinemas and streaming, from TMDB. Works straight away with MartinFlix’s TMDB key.</span></span></label>
               <label class="toggle"><input id="tmdb-own" type="checkbox"><span><strong>Use my own TMDB key</strong><span>Setup asks for it. Get a free key in your TMDB account under Settings → API.</span></span></label>
             </fieldset>
+            <fieldset class="toggles">
+              <legend>Telegram</legend>
+              <label class="toggle"><input id="telegram" type="checkbox"><span><strong>Post to Telegram</strong><span>A message with the poster when an episode or film is ready to watch, and when one is added.</span><span>Setup asks for a bot token and lists the chats your bot has heard from. To get them: in Telegram, message <code>@BotFather</code>, send <code>/newbot</code> and copy the token it gives you; then send your new bot any message, or add it to a group. You can also set this up later under Settings → Telegram.</span></span></label>
+            </fieldset>
             <div class="field">
               <label for="plex-url">Plex server elsewhere <small>Optional, if you don’t install Plex here</small></label>
               <input id="plex-url" type="url" placeholder="http://192.168.1.10:32400" spellcheck="false" aria-describedby="plex-url-help">
@@ -235,6 +239,7 @@
             <fieldset class="toggles">
               <legend>Discover</legend>
               <label class="toggle"><input id="u-discover" type="checkbox"><span><strong>Use my own TMDB key</strong><span>Setup asks for it. Leave the answer blank to go back to MartinFlix’s key.</span></span></label>
+              <label class="toggle"><input id="u-telegram" type="checkbox"><span><strong>Set up Telegram</strong><span>Posts to Telegram when an episode or film is ready, or when one is added. Leave the token blank when setup asks to turn it off.</span><span>Setup asks for a bot token and lists the chats your bot has heard from. To get them: in Telegram, message <code>@BotFather</code>, send <code>/newbot</code> and copy the token it gives you; then send your new bot any message, or add it to a group. You can also set this up later under Settings → Telegram.</span></span></label>
             </fieldset>
             <fieldset class="toggles">
               <legend>Plex</legend>

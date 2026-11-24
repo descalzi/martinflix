@@ -1511,6 +1511,202 @@ def delete_title(kind, request):
     return {'deleted': True, 'title': item.get('title') or 'The title', 'files': files}
 
 
+# Telegram: Sonarr and Radarr tell the dashboard what happened through a webhook named MartinFlix, and the dashboard
+# posts one message in one format for both, with the poster.
+TELEGRAM_TOKEN = re.compile(r'[0-9]{5,12}:[A-Za-z0-9_-]{30,64}')
+TELEGRAM_CHAT = re.compile(r'-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31}')
+HOOK_USER = 'martinflix'
+# Episodes imported together (a season pack, or a few at once) arrive one event each; they become one message.
+HOOK_GATHER_SECONDS = 45
+INTERNET = urllib.request.build_opener(NoRedirect())
+
+
+class TelegramError(Exception):
+    pass
+
+
+def telegram_settings():
+    """(token, chat) when Telegram is set up, else None."""
+    token, chat = read_secret('MARTINFLIX_TELEGRAM_TOKEN'), read_secret('MARTINFLIX_TELEGRAM_CHAT')
+    if TELEGRAM_TOKEN.fullmatch(token) and TELEGRAM_CHAT.fullmatch(chat):
+        return token, chat
+    return None
+
+
+def telegram_call(token, method, payload, timeout=20):
+    request = urllib.request.Request(f'https://api.telegram.org/bot{token}/{method}', data=json.dumps(payload).encode(),
+                                     headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+        with INTERNET.open(request, timeout=timeout) as response:
+            reply = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            reply = json.load(exc)
+        except ValueError:
+            reply = {}
+        finally:
+            exc.close()
+        description = reply.get('description') if isinstance(reply, dict) else None
+        raise TelegramError(telegram_problem(exc.code, description)) from None
+    except (OSError, ValueError):
+        raise TelegramError('Telegram could not be reached. Check this machine’s internet connection.') from None
+    if not isinstance(reply, dict) or not reply.get('ok'):
+        raise TelegramError(telegram_problem(None, reply.get('description') if isinstance(reply, dict) else None))
+    return reply.get('result')
+
+
+def telegram_problem(code, description):
+    text = (description or '').lower()
+    if code == 401 or 'unauthorized' in text:
+        return 'Telegram doesn’t recognise that bot token. Copy it again from @BotFather.'
+    if 'chat not found' in text:
+        return 'Telegram can’t find that chat. Send your bot a message first, or check the chat ID.'
+    if 'bot was blocked' in text or 'kicked' in text:
+        return 'The bot can’t post in that chat: it was blocked or removed. Add it back, then try again.'
+    if code == 409 or 'webhook' in text:
+        return 'This bot is set up to send its updates elsewhere, so its chats can’t be listed. Enter the chat ID yourself.'
+    return f'Telegram refused the message{": " + description if description else "."}'
+
+
+def telegram_send(text, photo=None, settings=None):
+    settings = settings or telegram_settings()
+    if settings is None:
+        return False
+    token, chat = settings
+    if photo:
+        try:
+            telegram_call(token, 'sendPhoto', {'chat_id': chat, 'photo': photo, 'caption': text[:1024], 'parse_mode': 'HTML'})
+            return True
+        except TelegramError:
+            pass  # Telegram couldn't fetch the poster: the words alone still go.
+    telegram_call(token, 'sendMessage', {'chat_id': chat, 'text': text[:4096], 'parse_mode': 'HTML',
+                                         'link_preview_options': {'is_disabled': True}})
+    return True
+
+
+def telegram_chats(token):
+    """Chats that have messaged the bot lately, so the chat ID needn't be looked up by hand."""
+    updates = telegram_call(token, 'getUpdates', {'limit': 100, 'allowed_updates': ['message', 'channel_post', 'my_chat_member']})
+    chats = {}
+    for update in updates or []:
+        for key in ('message', 'channel_post', 'my_chat_member'):
+            chat = (update.get(key) or {}).get('chat') if isinstance(update, dict) else None
+            if isinstance(chat, dict) and type(chat.get('id')) is int:
+                name = chat.get('title') or ' '.join(filter(None, (chat.get('first_name'), chat.get('last_name')))) \
+                    or chat.get('username') or str(chat['id'])
+                chats[chat['id']] = {'id': str(chat['id']), 'name': short_text(name, 80), 'type': chat.get('type') or ''}
+    return list(chats.values())
+
+
+def hook_poster(item):
+    for image in (item or {}).get('images') or []:
+        url = image.get('remoteUrl') if isinstance(image, dict) else None
+        if image.get('coverType') == 'poster' and isinstance(url, str) and url.startswith('https://') and len(url) < 500:
+            return url
+    return None
+
+
+def hook_heading(item):
+    title = short_text((item or {}).get('title'), 120) or 'Untitled'
+    year = (item or {}).get('year')
+    return f'<b>{html.escape(title)}</b>' + (f' ({year})' if type(year) is int and year > 0 else '')
+
+
+def episode_codes(episodes):
+    """"S04E06", "S04E01–E06" or "S03E10, S04E01": each season's episodes, runs joined."""
+    seasons = {}
+    for season, number in sorted(episodes):
+        seasons.setdefault(season, []).append(number)
+    parts = []
+    for season, numbers in seasons.items():
+        start = previous = numbers[0]
+        for number in numbers[1:] + [None]:
+            if number is not None and number == previous + 1:
+                previous = number
+                continue
+            parts.append(f'S{season:02d}E{start:02d}' + (f'–E{previous:02d}' if previous != start else ''))
+            if number is not None:
+                start = previous = number
+    return ', '.join(parts)
+
+
+def hook_quality(event):
+    quality = ((event.get('episodeFile') or event.get('movieFile') or {}).get('quality')) if isinstance(event, dict) else None
+    return short_text(quality, 40) if isinstance(quality, str) else ''
+
+
+class HookMessages:
+    """Turns Sonarr's and Radarr's webhook events into Telegram messages. Episodes imported within a short while of
+    each other, for the same series, are gathered into one message."""
+
+    def __init__(self, send=None, gather=HOOK_GATHER_SECONDS, timer=threading.Timer):
+        self.send = send or (lambda text, photo: telegram_send(text, photo))
+        self.gather, self.timer = gather, timer
+        self.pending = {}
+        self.lock = threading.Lock()
+
+    def handle(self, app, event):
+        kind = event.get('eventType') if isinstance(event, dict) else None
+        if kind == 'Test':
+            self.deliver(f'{"Sonarr" if app == "sonarr" else "Radarr"} can reach MartinFlix: downloads and new '
+                         f'{"series" if app == "sonarr" else "films"} will be posted here.', None)
+        elif kind == 'SeriesAdd' and app == 'sonarr':
+            series = event.get('series') or {}
+            self.deliver(f'{hook_heading(series)}\nAdded · series', hook_poster(series))
+        elif kind == 'MovieAdded' and app == 'radarr':
+            movie = event.get('movie') or {}
+            self.deliver(f'{hook_heading(movie)}\nAdded · film', hook_poster(movie))
+        elif kind == 'Download' and app == 'radarr':
+            movie = event.get('movie') or {}
+            state = 'Upgraded' if event.get('isUpgrade') else 'Ready to watch'
+            quality = hook_quality(event)
+            self.deliver(f'{hook_heading(movie)}\n{state}' + (f' · {html.escape(quality)}' if quality else ''), hook_poster(movie))
+        elif kind == 'Download' and app == 'sonarr':
+            self.gather_episodes(event)
+
+    def gather_episodes(self, event):
+        series = event.get('series') or {}
+        key = series.get('id') or series.get('tvdbId') or series.get('title')
+        episodes = {(item['seasonNumber'], item['episodeNumber']): item.get('title') for item in event.get('episodes') or []
+                    if isinstance(item, dict) and type(item.get('seasonNumber')) is int and type(item.get('episodeNumber')) is int}
+        with self.lock:
+            batch = self.pending.get(key)
+            if batch is None:
+                batch = self.pending[key] = {'series': series, 'episodes': {}, 'upgrade': True, 'quality': '', 'timer': None}
+            batch['episodes'].update(episodes)
+            batch['upgrade'] = batch['upgrade'] and bool(event.get('isUpgrade'))
+            batch['quality'] = hook_quality(event) or batch['quality']
+            if batch['timer'] is not None:
+                batch['timer'].cancel()
+            batch['timer'] = self.timer(self.gather, self.flush, args=(key,))
+            batch['timer'].daemon = True
+            batch['timer'].start()
+
+    def flush(self, key):
+        with self.lock:
+            batch = self.pending.pop(key, None)
+        if batch is None:
+            return
+        episodes = batch['episodes']
+        if len(episodes) == 1:
+            (code, name), = episodes.items()
+            line = episode_codes([code]) + (f' · {html.escape(short_text(name, 100))}' if name else '')
+        else:
+            line = f'{episode_codes(episodes)} · {len(episodes)} episodes' if episodes else ''
+        state = 'Upgraded' if batch['upgrade'] else 'Ready to watch'
+        quality = f' · {html.escape(batch["quality"])}' if batch['quality'] else ''
+        self.deliver('\n'.join(filter(None, (hook_heading(batch['series']), line, state + quality))), hook_poster(batch['series']))
+
+    def deliver(self, text, photo):
+        try:
+            self.send(text, photo)
+        except TelegramError as exc:
+            print(f'Telegram: {exc}', flush=True)
+
+
+HOOKS = HookMessages()
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
@@ -1660,6 +1856,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
+        if hook := re.fullmatch(r'/api/hook/(sonarr|radarr)', path):
+            self.hook_request(hook.group(1))
+            return
+        if path in ('/api/telegram/test', '/api/telegram/chats'):
+            self.telegram_request(path)
+            return
         if add := re.fullmatch(r'/api/(add|delete)/(sonarr|radarr)', path):
             self.add_request(add.group(2), add.group(1))
             return
@@ -1769,6 +1971,55 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             self.send_json({'error': 'Invalid request.'}, 400)
             return None
+
+    def hook_request(self, app):
+        """A webhook from Sonarr or Radarr. It signs in with the hook password setup gave both, not the dashboard's."""
+        expected = read_secret('MARTINFLIX_HOOK_PASSWORD')
+        try:
+            scheme, encoded = self.headers.get('Authorization', '').split(' ', 1)
+            user, password = base64.b64decode(encoded, validate=True).decode('utf-8').split(':', 1)
+            valid = scheme.lower() == 'basic' and len(expected) >= 24 and hmac.compare_digest(user, HOOK_USER) \
+                and hmac.compare_digest(password.encode(), expected.encode())
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            valid = False
+        if not valid:
+            self.send_json({'error': 'Not allowed.'}, 401)
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= 1024 * 1024:
+                raise ValueError
+            event = json.loads(self.rfile.read(length))
+        except (OSError, ValueError):
+            self.send_json({'error': 'Invalid request.'}, 400)
+            return
+        self.send_response(204)
+        self.end_headers()
+        if isinstance(event, dict) and telegram_settings() is not None:
+            # Telegram can be slow; the app that sent this needn't wait for it.
+            threading.Thread(target=HOOKS.handle, args=(app, event), daemon=True).start()
+
+    def telegram_request(self, path):
+        request = self.json_body(1024)
+        if request is None:
+            return
+        try:
+            if path == '/api/telegram/test':
+                settings = telegram_settings()
+                if settings is None:
+                    self.send_json({'error': 'Save a bot token and chat ID first.'}, 409)
+                    return
+                telegram_send('<b>MartinFlix</b> is connected. Downloads and new series and films will be posted here.',
+                              settings=settings)
+                self.send_json({'ok': True})
+                return
+            token = request.get('token') or (telegram_settings() or ('', ''))[0] or read_secret('MARTINFLIX_TELEGRAM_TOKEN')
+            if not isinstance(token, str) or not TELEGRAM_TOKEN.fullmatch(token):
+                self.send_json({'error': 'Enter the bot token from @BotFather first.'}, 400)
+                return
+            self.send_json({'chats': telegram_chats(token)})
+        except TelegramError as exc:
+            self.send_json({'error': str(exc)}, 502)
 
     def system_request(self, path):
         """Check for, or install, a MartinFlix update, or apply changed settings, through the controller."""

@@ -119,6 +119,7 @@ function changeArguments(change) {
   if (change.plexToken || change.plexUrl) args.push('--set-plex-token');
   if (change.page && change.page !== 'keep') args.push('--discover=' + change.page);
   if (change.discover) args.push('--set-tmdb-key');
+  if (change.telegram) args.push('--set-telegram');
   if (change.region && change.region !== 'keep') args.push('--discover-region=' + change.region);
   if (change.channel && change.channel !== 'keep') args.push('--channel=' + change.channel);
   return args;
@@ -157,6 +158,7 @@ function installArguments(options) {
   if (options.discover === false) args.push('--discover=off');
   if (options.discover !== false && options.ownKey) args.push('--set-tmdb-key');
   if (options.discover !== false && options.region && options.region !== 'GB') args.push('--discover-region=' + options.region);
+  if (options.telegram) args.push('--set-telegram');
   return args;
 }
 
@@ -233,6 +235,7 @@ if (typeof document !== 'undefined') {
       behindVpn: byId('vpn').checked && preferVpnRoute,
       discover: byId('discover').checked,
       ownKey: byId('tmdb-own').checked,
+      telegram: byId('telegram').checked,
       plexUrl: byId('plex-url').value.trim().replace(/\/+$/, ''),
       region: byId('discover-region').value,
       channel: byId('channel').value,
@@ -252,6 +255,7 @@ if (typeof document !== 'undefined') {
         plex: byId('u-plex').checked,
         plexName: byId('u-plex-name').value.trim(),
         discover: byId('u-discover').checked,
+        telegram: byId('u-telegram').checked,
         page: byId('u-discover-page').value,
         plexUrl: byId('u-plex-url').value.trim().replace(/\/+$/, ''),
         plexToken: byId('u-plex-token').checked,
@@ -370,6 +374,7 @@ if (typeof document !== 'undefined') {
       if (change.plexToken || change.plexUrl) summary.push(['Plex token', 'Enter it when setup asks']);
       if (change.page !== 'keep') summary.push(['Discover page', change.page === 'on' ? 'Show it' : 'Hide it']);
       if (change.discover) summary.push(['TMDB key', 'Use my own']);
+      if (change.telegram) summary.push(['Telegram', 'Enter the bot token and chat when setup asks']);
       if (change.region !== 'keep') summary.push(['Discover region', byId('u-discover-region').selectedOptions[0].textContent]);
       if (change.channel !== 'keep') summary.push(['Release channel', change.channel === 'stable' ? 'Stable' : 'Edge']);
       if (summary.length === 2) summary.push(['Changes', 'None · reapply the latest version with your current settings']);
@@ -386,6 +391,7 @@ if (typeof document !== 'undefined') {
       summary.push(['Discover', options.discover ? `${byId('discover-region').selectedOptions[0].textContent.replace(' (default)', '')} · ${options.ownKey ? 'your TMDB key' : 'MartinFlix’s TMDB key'}` : 'Off']);
       summary.push(['Plex', options.plex ? `Installed here as ${options.plexName || 'martinflix'} · setup asks for a claim code`
         : options.plexUrl ? `${options.plexUrl} · setup asks for the token` : 'Not installed']);
+      summary.push(['Telegram', options.telegram ? 'Setup asks for the bot token and chat' : 'Off · you can add it later in Settings']);
       summary.push(['Backups', `${options.backupDir || 'Default folder on this VM'} · nightly at 01:00`]);
       summary.push(['Release channel', channelOf(options) === 'stable' ? 'Stable · released versions' : 'Edge · every change']);
       summary.push(['State directory', options.state || 'Default location']);

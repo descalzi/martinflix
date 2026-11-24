@@ -640,6 +640,43 @@ def adopt_legacy(arr_keys, ports, legacy_media, media, *, arr_address='127.0.0.1
                 break
 
 
+WEBHOOK_NAME = 'MartinFlix'
+WEBHOOK_EVENTS = {'sonarr': ('onDownload', 'onUpgrade', 'onSeriesAdd'), 'radarr': ('onDownload', 'onUpgrade', 'onMovieAdded')}
+
+
+def configure_webhooks(arr_keys, ports, *, arr_address='127.0.0.1', password, enabled):
+    """Sonarr's and Radarr's webhook to the dashboard, which posts to Telegram: on imports, upgrades and additions,
+    signed in with the hook password. Removed when Telegram is off, so nothing calls a dashboard that won't use it."""
+    for app, name in ARR_NAMES.items():
+        api = AppApi(name, ports[app], arr_keys[app], address=arr_address)
+        existing = [item for item in api.request('notification') if item.get('name') == WEBHOOK_NAME]
+        if not enabled:
+            for item in existing:
+                api.request(f'notification/{item["id"]}', method='DELETE')
+            continue
+        values = {'url': f'http://dashboard:8765/api/hook/{app}', 'method': 1, 'username': 'martinflix', 'password': password}
+        if existing:
+            item = existing[0]
+        else:
+            item = next((entry for entry in api.request('notification/schema') if entry.get('implementation') == 'Webhook'), None)
+            if item is None:
+                raise ValueError(f'{name}: webhooks are not supported by this app version.')
+            item.pop('id', None)
+            item.update(name=WEBHOOK_NAME, tags=[])
+        # Only the events MartinFlix posts about; every other "on…" switch off.
+        for key in list(item):
+            if key.startswith('on') and isinstance(item[key], bool):
+                item[key] = key in WEBHOOK_EVENTS[app]
+        for field in item.get('fields') or []:
+            if field.get('name') in values:
+                field['value'] = values[field['name']]
+        # Saved without Sonarr's test call: the dashboard may not be running yet on a first install.
+        if existing:
+            api.request(f'notification/{item["id"]}?forceSave=true', item, method='PUT')
+        else:
+            api.request('notification?forceSave=true', item)
+
+
 def configure_apps(arr_keys, ports, media_path, prowlarr_key=None, transmission_password=None, *,
                    seed_indexers=False, seed_radarr_indexers=False, seed_prowlarr=False, arr_address='127.0.0.1',
                    downloads_behind_vpn=True, prowlarr_address='127.0.0.1', flaresolverr=False,
