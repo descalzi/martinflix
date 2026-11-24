@@ -35,7 +35,7 @@ from controller import hash_pin, valid_pin  # noqa: E402
 import restore  # noqa: E402
 from configure import (AppApi, BazarrApi, TransmissionRpc, adopt_legacy, configure_apps, configure_webhooks, configure_bazarr, ensure_arr_login,
                        ensure_bazarr_login, seed_transmission_defaults, ensure_audiobookshelf, ensure_listenarr_login,
-                       configure_listenarr)
+                       configure_listenarr, audiobookshelf_signs_in)
 
 COMPOSE_FILE = Path(__file__).resolve().with_name('compose.yaml')
 APP_DIR = COMPOSE_FILE.parents[2]
@@ -1887,6 +1887,12 @@ def run_installation(plan, state, previous, mode='install'):
             prepare_control_pin(state / 'controller', change=plan['change_pin'])
             if not (secret_dir / 'controller-token').is_file():
                 write_secret(secret_dir / 'controller-token', secrets.token_urlsafe(32))
+        # Apps given the temporary password this run. Once a personal one is chosen, the dashboard gives it to them at
+        # the next sign-in, as setup only knows the temporary one.
+        new_logins = []
+        if 'transmission' in enabled and personal_password_set and \
+                not private_secret(state / 'download-secrets' / 'transmission_password'):
+            new_logins.append('transmission')
         seed_bazarr = 'bazarr' in downloads and not options.get('bazarr_defaults_applied')
         opensubtitles = opensubtitles_login() if seed_bazarr else None
         transmission_password = (prepare_transmission_password(state / 'download-secrets', temporary_password,
@@ -1936,7 +1942,8 @@ def run_installation(plan, state, previous, mode='install'):
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
             api = AppApi(app.capitalize(), ports[app], key, address=arr_address)
-            ensure_arr_login(api, lambda: temporary_password)
+            if ensure_arr_login(api, lambda: temporary_password):
+                new_logins.append(app)
         if bootstrapping_arr and arr_address != str(bind):
             arr_address = str(bind)
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
@@ -1969,14 +1976,16 @@ def run_installation(plan, state, previous, mode='install'):
         if 'prowlarr' in enabled:
             prowlarr_key = wait_for_key(state / 'prowlarr/config.xml')
             write_secret(secret_dir / 'prowlarr-key', prowlarr_key)
-            ensure_arr_login(AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=download_address),
-                             lambda: temporary_password)
+            if ensure_arr_login(AppApi('Prowlarr', ports['prowlarr'], prowlarr_key, version=1, address=download_address),
+                                lambda: temporary_password):
+                new_logins.append('prowlarr')
         bazarr = None
         if 'bazarr' in enabled:
             bazarr_key = wait_for_bazarr_key(state / 'bazarr')
             write_secret(secret_dir / 'bazarr-key', bazarr_key)
             bazarr = BazarrApi(download_address, ports['bazarr'], bazarr_key)
-            ensure_bazarr_login(bazarr, lambda: temporary_password)
+            if ensure_bazarr_login(bazarr, lambda: temporary_password):
+                new_logins.append('bazarr')
         if download_address != str(bind):
             download_address = str(bind)
             environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
@@ -1986,7 +1995,6 @@ def run_installation(plan, state, previous, mode='install'):
             if bazarr:
                 bazarr = BazarrApi(download_address, ports['bazarr'], bazarr.key)
         listenarr = None
-        audiobooks_new_login = False
         if audiobooks:
             audiobooks_address = '127.0.0.1' if bootstrapping_audiobooks else str(bind)
             environment['MARTINFLIX_AUDIOBOOKS_BIND'] = audiobooks_address
@@ -2003,7 +2011,11 @@ def run_installation(plan, state, previous, mode='install'):
             listenarr_key = wait_for_listenarr_key(state / 'listenarr')
             write_secret(secret_dir / 'listenarr-key', listenarr_key)
             listenarr = AppApi('Listenarr', ports['listenarr'], listenarr_key, version=1, address=audiobooks_address)
-            audiobooks_new_login = ensure_listenarr_login(listenarr, lambda: temporary_password) or not had_admin
+            if ensure_listenarr_login(listenarr, lambda: temporary_password) or not had_admin:
+                new_logins += ['audiobookshelf', 'listenarr']
+            elif personal_password_set and audiobookshelf_signs_in(audiobooks_address, ports['audiobookshelf'], temporary_password):
+                # Installed before setup noted this: still on the temporary password, as Listenarr will be with it.
+                new_logins += ['audiobookshelf', 'listenarr']
             if audiobooks_address != str(bind):
                 environment['MARTINFLIX_AUDIOBOOKS_BIND'] = str(bind)
                 compose_step('   Opening the protected Audiobookshelf and Listenarr logins on your LAN…',
@@ -2156,9 +2168,28 @@ for app in ('sonarr', 'radarr'):
     print(f'{app} monitoring connected', flush=True)
 '''
         compose_step(f'{step + 2}. Checking that the dashboard can read both libraries…', ['exec', '-T', 'dashboard', 'python', '-B', '-c', verify])
+        if personal_password_set and new_logins:
+            mark_password_pending(auth_dir, new_logins)
     print_summary(mode, plan, password, (auth_dir / 'password-hash').is_file(), personal_password_set,
                   old_logins=bool(options.get('legacy_media')) and not personal_password_set,
-                  temporary_logins=['Audiobookshelf', 'Listenarr'] if audiobooks_new_login and personal_password_set else [])
+                  temporary_logins=[LOGIN_LABELS.get(app, app.capitalize()) for app in new_logins] if personal_password_set else [])
+
+
+# The file the dashboard reads to know which apps still have the temporary password.
+PASSWORD_PENDING = 'password-pending.json'
+LOGIN_LABELS = {'audiobookshelf': 'Audiobookshelf', 'listenarr': 'Listenarr', 'transmission': 'Transmission',
+                'prowlarr': 'Prowlarr', 'bazarr': 'Bazarr', 'sonarr': 'Sonarr', 'radarr': 'Radarr'}
+
+
+def mark_password_pending(auth_dir, apps):
+    """Note the apps given the temporary password, added to any noted before and not yet given the personal one."""
+    path = auth_dir / PASSWORD_PENDING
+    try:
+        before = json.loads(path.read_text()).get('apps') or []
+    except (OSError, ValueError, AttributeError):
+        before = []
+    listed = list(dict.fromkeys([*(app for app in before if isinstance(app, str)), *apps]))
+    write_secret(path, json.dumps({'apps': listed}))
 
 
 DONE = r"""
@@ -2208,10 +2239,11 @@ def print_summary(mode, plan, password, password_set, apps_use_it, output=None, 
         output.write(('Each signs in with admin and your dashboard password.\n' if apps_use_it else
                       'Each signs in with admin and the temporary password, until you choose your own in the dashboard.\n'))
     if temporary_logins and not old_logins:
-        # Setup only knows the temporary password; the dashboard gives every app the personal one when it is saved.
-        listed = ' and '.join(temporary_logins)
-        output.write(f'{listed} are new, so they sign in with the temporary password for now. Save your dashboard '
-                     'password again (Change password in the dashboard) to give it to them too.\n')
+        # Setup only knows the temporary password; the dashboard gives them the personal one at the next sign-in.
+        listed = ', '.join(temporary_logins[:-1]) + (' and ' if len(temporary_logins) > 1 else '') + temporary_logins[-1]
+        output.write(f'{listed} {"are" if len(temporary_logins) > 1 else "is"} new, so {"they sign" if len(temporary_logins) > 1 else "it signs"} '
+                     'in with the temporary password for now. The dashboard gives your password to '
+                     f'{"them" if len(temporary_logins) > 1 else "it"} when you next sign in, or asks for it straight away.\n')
     for app in plan['app_dirs']:
         output.write(f'{app.capitalize():13} http://{bind}:{ports[app]}\n')
     if plan['plex']:

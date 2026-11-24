@@ -272,10 +272,12 @@ def form_fields(settings):
 
 
 def ensure_bazarr_login(api, initial_password):
+    """Give Bazarr the shared login if it has none. True when it did."""
     if (api.get_settings().get('auth') or {}).get('type') in ('form', 'basic'):
-        return
+        return False
     api.save([('settings-auth-type', 'form'), ('settings-auth-username', 'admin'),
               ('settings-auth-password', initial_password())])
+    return True
 
 
 def configure_bazarr(api, arr_keys, *, seed=False, opensubtitles=None):
@@ -302,13 +304,15 @@ def configure_bazarr(api, arr_keys, *, seed=False, opensubtitles=None):
 
 
 def ensure_arr_login(api, initial_password):
+    """Give Sonarr, Radarr or Prowlarr the shared login if it has none. True when it did."""
     config = api.request('config/host')
     if config.get('authenticationMethod') not in ('none', None):
-        return
+        return False
     password = initial_password()
     config.update(authenticationMethod='forms', authenticationRequired='enabled',
                   username='admin', password=password, passwordConfirmation=password)
     api.request(f'config/host/{config["id"]}', config, method='PUT')
+    return True
 
 
 def item_name(item):
@@ -846,6 +850,15 @@ def ensure_audiobookshelf(address, port, key, initial_password, region, log=prin
         log(f'   Audiobookshelf: {AUDIOBOOKSHELF_LIBRARY} library added, with book details from Audible ({store.upper()}).',
             flush=True)
     return key
+
+
+def audiobookshelf_signs_in(address, port, password):
+    """Whether Audiobookshelf's admin still signs in with this password."""
+    try:
+        AudiobookshelfApi(address, port).request('/login', {'username': AUDIOBOOKS_USER, 'password': password})
+        return True
+    except AppApiHttpError:
+        return False
 
 
 def truthy(value):

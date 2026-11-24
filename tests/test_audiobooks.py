@@ -585,3 +585,44 @@ class LibraryAndAddTests(unittest.TestCase):
     def test_audible_covers_are_allowed_in_search_results(self):
         self.assertEqual(server.remote_poster('https://m.media-amazon.com/images/I/a.jpg'), 'https://m.media-amazon.com/images/I/a.jpg')
         self.assertIsNone(server.remote_poster('https://example.com/a.jpg'))
+
+
+class PasswordPendingTests(unittest.TestCase):
+    """Apps setup gives the temporary password after a personal one was chosen get the personal one later."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.auth = Path(folder.name)
+        self.auth.chmod(0o700)
+
+    def test_setup_notes_apps_and_keeps_earlier_ones(self):
+        install.mark_password_pending(self.auth, ['bazarr'])
+        install.mark_password_pending(self.auth, ['audiobookshelf', 'listenarr', 'bazarr'])
+        self.assertEqual(json.loads((self.auth / 'password-pending.json').read_text()),
+                         {'apps': ['bazarr', 'audiobookshelf', 'listenarr']})
+        self.assertEqual((self.auth / 'password-pending.json').stat().st_mode & 0o777, 0o600)
+
+    def test_the_dashboard_names_them_and_forgets_them_once_synced(self):
+        (self.auth / 'password-pending.json').write_text(json.dumps({'apps': ['audiobookshelf', 'transmission', 'nope']}))
+        environment = {'MARTINFLIX_ADMIN_STATE_FILE': str(self.auth / 'password-hash')}
+        with patch.dict('os.environ', environment, clear=True):
+            self.assertEqual(server.password_pending(), ['Audiobookshelf', 'Transmission'])
+            with patch.object(server, 'sync_app_passwords', side_effect=ValueError('Listenarr is down')):
+                self.assertFalse(server.sync_pending_passwords('mine'))
+            self.assertTrue((self.auth / 'password-pending.json').exists(), 'kept until every app has it')
+            with patch.object(server, 'sync_app_passwords') as sync:
+                self.assertTrue(server.sync_pending_passwords('mine'))
+            sync.assert_called_once_with('mine')
+            self.assertEqual(server.password_pending(), [])
+
+    def test_audiobookshelf_on_the_temporary_password_is_spotted(self):
+        state = {'root': ('admin', 'temporary'), 'keys': set(), 'libraries': [], 'posts': []}
+        handler = type('Handler', (AudiobookshelfServer,), {'state': state})
+        running = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=running.serve_forever, daemon=True).start()
+        self.addCleanup(running.server_close)
+        self.addCleanup(running.shutdown)
+        port = running.server_address[1]
+        self.assertTrue(configure.audiobookshelf_signs_in('127.0.0.1', port, 'temporary'))
+        self.assertFalse(configure.audiobookshelf_signs_in('127.0.0.1', port, 'personal'))

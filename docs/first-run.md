@@ -196,7 +196,7 @@ In the dashboard, the **Library** page gets an **Audiobooks** section: the books
 
 Listenarr only publishes test builds, so setup installs one version it has been checked against, not the newest; MartinFlix releases move it on. Audiobookshelf follows its latest release, like the other apps.
 
-Added to an installation whose dashboard password you already chose, both start with the temporary password, because setup only knows that one. Save your dashboard password again under **Change password** and they get it too. Setup installs apps but never removes them: to stop using audiobooks, stop both on the Services page.
+Added to an installation whose dashboard password you already chose, both start with the temporary password, because setup only knows that one. The same goes for any app setup adds later. Setup notes them, and the dashboard gives them your password the next time you sign in; until then a banner names them and asks for your password to do it straight away. Setup installs apps but never removes them: to stop using audiobooks, stop both on the Services page.
 
 Select individual apps with `--download-client transmission`, `--enable-prowlarr`, `--enable-flaresolverr`, and `--enable-bazarr`. Prowlarr can run on its own. FlareSolverr requires Prowlarr and follows its network route. Only Transmission requires a media path. The older `--enable-downloads` flag still selects Transmission, Prowlarr, and FlareSolverr.
 

@@ -490,6 +490,46 @@ def sync_app_passwords(password):
             pass
 
 
+def password_pending_file():
+    """Where setup notes the apps it gave the temporary password after a personal one was chosen."""
+    state = os.environ.get('MARTINFLIX_ADMIN_STATE_FILE')
+    return Path(state).with_name('password-pending.json') if state else None
+
+
+def password_pending():
+    """The names of the apps still on the temporary password, or [] when none is noted."""
+    path = password_pending_file()
+    try:
+        apps = json.loads(path.read_text()).get('apps') if path else None
+    except (OSError, ValueError, AttributeError):
+        return []
+    labels = [CATALOG['apps'].get({'transmission': 'transmission-daemon'}.get(app, app), {}).get('name')
+              for app in apps or [] if isinstance(app, str)]
+    return [label for label in labels if label]
+
+
+def clear_password_pending():
+    path = password_pending_file()
+    if path:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def sync_pending_passwords(password):
+    """Give every app the personal password, as after a change, and forget the note. False if any app failed."""
+    try:
+        sync_app_passwords(password)
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()
+        print(f'Password sync after setup: {exc}', flush=True)
+        return False
+    clear_password_pending()
+    return True
+
+
 def app_list():
     names = [CATALOG['apps'][{'transmission': 'transmission-daemon'}.get(app, app)]['name'] for app in synced_apps()]
     return ', '.join(names[:-1]) + ' and ' + names[-1] if len(names) > 1 else ''.join(names)
@@ -2346,6 +2386,7 @@ class Handler(BaseHTTPRequestHandler):
             data = {'docker': service_status(), 'backups': backup_status(), 'time': int(time.time()),
                     'canChangePassword': form_login, 'canChangePin': form_login and controller_configured(),
                     'discover': bool(tmdb_key()), 'release': release_brief(),
+                    'passwordPending': password_pending() if form_login and not self.server.password_setup_required else [],
                     'catalog': catalog}
             self.send_json(data)
         elif path in ('/api/system', '/api/settings'):
@@ -2504,6 +2545,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/backup':
             self.backup_request()
             return
+        if path == '/api/password-sync':
+            self.password_sync_request()
+            return
         if path == '/api/vpn-test':
             if self.json_body(64) is None:
                 return
@@ -2581,6 +2625,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'error': 'Backups need the controller. Rerun setup to add it.'}, 503)
             return
         self.send_json({'ok': True, 'message': 'Backup started. It takes a few minutes and appears here when done.'})
+
+    def password_sync_request(self):
+        """Give the apps setup added since the password was chosen the dashboard password, checked first."""
+        request = self.json_body(512)
+        if request is None:
+            return
+        password = request.get('password')
+        if not isinstance(password, str) or not self.valid_credentials(self.server.admin_user, password):
+            self.send_json({'error': 'That isn’t your dashboard password.'}, 400)
+            return
+        if not sync_pending_passwords(password):
+            self.send_json({'error': f'Could not finish updating {app_list()}. Check they are running on the Services '
+                                     'page, then try again.'}, 502)
+            return
+        self.send_json({'ok': True})
 
     def json_body(self, limit):
         """The JSON object of a dashboard action, or None once an error has been sent."""
@@ -2780,6 +2839,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_auth_page('login.html', 'Check your username and password and try again.', 401)
                 return
             destination = '/setup-password' if self.server.password_setup_required else '/'
+            if not self.server.password_setup_required and password_pending() and synced_apps():
+                # Apps setup added since the password was chosen have the temporary one; this is the moment the
+                # dashboard has the real one, so they get it now, in the background.
+                threading.Thread(target=sync_pending_passwords, args=(password,), daemon=True, name='password-sync').start()
             expiry = int(time.time()) + SESSION_SECONDS
             value = f'{expiry}.{secrets.token_urlsafe(24)}'
             signature = hmac.new(self.server.session_key, value.encode(), 'sha256').hexdigest()
@@ -2822,6 +2885,7 @@ class Handler(BaseHTTPRequestHandler):
                                             502, changing=changing)
                         return
                 save_admin_password(self.server.admin_state_file, verifier.encoded)
+                clear_password_pending()
             except OSError:
                 self.send_auth_page('setup-password.html', 'Could not save the dashboard password. Check its storage '
                                     'and submit the same new password again.', 500, changing=changing)

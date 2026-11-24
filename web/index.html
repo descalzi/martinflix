@@ -66,6 +66,14 @@
         </div>
       </header>
 
+      <!-- Apps setup added since the password was chosen still have the temporary one. -->
+      <button class="update-banner password-banner" type="button" id="password-banner" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-key"/></svg>
+        <span><strong id="password-banner-title">New apps use the temporary password</strong> <span>Give them your dashboard password, so every app signs in with the same one.</span></span>
+        <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>
+      </button>
+      <p class="control-notice" id="password-notice" role="status" hidden></p>
+
       <!-- Setup running in the background, for an update, new settings or a restore. Shown on Settings and Backups. -->
       <section class="panel setup-run" id="setup-run" aria-labelledby="setup-run-title" hidden>
         <div class="panel-head"><div><h2 id="setup-run-title">Updating</h2><p id="setup-run-detail"></p></div><span id="setup-run-badge"></span></div>
@@ -455,6 +463,20 @@
           <div class="control-actions">
             <button class="button button-quiet" type="button" id="delete-cancel">Cancel</button>
             <button class="button button-danger" type="submit" id="delete-confirm">Delete</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog class="control-dialog" id="password-dialog" aria-labelledby="password-dialog-title">
+        <form id="password-form" novalidate>
+          <h2 id="password-dialog-title">Give them your password?</h2>
+          <p class="control-detail" id="password-dialog-detail"></p>
+          <label for="password-sync">Dashboard password</label>
+          <input id="password-sync" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+          <p class="error error-inline" id="password-error" role="alert" hidden></p>
+          <div class="control-actions">
+            <button class="button button-quiet" type="button" id="password-cancel">Not now</button>
+            <button class="button button-primary" type="submit" id="password-confirm">Give them my password</button>
           </div>
         </form>
       </dialog>

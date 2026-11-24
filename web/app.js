@@ -379,6 +379,63 @@ async function post(url, body) {
   return data;
 }
 
+/* Apps setup added after the dashboard password was chosen have the temporary one until they're given it. */
+let pendingApps = [];
+function listNames(names) {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] || '';
+}
+
+function showPasswordPending(apps) {
+  pendingApps = apps;
+  const banner = $('#password-banner');
+  banner.hidden = !apps.length;
+  if (apps.length) {
+    $('#password-banner-title').textContent = `${listNames(apps)} ${apps.length === 1 ? 'uses' : 'use'} the temporary password`;
+  }
+}
+
+function setupPasswordSync() {
+  const dialog = $('#password-dialog');
+  const input = $('#password-sync');
+  const error = $('#password-error');
+  const confirm = $('#password-confirm');
+  $('#password-banner').addEventListener('click', () => {
+    $('#password-dialog-detail').textContent = `Setup added ${listNames(pendingApps)} after you chose your dashboard password, and it only knows the temporary one. Enter your password to give it to ${pendingApps.length === 1 ? 'it' : 'them'} too.`;
+    input.value = '';
+    error.hidden = true;
+    dialog.showModal();
+    input.focus();
+  });
+  $('#password-cancel').addEventListener('click', () => dialog.close());
+  $('#password-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!input.value) {
+      error.textContent = 'Enter your dashboard password.';
+      error.hidden = false;
+      return input.focus();
+    }
+    confirm.disabled = true;
+    confirm.textContent = 'Updating…';
+    error.hidden = true;
+    try {
+      await post('/api/password-sync', {password: input.value});
+      dialog.close();
+      const notice = $('#password-notice');
+      notice.textContent = `${listNames(pendingApps)} now ${pendingApps.length === 1 ? 'signs' : 'sign'} in with your dashboard password.`;
+      notice.hidden = false;
+      showPasswordPending([]);
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+      input.select();
+    } finally {
+      confirm.disabled = false;
+      confirm.textContent = 'Give them my password';
+    }
+  });
+}
+setupPasswordSync();
+
 /** The PIN dialog, shared by every action that needs it. `send(pin)` does the action; `after(data)` runs once it worked. */
 let pinRequest = null;
 function askPin(text, send, after) {
@@ -529,6 +586,7 @@ async function status() {
     $('#nav-password').hidden = !data.canChangePassword;
     $('#nav-pin').hidden = !data.canChangePin;
     $('#nav-discover').hidden = !data.discover && page !== 'discover';
+    showPasswordPending(data.passwordPending || []);
     const newer = data.release?.available;
     $('#nav-update').hidden = !newer;
     if (page === 'overview') {
@@ -1761,7 +1819,7 @@ function fillSettings(data) {
   form.audiobooks.checked = form.audiobooks.disabled = Boolean(data.audiobooks);
   $('#setting-audiobooks-help').textContent = data.audiobooks
     ? 'Installed. Your audiobooks are in the Audiobooks folder of your media folder; both apps are on the Services page.'
-    : 'Installs both, with an Audiobooks folder in your media folder. Afterwards, save your dashboard password again (Change password) so they sign in with it too.';
+    : 'Installs both, with an Audiobooks folder in your media folder. They sign in with admin and your dashboard password; the dashboard asks for it once they’re installed.';
   form.hidden = false;
   settingsData = data;
   showSettingsChanges();
