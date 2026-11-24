@@ -287,6 +287,28 @@
   .chart-tip .legend-key { margin-right: 6px; }
   .chart-x { display: flex; justify-content: space-between; margin-top: var(--space-1); padding-left: 4.5em; color: var(--fg-muted); font-size: var(--text-xs); }
   .live-list { display: grid; gap: var(--space-3); }
+  .history-wrap { overflow-x: auto; }
+  .history { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+  .history thead th { padding: 0 var(--space-2) var(--space-2); color: var(--fg-muted); font-weight: 600; font-size: var(--text-xs); text-align: left; border-bottom: 1px solid var(--border); }
+  .history td, .history tbody th { padding: 6px var(--space-2); vertical-align: middle; border-bottom: 1px solid var(--border); text-align: left; }
+  .history tbody tr:last-child > * { border-bottom: 0; }
+  .history-art { width: 30px; padding-left: 0 !important; }
+  .history .live-thumb { width: 28px; border-radius: 4px; }
+  .history-title { font-weight: 600; max-width: 0; width: 38%; }
+  .history-title > span:first-child, td.history-episode > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.history-episode { max-width: 0; width: 34%; color: var(--fg-muted); }
+  .history-who { white-space: nowrap; }
+  .history-when { white-space: nowrap; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+  .history-sub { display: none; }
+  @media (max-width: 640px) {
+    .history thead { display: none; }
+    .history .history-episode, .history .history-who { display: none; }
+    .history-title { width: 100%; }
+    .history-when { width: 1%; }
+    .history-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-weight: 400; font-size: var(--text-xs); }
+    .history-when { text-align: right !important; }
+    .history .live-thumb { width: 32px; }
+  }
   .live-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
   .live-thumb { width: 44px; aspect-ratio: 2 / 3; border-radius: 6px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); }
   .live-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }

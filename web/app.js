@@ -751,6 +751,38 @@ async function live() {
   }
 }
 
+/** "Today 21:14", "Yesterday 20:03", "Mon 19:40" within the week, then "12 Nov", with the year once it isn't this one. */
+function watchedWhen(epoch) {
+  const date = new Date(epoch * 1000);
+  const time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const today = new Date();
+  const days = Math.round((new Date(today.getFullYear(), today.getMonth(), today.getDate()) - day) / 86400000);
+  if (days <= 0) return `Today ${time}`;
+  if (days === 1) return `Yesterday ${time}`;
+  if (days < 7) return `${date.toLocaleDateString([], {weekday: 'short'})} ${time}`;
+  return date.toLocaleDateString([], {day: 'numeric', month: 'short', ...(date.getFullYear() === today.getFullYear() ? {} : {year: 'numeric'})});
+}
+
+/** Plex's watch history as a table: one line per play. On a phone the episode moves under the title and who under when. */
+function historyTable(history) {
+  const rows = history.map(item => {
+    const when = item.watchedAt ? watchedWhen(item.watchedAt) : '';
+    const full = item.watchedAt ? new Date(item.watchedAt * 1000).toLocaleString([], {dateStyle: 'full', timeStyle: 'short'}) : '';
+    return `<tr>
+      <td class="history-art"><div class="live-thumb">${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy" decoding="async">` : ''}</div></td>
+      <th scope="row" class="history-title"><span>${esc(item.title)}</span>${item.detail ? `<span class="history-sub">${esc(item.detail)}</span>` : ''}</th>
+      <td class="history-episode"><span>${esc(item.detail || '')}</span></td>
+      <td class="history-who">${esc(item.user || '')}</td>
+      <td class="history-when"><time${full ? ` title="${esc(full)}"` : ''}>${esc(when)}</time><span class="history-sub">${esc(item.user || '')}</span></td>
+    </tr>`;
+  }).join('');
+  return `<div class="history-wrap"><table class="history">
+    <thead><tr><th scope="col"><span class="sr-only">Poster</span></th><th scope="col">Title</th><th scope="col" class="history-episode">Episode</th>
+      <th scope="col" class="history-who">Who</th><th scope="col" class="history-when">When</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
 async function watchHistory() {
   try {
     const data = await get('/api/watch-history');
@@ -758,9 +790,7 @@ async function watchHistory() {
     if (!data.configured) return;
     const history = data.history || [];
     $('#live-history').innerHTML = data.error ? `<p class="error error-inline">${esc(data.error)}</p>`
-      : history.length ? `<ul class="live-list">${history.map(item => liveRow(item,
-          `<p class="live-meta">${esc([item.user, item.watchedAt ? durationSince(new Date(item.watchedAt * 1000)) + ' ago' : ''].filter(Boolean).join(' · '))}</p>`)).join('')}</ul>`
-      : '<p class="empty">Nothing watched yet.</p>';
+      : history.length ? historyTable(history) : '<p class="empty">Nothing watched yet.</p>';
   } catch {
     $('#live-history').innerHTML = '<p class="error error-inline">Could not load the watch history.</p>';
   }
