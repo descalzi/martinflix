@@ -47,8 +47,8 @@ class MessageTests(unittest.TestCase):
                                      'episodes': [{'seasonNumber': 4, 'episodeNumber': 6, 'title': 'Hello Goodbye'}]})
         ManualTimer.made[-1].fire()
         self.assertEqual(self.sent, [
-            ('<b>The Wild Robot</b> (2024)\nReady to watch · Bluray-2160p', 'https://example.org/poster.jpg'),
-            ('<b>Slow Horses</b> (2022)\nS04E06 · Hello Goodbye\nReady to watch · WEBDL-1080p', 'https://example.org/poster.jpg')])
+            ('<b>The Wild Robot</b> (2024)\nReady to watch', 'https://example.org/poster.jpg'),
+            ('<b>Slow Horses</b> (2022)\nS04E06 · Hello Goodbye\nReady to watch', 'https://example.org/poster.jpg')])
 
     def test_episodes_imported_together_are_one_message(self):
         for number in (1, 2, 3, 5):
@@ -57,7 +57,7 @@ class MessageTests(unittest.TestCase):
                                          'episodes': [{'seasonNumber': 2, 'episodeNumber': number, 'title': f'E{number}'}]})
         self.assertEqual(sum(not timer.cancelled for timer in ManualTimer.made), 1, 'each import restarts the wait')
         ManualTimer.made[-1].fire()
-        self.assertEqual(self.sent, [('<b>Severance &amp; Co</b> (2022)\nS02E01–E03, S02E05 · 4 episodes\nUpgraded · Bluray-1080p', None)])
+        self.assertEqual(self.sent, [('<b>Severance &amp; Co</b> (2022)\nS02E01–E03, S02E05 · 4 episodes\nUpgraded', None)])
 
     def test_additions_and_tests(self):
         self.hooks.handle('sonarr', {'eventType': 'SeriesAdd', 'series': {'title': 'Taskmaster', 'year': 2015, 'images': POSTER}})

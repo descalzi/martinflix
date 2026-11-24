@@ -1630,11 +1630,6 @@ def episode_codes(episodes):
     return ', '.join(parts)
 
 
-def hook_quality(event):
-    quality = ((event.get('episodeFile') or event.get('movieFile') or {}).get('quality')) if isinstance(event, dict) else None
-    return short_text(quality, 40) if isinstance(quality, str) else ''
-
-
 class HookMessages:
     """Turns Sonarr's and Radarr's webhook events into Telegram messages. Episodes imported within a short while of
     each other, for the same series, are gathered into one message."""
@@ -1659,8 +1654,7 @@ class HookMessages:
         elif kind == 'Download' and app == 'radarr':
             movie = event.get('movie') or {}
             state = 'Upgraded' if event.get('isUpgrade') else 'Ready to watch'
-            quality = hook_quality(event)
-            self.deliver(f'{hook_heading(movie)}\n{state}' + (f' · {html.escape(quality)}' if quality else ''), hook_poster(movie))
+            self.deliver(f'{hook_heading(movie)}\n{state}', hook_poster(movie))
         elif kind == 'Download' and app == 'sonarr':
             self.gather_episodes(event)
 
@@ -1672,10 +1666,9 @@ class HookMessages:
         with self.lock:
             batch = self.pending.get(key)
             if batch is None:
-                batch = self.pending[key] = {'series': series, 'episodes': {}, 'upgrade': True, 'quality': '', 'timer': None}
+                batch = self.pending[key] = {'series': series, 'episodes': {}, 'upgrade': True, 'timer': None}
             batch['episodes'].update(episodes)
             batch['upgrade'] = batch['upgrade'] and bool(event.get('isUpgrade'))
-            batch['quality'] = hook_quality(event) or batch['quality']
             if batch['timer'] is not None:
                 batch['timer'].cancel()
             batch['timer'] = self.timer(self.gather, self.flush, args=(key,))
@@ -1694,8 +1687,7 @@ class HookMessages:
         else:
             line = f'{episode_codes(episodes)} · {len(episodes)} episodes' if episodes else ''
         state = 'Upgraded' if batch['upgrade'] else 'Ready to watch'
-        quality = f' · {html.escape(batch["quality"])}' if batch['quality'] else ''
-        self.deliver('\n'.join(filter(None, (hook_heading(batch['series']), line, state + quality))), hook_poster(batch['series']))
+        self.deliver('\n'.join(filter(None, (hook_heading(batch['series']), line, state))), hook_poster(batch['series']))
 
     def deliver(self, text, photo):
         try:
