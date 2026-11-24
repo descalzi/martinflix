@@ -52,5 +52,49 @@ class PlayLogTests(unittest.TestCase):
         self.assertEqual(len(self.log.plays), 3, 'the next day')
 
 
+
+class TautulliImportTests(unittest.TestCase):
+    rows = [
+        {'media_type': 'episode', 'user_id': 1234567, 'friendly_name': 'Martin', 'rating_key': 900, 'grandparent_title': 'Slow Horses',
+         'parent_media_index': '4', 'media_index': '6', 'title': 'Hello Goodbye', 'started': 1_000_000, 'stopped': 1_003_000,
+         'percent_complete': 98, 'watched_status': 1, 'thumb': '/library/metadata/77/thumb/1700000000'},
+        {'media_type': 'movie', 'user_id': 555, 'friendly_name': 'Sofia', 'rating_key': '500', 'title': 'Hamnet', 'year': 2025,
+         'started': 2_000_000, 'stopped': 2_002_000, 'percent_complete': 41, 'watched_status': 0, 'thumb': '../../etc/passwd'},
+        {'media_type': 'track', 'user_id': 1, 'rating_key': 3, 'started': 1, 'stopped': 2},
+    ]
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.path = Path(self.folder.name) / 'plays.json'
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def test_tautullis_rows_become_plays(self):
+        plays = [play for play in map(server.tautulli_play, self.rows) if play]
+        self.assertEqual([(play['title'], play['detail'], play['user'], play['progress'], play['finished']) for play in plays],
+                         [('Slow Horses', 'S04E06 · Hello Goodbye', 'Martin', 100, True), ('Hamnet', '2025', 'Sofia', 41, False)])
+        self.assertEqual(plays[0]['poster'], '/api/plex-art?path=%2Flibrary%2Fmetadata%2F77%2Fthumb%2F1700000000')
+        self.assertIsNone(plays[1]['poster'], 'only library artwork paths')
+
+    def test_importing_twice_adds_nothing_and_the_dashboard_keeps_what_was_imported(self):
+        dashboard = server.PlayLog(self.path)
+        dashboard.record([{**FILM, 'percent': 10}], now=3_000_000)
+        importer = server.PlayLog(self.path)
+        plays = [play for play in map(server.tautulli_play, self.rows) if play]
+        self.assertEqual(importer.add(plays), 2)
+        self.assertEqual(importer.add(plays), 0)
+        dashboard.record([{**FILM, 'percent': 20}], now=3_000_300)
+        self.assertEqual(len(server.PlayLog(self.path).plays), 3, 'the dashboard read the import before saving')
+
+    def test_the_owners_imported_plays_are_not_doubled_by_plexs_history(self):
+        log = server.PlayLog(self.path)
+        log.add([server.tautulli_play(self.rows[0])])
+        # Plex's history calls the server's owner account 1; Tautulli used their plex.tv account.
+        rows = log.merged([{'account': 1, 'ratingKey': '900', 'title': 'Slow Horses', 'user': 'Martin', 'watchedAt': 1_002_900}])
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['finished'])
+
+
 if __name__ == '__main__':
     unittest.main()

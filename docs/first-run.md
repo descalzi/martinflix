@@ -111,6 +111,12 @@ docker run --rm -it --pull always -v /var/run/docker.sock:/var/run/docker.sock -
 
 The controller checks for a newer MartinFlix image on the installation's channel a couple of minutes after it starts and then every six hours, by asking Docker to download it; the controller itself never reaches the internet. A new version shows on the Overview and on **Settings**, with the list of changes from GitHub. **Update now** asks for your PIN, then runs setup again from the new image in a container of its own, `…-updater`, because setup recreates the controller and the dashboard on the way. Settings shows setup's output as it goes; the dashboard restarts near the end and the page reloads by itself. If an update fails, the output says why and nothing after that step changed; fix the cause and update again, from Settings or from a terminal.
 
+**Recently watched**, on the Live page, lists everyone's plays, including ones stopped part-way. Every five minutes the dashboard notes what is playing on Plex and keeps its own play log (in `dashboard-data`, backed up with the rest); Plex's history, which only holds plays watched to the end, marks the ones that were finished. To bring in the history an older Tautulli recorded, run this once on the machine, with Tautulli still running; it asks for Tautulli's API key (Settings → Web Interface) and skips plays it already has:
+
+```sh
+docker exec -it martinflix-dashboard python -B /app/server.py import-tautulli http://<address>:8181
+```
+
 **Telegram.** MartinFlix can post to a Telegram chat when an episode or film is ready to watch (upgrades included) and when a series or film is added, with its poster, in the same format for both. Several episodes imported together, such as a season pack, become one message. To set it up:
 
 1. In Telegram, message **@BotFather**, send `/newbot` and follow its questions. It replies with the bot token, such as `123456789:AAH…`.

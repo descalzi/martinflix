@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -1108,7 +1109,7 @@ PLAY_LOG_EVERY = 300
 # where it was or further on, after a pause. Anything else, such as the next day or starting over, is a new play.
 PLAY_GAP = 15 * 60
 PLAY_RESUME = 6 * 3600
-PLAY_LOG_KEEP = 1000
+PLAY_LOG_KEEP = 5000
 
 
 def play_key(account, rating):
@@ -1117,35 +1118,82 @@ def play_key(account, rating):
 
 
 class PlayLog:
+    """The plays, in a file the dashboard and a one-off import (import-tautulli) can both add to: each change reads
+    the file again first, under a lock, so neither overwrites the other."""
+
     def __init__(self, path):
         self.path = Path(path) if path else None
         self.lock = threading.Lock()
-        self.plays = self.load()
+        self.stamp = None
+        self.plays = []
+        self.refresh()
 
-    def load(self):
+    def refresh(self):
+        """Read the file again if something else changed it."""
         if self.path is None:
-            return []
+            return
+        try:
+            stamp = self.path.stat().st_mtime_ns
+        except OSError:
+            return
+        if stamp == self.stamp:
+            return
         try:
             plays = json.loads(self.path.read_text())
         except (OSError, ValueError):
-            return []
-        return [play for play in plays if isinstance(play, dict) and isinstance(play.get('seen'), int)] \
+            return
+        self.stamp = stamp
+        self.plays = [play for play in plays if isinstance(play, dict) and isinstance(play.get('seen'), int)] \
             if isinstance(plays, list) else []
 
     def save(self):
         if self.path is None:
             return
+        self.plays.sort(key=lambda play: play['seen'])
+        self.plays = self.plays[-PLAY_LOG_KEEP:]
         temporary = self.path.with_name(f'.plays.{secrets.token_hex(4)}')
         try:
-            temporary.write_text(json.dumps(self.plays[-PLAY_LOG_KEEP:]))
+            temporary.write_text(json.dumps(self.plays))
             temporary.replace(self.path)
+            self.stamp = self.path.stat().st_mtime_ns
         except OSError:
             temporary.unlink(missing_ok=True)
+
+    def changing(self):
+        """Hold the file for a change, across processes."""
+        import contextlib
+        import fcntl
+
+        @contextlib.contextmanager
+        def held():
+            with self.lock:
+                if self.path is None:
+                    yield
+                    return
+                with open(self.path.with_name('.plays.lock'), 'a') as handle:
+                    fcntl.flock(handle, fcntl.LOCK_EX)
+                    self.refresh()
+                    yield
+                    self.save()
+        return held()
+
+    def add(self, plays):
+        """Add plays from elsewhere (an import), skipping any already here. Returns how many were new."""
+        added = 0
+        with self.changing():
+            known = {(play.get('ratingKey'), play.get('started') // 60 if isinstance(play.get('started'), int) else None)
+                     for play in self.plays}
+            for play in plays:
+                if (play['ratingKey'], play['started'] // 60) not in known:
+                    self.plays.append(play)
+                    known.add((play['ratingKey'], play['started'] // 60))
+                    added += 1
+        return added
 
     def record(self, sessions, now=None):
         """Note what is playing now: a play seen recently carries on, anything else starts a new one."""
         now = int(now if now is not None else time.time())
-        with self.lock:
+        with self.changing():
             for session in sessions:
                 key = play_key(session.get('account'), session.get('ratingKey'))
                 if not key[1]:
@@ -1160,35 +1208,108 @@ class PlayLog:
                 play.update(seen=now, progress=max(play.get('progress', 0), min(100, max(0, percent))),
                             title=session.get('title'), detail=session.get('detail'), poster=session.get('poster'),
                             user=session.get('user'))
-            self.plays = self.plays[-PLAY_LOG_KEEP:]
-            self.save()
 
     def merged(self, history, limit=30):
         """The log and Plex's finished views together: a play Plex says was finished shows as finished, and a
         finished view the log never saw still shows."""
         with self.lock:
+            self.refresh()
             plays = [dict(play) for play in self.plays]
         rows = [{'title': play.get('title') or 'Untitled', 'detail': play.get('detail') or '', 'poster': play.get('poster'),
                  'user': play.get('user') or 'Someone', 'watchedAt': play['seen'], 'startedAt': play.get('started'),
-                 'progress': play.get('progress', 0), 'finished': False, 'key': play_key(play.get('account'), play.get('ratingKey'))}
+                 'progress': 100 if play.get('finished') else play.get('progress', 0), 'finished': bool(play.get('finished')),
+                 'imported': bool(play.get('imported')), 'key': play_key(play.get('account'), play.get('ratingKey'))}
                 for play in plays]
         for view in history:
             viewed = view.get('watchedAt')
             key = play_key(view.get('account'), view.get('ratingKey'))
             match = None
             if type(viewed) is int:
-                match = next((row for row in rows if row['key'] == key and not row['finished']
+                # Tautulli names the server's owner by their plex.tv account, Plex by 1: an imported play matches by
+                # title and time alone.
+                match = next((row for row in rows if (row['key'] == key or (row['imported'] and row['key'][1] == key[1]))
                               and (row['startedAt'] or row['watchedAt']) - PLAY_GAP <= viewed <= row['watchedAt'] + PLAY_GAP), None)
             if match:
-                match.update(finished=True, progress=100, watchedAt=max(match['watchedAt'], viewed))
+                if not match['finished']:
+                    match.update(finished=True, progress=100, watchedAt=max(match['watchedAt'], viewed))
             else:
                 rows.append({**{name: view.get(name) for name in ('title', 'detail', 'poster', 'user', 'watchedAt')},
                              'progress': 100, 'finished': True, 'key': key})
         rows.sort(key=lambda row: row.get('watchedAt') or 0, reverse=True)
         for row in rows:
-            row.pop('key', None)
-            row.pop('startedAt', None)
+            for name in ('key', 'startedAt', 'imported'):
+                row.pop(name, None)
         return rows[:limit]
+
+
+def tautulli_plays(base, key, page=1000, opener=None):
+    """Every play Tautulli recorded, as play log entries."""
+    opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    start, plays = 0, []
+    while True:
+        query = urllib.parse.urlencode({'apikey': key, 'cmd': 'get_history', 'length': page, 'start': start,
+                                        'order_column': 'date', 'order_dir': 'desc'})
+        with opener.open(f'{base.rstrip("/")}/api/v2?{query}', timeout=60) as response:
+            reply = json.load(response).get('response') or {}
+        if reply.get('result') != 'success':
+            raise ValueError(reply.get('message') or 'Tautulli refused the request.')
+        rows = (reply.get('data') or {}).get('data') or []
+        for row in rows:
+            play = tautulli_play(row)
+            if play:
+                plays.append(play)
+        start += len(rows)
+        if not rows or start >= ((reply.get('data') or {}).get('recordsFiltered') or 0):
+            return plays
+
+
+def tautulli_play(row):
+    """One row of Tautulli's history as a play log entry, or None for music and anything incomplete."""
+    if not isinstance(row, dict) or row.get('media_type') not in ('movie', 'episode'):
+        return None
+    started, stopped = row.get('started'), row.get('stopped')
+    rating = row.get('rating_key')
+    if type(started) is not int or type(stopped) is not int or rating in (None, ''):
+        return None
+    if row['media_type'] == 'episode':
+        def number(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+        season, episode = number(row.get('parent_media_index')), number(row.get('media_index'))
+        code = f'S{season:02d}E{episode:02d}' if season is not None and episode is not None else ''
+        title = short_text(row.get('grandparent_title'), 120) or 'Untitled'
+        detail = ' · '.join(part for part in (code, short_text(row.get('title'), 80)) if part)
+    else:
+        title = short_text(row.get('title') or row.get('full_title'), 120) or 'Untitled'
+        detail = str(row['year']) if str(row.get('year') or '').isdigit() else ''
+    thumb = row.get('thumb')
+    poster = f'/api/plex-art?{urllib.parse.urlencode({"path": thumb})}' if isinstance(thumb, str) and PLEX_ART.fullmatch(thumb) else None
+    percent = row.get('percent_complete')
+    finished = row.get('watched_status') == 1
+    return {'account': str(row.get('user_id') or ''), 'ratingKey': str(rating), 'started': started, 'seen': stopped,
+            'progress': 100 if finished else max(0, min(100, int(percent))) if isinstance(percent, (int, float)) else 0,
+            'finished': finished, 'imported': True, 'title': title, 'detail': detail, 'poster': poster,
+            'user': short_text(row.get('friendly_name') or row.get('user'), 60) or 'Someone'}
+
+
+def import_tautulli(argv):
+    """import-tautulli <address>: add Tautulli's history to the play log, once. Asks for Tautulli's API key."""
+    import getpass
+    if len(argv) != 1 or not re.fullmatch(r'https?://[A-Za-z0-9.\[\]:-]+(:[0-9]{1,5})?/?', argv[0]):
+        raise SystemExit('Usage: import-tautulli http://<address>:8181')
+    if PLAYS.path is None:
+        raise SystemExit('Run this in the dashboard container: it has no play log here.')
+    key = os.environ.get('TAUTULLI_KEY') or getpass.getpass('Tautulli API key (Settings → Web Interface → API key): ').strip()
+    if not re.fullmatch(r'[A-Za-z0-9]{16,64}', key):
+        raise SystemExit('That doesn’t look like a Tautulli API key.')
+    try:
+        plays = tautulli_plays(argv[0], key)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f'Tautulli could not be read: {exc}') from None
+    added = PLAYS.add(plays)
+    print(f'Tautulli had {len(plays)} plays of films and episodes; {added} were new to the play log.')
 
 
 PLAYS = PlayLog(Path(os.environ['MARTINFLIX_DATA_DIR']) / 'plays.json' if os.environ.get('MARTINFLIX_DATA_DIR') else None)
@@ -2538,6 +2659,11 @@ def save_admin_password(path, encoded):
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+if __name__ == '__main__' and sys.argv[1:2] == ['import-tautulli']:
+    import_tautulli(sys.argv[2:])
+    sys.exit(0)
 
 
 if __name__ == '__main__':
