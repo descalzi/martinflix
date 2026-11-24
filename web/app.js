@@ -1818,7 +1818,58 @@ function setupTelegram() {
   });
 }
 
+/** Settings changed but not saved: their names, or none while a save is already running. */
+function unsavedSettings() {
+  if (!settingsData || following || lastRunState === 'running') return [];
+  const changes = settingsChanges();
+  return [...new Set([...Object.keys(changes.settings), ...Object.keys(changes.secrets)
+    .map(name => ({vpnPassword: 'vpnUser', telegramChat: 'telegramToken'})[name] || name)])]
+    .map(name => SETTING_LABELS[name] || name);
+}
+
+/** Leaving Settings with changes not saved asks first: in the page for its own links, in the browser otherwise. */
+function guardUnsavedSettings() {
+  const dialog = $('#leave-dialog');
+  let destination = null;
+  let leaving = false;
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (link.target && link.target !== '_self') return;
+    const url = new URL(link.href, window.location.href);
+    if (url.origin !== window.location.origin || (url.pathname === window.location.pathname && url.hash)) return;
+    const names = unsavedSettings();
+    if (!names.length) return;
+    event.preventDefault();
+    destination = url.href;
+    const listed = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+    $('#leave-detail').textContent = `Your changes to ${listed} aren’t saved yet.`;
+    dialog.showModal();
+    $('#leave-save').focus();
+  });
+  $('#leave-stay').addEventListener('click', () => {
+    dialog.close();
+    $('#settings-save').focus();
+  });
+  $('#leave-discard').addEventListener('click', () => {
+    leaving = true;
+    dialog.close();
+    window.location.assign(destination);
+  });
+  // Saving asks for the PIN and runs setup here, so the page stays to show it.
+  $('#leave-save').addEventListener('click', () => {
+    dialog.close();
+    $('#settings-form').requestSubmit();
+  });
+  window.addEventListener('beforeunload', event => {
+    if (leaving || !unsavedSettings().length) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+}
+
 function setupSettings() {
+  guardUnsavedSettings();
   const form = $('#settings-form');
   setupTelegram();
   form.addEventListener('input', showSettingsChanges);
