@@ -237,9 +237,6 @@ class AdoptTests(Folder):
                                      '   Radarr: no films to move.'])
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class ContainerNameTests(unittest.TestCase):
     def test_the_usual_installation_has_plain_names_and_another_keeps_its_project(self):
@@ -249,3 +246,7 @@ class ContainerNameTests(unittest.TestCase):
                 self.assertEqual(install.container_prefix(usual, 'martinflix-abc'), 'martinflix')
                 self.assertEqual(install.container_prefix(legacy, 'martinflix-first-run-abc'), 'martinflix')
                 self.assertEqual(install.container_prefix(other, 'martinflix-def'), 'martinflix-def')
+
+
+if __name__ == '__main__':
+    unittest.main()
