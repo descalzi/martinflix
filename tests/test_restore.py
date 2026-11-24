@@ -153,12 +153,13 @@ class RestoreTests(unittest.TestCase):
         plan = {'compose': ['docker', 'compose'], 'environment': {}}
         calls = []
         with patch.object(install.subprocess, 'run', side_effect=lambda command, **kwargs: calls.append(command)
-                          or SimpleNamespace(returncode=0, stdout='', stderr='')), \
+                          or SimpleNamespace(returncode=0, stdout='sonarr\ndashboard\nradarr\ncontroller\n', stderr='')), \
                 patch.object(install, 'plan_installation', side_effect=lambda *a, **k: {'planned': a[2]}), \
                 patch.object(install.sys.stdin, 'isatty', return_value=False), redirect_stdout(io.StringIO()):
             options, new_plan = install.restore_backup(args, restore.Backup(self.backup), state, previous, plan,
                                                        'martinflix-new', self.root / 'overlay.json')
-        self.assertEqual(calls, [['docker', 'compose', 'stop']])
+        # The dashboard and controller keep running, to show the restore as it goes.
+        self.assertEqual(calls, [['docker', 'compose', 'config', '--services'], ['docker', 'compose', 'stop', 'sonarr', 'radarr']])
         self.assertEqual(options['project'], 'martinflix-new')
         self.assertEqual(options['media_path'], str(media))
         self.assertTrue(options['plex'])

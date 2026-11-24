@@ -1372,6 +1372,10 @@ def install(args, overlay_file):
                      mode='restore' if backup else 'reset' if args.reset else 'update' if existing else 'install')
 
 
+# Kept running through a restore, to report it.
+KEEP_RUNNING = ('dashboard', 'controller')
+
+
 def describe_export(backup, plan):
     """What restoring an export of another stack does beyond a usual restore, and anything that won't line up."""
     source = backup.manifest.get('export') or {}
@@ -1408,8 +1412,16 @@ def restore_backup(args, backup, state, previous, plan, project, overlay_file):
     private_directory(state)
     with (state / 'install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        stopped = subprocess.run(plan['compose'] + ['stop'], env=plan['environment'], capture_output=True, text=True,
-                                 timeout=300)
+        listed = subprocess.run(plan['compose'] + ['config', '--services'], env=plan['environment'],
+                                capture_output=True, text=True, timeout=120)
+        if listed.returncode:
+            raise ValueError('Setup could not read the stack before restoring: '
+                             + (listed.stderr or listed.stdout).strip()[-600:])
+        # The dashboard and controller keep running, so the dashboard can show the restore as it goes; setup restarts
+        # them on the restored data at the end. Nothing they hold open is replaced.
+        apps = [name for name in listed.stdout.split() if name not in KEEP_RUNNING]
+        stopped = subprocess.run(plan['compose'] + ['stop', *apps], env=plan['environment'], capture_output=True,
+                                 text=True, timeout=300)
         if stopped.returncode:
             raise ValueError('Setup could not stop the apps before restoring: '
                              + (stopped.stderr or stopped.stdout).strip()[-600:])
@@ -1656,7 +1668,7 @@ def run_installation(plan, state, previous, mode='install'):
             raise ValueError('Setup could not download the app images. If the details mention "toomanyrequests", the '
                              'image registry is busy: wait a few minutes, then rerun setup with the same options. '
                              'Otherwise check this VM’s internet connection and Docker storage.')
-        started_step('3. Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '120', *APPS], APPS)
+        started_step('3. Sonarr and Radarr…', ['up', '-d', '--wait', '--wait-timeout', '360', *APPS], APPS)
         arr_keys = {app: wait_for_key(state / app / 'config.xml') for app in APPS}
         for app, key in arr_keys.items():
             write_secret(secret_dir / f'{app}-key', key)
@@ -1666,7 +1678,7 @@ def run_installation(plan, state, previous, mode='install'):
             arr_address = str(bind)
             environment['MARTINFLIX_DASHBOARD_BIND'] = arr_address
             compose_step('   Opening the protected Sonarr and Radarr logins on your LAN…',
-                         ['up', '-d', '--wait', '--wait-timeout', '120', *APPS], watch=APPS)
+                         ['up', '-d', '--wait', '--wait-timeout', '360', *APPS], watch=APPS)
         step = 4
         prowlarr_key = None
         services = (['gluetun'] if vpn else []) + downloads
@@ -1685,7 +1697,7 @@ def run_installation(plan, state, previous, mode='install'):
         if services:
             label = 'Download apps' if vpn else 'Download and tracker apps'
             started_step(f'{step}. {label}…' if not vpn else f'   {label}…',
-                         ['up', '-d', '--wait', '--wait-timeout', '210', *recreate, *services],
+                         ['up', '-d', '--wait', '--wait-timeout', '360', *recreate, *services],
                          [service for service in services if service != 'gluetun'], before=before_downloads,
                          follows='gluetun' if vpn and download_network == 'vpn' else None)
             step += 1
@@ -1706,7 +1718,7 @@ def run_installation(plan, state, previous, mode='install'):
             download_address = str(bind)
             environment['MARTINFLIX_DOWNLOAD_BIND'] = download_address
             compose_step('   Opening the protected download app logins on your LAN…',
-                         ['up', '-d', '--wait', '--wait-timeout', '210', *services], watch=services,
+                         ['up', '-d', '--wait', '--wait-timeout', '360', *services], watch=services,
                          follows='gluetun' if vpn and download_network == 'vpn' else None)
             if bazarr:
                 bazarr = BazarrApi(download_address, ports['bazarr'], bazarr.key)
@@ -1761,7 +1773,7 @@ def run_installation(plan, state, previous, mode='install'):
             claim = '' if plex_token(plex_config) else plex_claim_code()
             if claim:
                 environment['MARTINFLIX_PLEX_CLAIM'] = claim
-            started_step(f'{step}. Plex…', ['up', '-d', '--wait', '--wait-timeout', '180', 'plex'], ['plex'])
+            started_step(f'{step}. Plex…', ['up', '-d', '--wait', '--wait-timeout', '360', 'plex'], ['plex'])
             environment.pop('MARTINFLIX_PLEX_CLAIM', None)
             token = wait_for_plex_token(plex_config, 60 if claim else 1)
             if token and not wait_for_plex_ready(token):

@@ -15,7 +15,9 @@ services:
       interval: 3s
       timeout: 2s
       retries: 20
-      start_period: 15s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
   radarr:
     container_name: ${MARTINFLIX_NAMES:?}-radarr
@@ -33,7 +35,9 @@ services:
       interval: 3s
       timeout: 2s
       retries: 20
-      start_period: 15s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
   # The dashboard and the controller run from the MartinFlix image setup itself came from, by its version.
   dashboard:

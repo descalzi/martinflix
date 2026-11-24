@@ -24,7 +24,9 @@ services:
       interval: 5s
       timeout: 4s
       retries: 15
-      start_period: 20s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
   prowlarr:
     container_name: ${MARTINFLIX_NAMES:?}-prowlarr
@@ -41,7 +43,9 @@ services:
       interval: 5s
       timeout: 4s
       retries: 15
-      start_period: 20s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
   flaresolverr:
     container_name: ${MARTINFLIX_NAMES:?}-flaresolverr
@@ -53,7 +57,9 @@ services:
       interval: 5s
       timeout: 4s
       retries: 15
-      start_period: 20s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
   bazarr:
     container_name: ${MARTINFLIX_NAMES:?}-bazarr
@@ -76,7 +82,9 @@ services:
       interval: 5s
       timeout: 4s
       retries: 20
-      start_period: 30s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
 secrets:
   transmission_password:

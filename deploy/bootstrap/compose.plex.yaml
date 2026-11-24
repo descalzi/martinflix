@@ -30,7 +30,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 24
-      start_period: 30s
+      # Generous: on its first start with a restored or older database, an app may upgrade it for minutes. A pass
+      # during this time counts at once; a failure only after it.
+      start_period: 5m
 
   dashboard:
     # The dashboard reaches Plex on the host's network for Live's now playing and watch history.

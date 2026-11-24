@@ -1404,7 +1404,7 @@ function renderRun(updater) {
   const started = when(updater.startedAt, {hour: '2-digit', minute: '2-digit'});
   const finished = when(updater.finishedAt, {hour: '2-digit', minute: '2-digit'});
   $('#setup-run-detail').textContent = updater.state === 'running'
-    ? updater.kind === 'restore' ? `Started ${started}. The apps, this dashboard too, stop while their data is replaced; this page reconnects by itself.`
+    ? updater.kind === 'restore' ? `Started ${started}. The apps stop while their data is replaced; follow it here. The dashboard restarts at the end, and this page reconnects by itself.`
       : `Started ${started}. The dashboard restarts near the end and this page reloads by itself.`
     : updater.state === 'failed' ? `Stopped at ${finished}. The output below says why; nothing after that step changed. Fix it, then try again.`
     : `Finished at ${finished}.`;

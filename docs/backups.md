@@ -23,9 +23,9 @@ A checksum proves each archive matches what was saved, not that it restores; a r
 **From the dashboard.** On the Backups page, choose **Restore** beside a backup and enter your PIN. The controller can only read the state folder, so it runs setup to do the restore, in a container of its own, the same way as an update; the page shows setup's output as it goes. Setup:
 
 1. checks every archive against the backup's checksums, and that none would write outside the state folder, before it changes anything;
-2. stops the stack, including the dashboard, which the page waits for;
+2. stops the apps. The dashboard and controller keep running, so the page shows the restore as it goes, with the progress of any large archive;
 3. puts each app's data back: Sonarr's, Radarr's and Prowlarr's database and `config.xml`, Bazarr's database and `config.yaml`, Transmission's settings and torrent list, Plex's `Preferences.xml` and databases, and MartinFlix's options, keys, VPN credentials, dashboard password and PIN;
-4. starts the apps on the restored data and reconnects them, as an update does.
+4. starts the apps on the restored data and reconnects them, as an update does. The dashboard restarts last, and the page reconnects by itself.
 
 Everything the restore replaces is moved, not deleted, into a `before-restore-<date>` folder in the state directory. Only the newest such folder is kept. Media files are never part of a backup, so they stay as they are. Options that describe the machine rather than the stack (its address and ports, the media and backup folders, the release channel) stay as they are now; everything else comes from the backup, including which apps are installed. The PIN and dashboard password become the ones from the backup.
 
