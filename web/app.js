@@ -463,18 +463,21 @@ function setupControls() {
     }
     error.hidden = true;
     setPinBusy(true);
+    let data;
     try {
-      const data = await pinRequest.send(pin.value);
-      pinBusy = false;
-      dialog.close();
-      pinRequest.after?.(data);
+      data = await pinRequest.send(pin.value);
     } catch (failure) {
       setPinBusy(false);
       error.textContent = failure.message;
       error.hidden = false;
       pin.value = '';
       pin.focus();
+      return;
     }
+    pinBusy = false;
+    dialog.close();
+    // Outside the try: a mistake in what follows must show as one, not as a wrong PIN in a closed dialog.
+    pinRequest.after?.(data);
   });
 }
 
@@ -1906,12 +1909,6 @@ function setupSettings() {
     code => post('/api/settings', {pin: code, ...changes}),
     () => {
       form.tmdbKey.value = form.plexToken.value = form.vpnUser.value = form.vpnPassword.value = form.telegramToken.value = '';
-  form.telegramOn.checked = Boolean(data.telegram);
-  form.telegramChat.value = data.telegramChat || '';
-  $('#setting-telegram-token-help').innerHTML = data.telegram ? 'A token is saved. Paste another to replace it.'
-    : 'In Telegram, message <strong>@BotFather</strong>, send <code>/newbot</code> and follow its questions. It replies with the token, such as <code>123456789:AAH…</code>.';
-  $('#telegram-chats').hidden = true;
-  $('#telegram-notice').hidden = true;
       following = true;
       lastRunState = 'running';
       system();
