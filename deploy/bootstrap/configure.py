@@ -873,10 +873,35 @@ LISTENARR_CLIENT = 'MartinFlix Transmission'
 LISTENARR_CATEGORY = 'listenarr'
 
 
+# Listenarr's own list of audiobook qualities, best first. A new book needs a default profile; Listenarr starts with none.
+LISTENARR_QUALITIES = ('AAC 320kbps', 'AAC 256kbps', 'AAC 192kbps', 'AAC 128kbps', 'AAC 64kbps', 'MP3 320kbps', 'MP3 256kbps',
+                       'MP3 VBR', 'MP3 192kbps', 'MP3 128kbps', 'MP3 64kbps')
+LISTENARR_PROFILE = 'MartinFlix'
+
+
+def ensure_listenarr_profile(api, log=print):
+    """A default quality profile, without which Listenarr refuses to add a book: an existing profile becomes the
+    default if none is; otherwise a MartinFlix one that takes any of its qualities and doesn't chase upgrades."""
+    profiles = [item for item in api.request('qualityprofile') or [] if isinstance(item, dict)]
+    if any(item.get('isDefault') for item in profiles):
+        return
+    if profiles:
+        chosen = profiles[0]
+        api.request(f'qualityprofile/{chosen["id"]}', {**chosen, 'isDefault': True}, method='PUT')
+        log(f'   Listenarr: {chosen.get("name") or "its quality profile"} is now the default for new books.', flush=True)
+        return
+    api.request('qualityprofile', {
+        'name': LISTENARR_PROFILE, 'description': 'Any audiobook quality; the first good download is kept.',
+        'qualities': [{'quality': name, 'allowed': True, 'priority': priority} for priority, name in enumerate(LISTENARR_QUALITIES)],
+        'cutoffQuality': LISTENARR_QUALITIES[-1], 'isDefault': True})
+    log(f'   Listenarr: {LISTENARR_PROFILE} quality profile added, as the default for new books.', flush=True)
+
+
 def configure_listenarr(api, *, root, region, transmission_password=None, downloads_behind_vpn=True, prowlarr_key=None,
                         seed=False, log=print):
-    """Listenarr's root folder, its Transmission connection and Prowlarr's audiobook indexers, on every run; its
-    Audible store once."""
+    """Listenarr's root folder, default quality profile, Transmission connection and Prowlarr's audiobook indexers, on
+    every run; its Audible store once."""
+    ensure_listenarr_profile(api, log)
     if not any((folder.get('path') or '').rstrip('/') == root for folder in api.request('rootfolders') or []):
         api.request('rootfolders', {'name': 'Audiobooks', 'path': root, 'isDefault': True})
         log(f'   Listenarr: audiobooks go to {root}.', flush=True)

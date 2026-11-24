@@ -2063,13 +2063,33 @@ def add_audiobook(request):
         'runtime': entry['runtime'], 'publishedDate': released[:10] if released else None,
         'publishYear': str(entry['year']) if entry['year'] else None, 'genres': names(item.get('genres')),
     }
+    # Listenarr's default quality profile, or its first if none is marked: it won't add a book without one.
+    profiles = [item for item in audiobook_json('listenarr', '/api/v1/qualityprofile') or []
+                if isinstance(item, dict) and type(item.get('id')) is int]
+    profile = next((item for item in profiles if item.get('isDefault')), profiles[0] if profiles else None)
+    if profile is None:
+        raise AddError('Listenarr has no quality profile yet. Run setup again (Settings → Run setup again, or an update) '
+                       'to add one, or add one in Listenarr.')
     try:
-        audiobook_json('listenarr', '/api/v1/library/add', {'metadata': metadata, 'monitored': True, 'autoSearch': search},
-                       method='POST', timeout=60)
+        audiobook_json('listenarr', '/api/v1/library/add', {'metadata': metadata, 'monitored': True, 'autoSearch': search,
+                                                            'qualityProfileId': profile['id']}, method='POST', timeout=60)
     except urllib.error.HTTPError as exc:
-        exc.close()
         if exc.code == 409:
+            exc.close()
             raise AddError(f'{entry["title"]} is already in Listenarr.') from None
+        if exc.code == 400:
+            # Listenarr says why it refused, such as a folder it can't use.
+            try:
+                reason = json.loads(exc.read(4096) or b'{}')
+            except (OSError, ValueError):
+                reason = {}
+            finally:
+                exc.close()
+            message = reason.get('message') or reason.get('error') if isinstance(reason, dict) else None
+            if isinstance(message, str) and message.strip():
+                raise AddError(f'Listenarr refused to add it: {" ".join(message.split())[:300]}') from None
+            raise AddError('Listenarr refused to add it. Check its logs for the reason.') from None
+        exc.close()
         raise
     return {'added': True, 'title': entry['title'], 'searching': search}
 

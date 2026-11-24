@@ -221,7 +221,8 @@ class FakeListenarr:
         self.name = 'Listenarr'
         self.calls = []
         self.state = {'startup': {'ApiKey': 'k', 'AuthenticationRequired': None}, 'settings': {'version': 3},
-                      'rootfolders': [], 'download-clients': [], 'remotepathmappings': [], 'indexers': [], **state}
+                      'rootfolders': [], 'download-clients': [], 'remotepathmappings': [], 'indexers': [],
+                      'qualityprofile': [], **state}
 
     def request(self, route, payload=None, method=None):
         self.calls.append((method or ('POST' if payload is not None else 'GET'), route, payload))
@@ -239,6 +240,9 @@ class FakeListenarr:
                      if not any(item['url'] == f'{payload["url"]}/{n}/api' for item in state['indexers'])]
             state['indexers'] += added
             return {'addedCount': len(added), 'total': 5}
+        if route.startswith('qualityprofile/') and method == 'PUT':
+            state['qualityprofile'] = [payload if item['id'] == payload['id'] else item for item in state['qualityprofile']]
+            return payload
         if route.startswith('indexers/') and method == 'DELETE':
             state['indexers'] = [item for item in state['indexers'] if str(item['id']) != route.split('/')[1]]
             return None
@@ -283,6 +287,22 @@ class ListenarrTests(unittest.TestCase):
         self.assertEqual([item['url'] for item in api.state['indexers']],
                          ['http://gluetun:9696/1/api', 'http://gluetun:9696/2/api'])
         self.assertIn('   Listenarr: 2 of Prowlarr’s indexers added for audiobooks.', lines)
+
+    def test_a_default_quality_profile_is_made_or_chosen(self):
+        api = FakeListenarr()
+        configure.ensure_listenarr_profile(api, log=lambda *a, **k: None)
+        [profile] = api.state['qualityprofile']
+        self.assertTrue(profile['isDefault'])
+        self.assertEqual(profile['name'], 'MartinFlix')
+        self.assertEqual(profile['qualities'][0], {'quality': 'AAC 320kbps', 'allowed': True, 'priority': 0})
+        self.assertEqual(profile['cutoffQuality'], 'MP3 64kbps', 'the first good download is kept')
+        api.calls.clear()
+        configure.ensure_listenarr_profile(api, log=lambda *a, **k: None)
+        self.assertEqual(api.calls, [('GET', 'qualityprofile', None)], 'a default is left alone')
+        # A profile made in Listenarr, but not marked default, becomes the default instead of adding another.
+        other = FakeListenarr(qualityprofile=[{'id': 7, 'name': 'Mine', 'isDefault': False}])
+        configure.ensure_listenarr_profile(other, log=lambda *a, **k: None)
+        self.assertEqual(other.state['qualityprofile'], [{'id': 7, 'name': 'Mine', 'isDefault': True}])
 
     def test_a_second_run_changes_only_what_moved(self):
         api = FakeListenarr()
@@ -492,6 +512,8 @@ class LibraryAndAddTests(unittest.TestCase):
                 return search
             if endpoint == '/api/v1/library':
                 return [{'asin': 'B003ZWFO7E'}]
+            if endpoint == '/api/v1/qualityprofile':
+                return [{'id': 3, 'name': 'Other'}, {'id': 5, 'name': 'MartinFlix', 'isDefault': True}]
             return {'message': 'added'}
 
         with patch.dict('os.environ', self.environment, clear=True), patch.object(server, 'audiobook_json', side_effect=fake_json):
@@ -507,6 +529,7 @@ class LibraryAndAddTests(unittest.TestCase):
         self.assertEqual(payload['metadata']['authors'], ['Andy Weir'])
         self.assertEqual((payload['metadata']['runtime'], payload['metadata']['publishYear']), (970, '2021'))
         self.assertTrue(payload['autoSearch'])
+        self.assertEqual(payload['qualityProfileId'], 5, 'the default profile')
         with self.assertRaises(server.AddError):
             server.add_audiobook({'id': 'not-an-asin'})
 
@@ -514,11 +537,30 @@ class LibraryAndAddTests(unittest.TestCase):
         server.AUDIOBOOK_SEARCHES['B0000000AA'] = {'asin': 'B0000000AA', 'title': 'Here Already'}
 
         def conflict(kind, endpoint, payload=None, method=None, timeout=10):
+            if endpoint == '/api/v1/qualityprofile':
+                return [{'id': 1, 'name': 'Any'}]
             raise urllib.error.HTTPError(endpoint, 409, 'Conflict', {}, io.BytesIO(b''))
 
         with patch.dict('os.environ', self.environment, clear=True), patch.object(server, 'audiobook_json', side_effect=conflict):
             with self.assertRaisesRegex(server.AddError, 'Here Already is already in Listenarr'):
                 server.add_audiobook({'id': 'B0000000AA'})
+
+    def test_refusals_say_why_and_no_profile_says_what_to_do(self):
+        server.AUDIOBOOK_SEARCHES['B0000000AB'] = {'asin': 'B0000000AB', 'title': 'Refused'}
+
+        def refused(kind, endpoint, payload=None, method=None, timeout=10):
+            if endpoint == '/api/v1/qualityprofile':
+                return [{'id': 1, 'name': 'Any'}]
+            raise urllib.error.HTTPError(endpoint, 400, 'Bad Request', {},
+                                         io.BytesIO(b'{"message": "The destination folder is not writable."}'))
+
+        with patch.dict('os.environ', self.environment, clear=True):
+            with patch.object(server, 'audiobook_json', side_effect=refused), \
+                    self.assertRaisesRegex(server.AddError, 'Listenarr refused to add it: The destination folder is not writable.'):
+                server.add_audiobook({'id': 'B0000000AB'})
+            with patch.object(server, 'audiobook_json', return_value=[]), \
+                    self.assertRaisesRegex(server.AddError, 'no quality profile yet'):
+                server.add_audiobook({'id': 'B0000000AB'})
 
     def test_delete_with_and_without_files(self):
         calls = []
