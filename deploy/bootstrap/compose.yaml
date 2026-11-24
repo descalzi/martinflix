@@ -1,5 +1,6 @@
 services:
   sonarr:
+    container_name: ${MARTINFLIX_NAMES:?}-sonarr
     image: lscr.io/linuxserver/sonarr:latest
     restart: unless-stopped
     environment:
@@ -17,6 +18,7 @@ services:
       start_period: 15s
 
   radarr:
+    container_name: ${MARTINFLIX_NAMES:?}-radarr
     image: lscr.io/linuxserver/radarr:latest
     restart: unless-stopped
     environment:
@@ -35,6 +37,7 @@ services:
 
   # The dashboard and the controller run from the MartinFlix image setup itself came from, by its version.
   dashboard:
+    container_name: ${MARTINFLIX_NAMES:?}-dashboard
     image: "${MARTINFLIX_IMAGE:?Run setup}"
     pull_policy: never
     command: [dashboard]
@@ -86,6 +89,7 @@ services:
   # The only container with Docker access. It has no published port and shares a private network with the
   # dashboard alone, and it acts only for a request that carries the PIN chosen during setup.
   controller:
+    container_name: ${MARTINFLIX_NAMES:?}-controller
     image: "${MARTINFLIX_IMAGE:?Run setup}"
     pull_policy: never
     command: [controller]

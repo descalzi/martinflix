@@ -239,3 +239,13 @@ class AdoptTests(Folder):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ContainerNameTests(unittest.TestCase):
+    def test_the_usual_installation_has_plain_names_and_another_keeps_its_project(self):
+        with tempfile.TemporaryDirectory() as folder:
+            usual, legacy, other = Path(folder) / 'state', Path(folder) / 'old', Path(folder) / 'other'
+            with patch.object(install, 'default_state_directories', return_value=(usual, legacy)):
+                self.assertEqual(install.container_prefix(usual, 'martinflix-abc'), 'martinflix')
+                self.assertEqual(install.container_prefix(legacy, 'martinflix-first-run-abc'), 'martinflix')
+                self.assertEqual(install.container_prefix(other, 'martinflix-def'), 'martinflix-def')

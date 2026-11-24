@@ -1,5 +1,6 @@
 services:
   transmission:
+    container_name: ${MARTINFLIX_NAMES:?}-transmission
     profiles: [transmission]
     image: lscr.io/linuxserver/transmission:latest
     restart: unless-stopped
@@ -26,6 +27,7 @@ services:
       start_period: 20s
 
   prowlarr:
+    container_name: ${MARTINFLIX_NAMES:?}-prowlarr
     profiles: [prowlarr]
     image: lscr.io/linuxserver/prowlarr:latest
     restart: unless-stopped
@@ -42,6 +44,7 @@ services:
       start_period: 20s
 
   flaresolverr:
+    container_name: ${MARTINFLIX_NAMES:?}-flaresolverr
     profiles: [flaresolverr]
     image: ghcr.io/flaresolverr/flaresolverr:latest
     restart: unless-stopped
@@ -53,6 +56,7 @@ services:
       start_period: 20s
 
   bazarr:
+    container_name: ${MARTINFLIX_NAMES:?}-bazarr
     profiles: [bazarr]
     image: lscr.io/linuxserver/bazarr:latest
     restart: unless-stopped

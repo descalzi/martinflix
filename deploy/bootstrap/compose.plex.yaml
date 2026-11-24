@@ -2,6 +2,7 @@ services:
   # Plex uses the host's network, as LinuxServer recommends: clients on the LAN find it by themselves, and remote
   # access works without extra port mapping. It listens on port 32400 on every address of this VM.
   plex:
+    container_name: ${MARTINFLIX_NAMES:?}-plex
     image: lscr.io/linuxserver/plex:latest
     profiles: [plex]
     restart: unless-stopped

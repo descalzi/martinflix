@@ -100,6 +100,13 @@ def resolve_state_directory(requested):
     return current.resolve()
 
 
+def container_prefix(state, project):
+    """Containers are named <prefix>-<app>: plain martinflix for the usual installation, and its project name for
+    another one beside it (with its own --state-dir), so the two never clash."""
+    usual = {path.resolve() for path in default_state_directories()}
+    return 'martinflix' if Path(state).resolve() in usual else project
+
+
 def project_exists(project):
     try:
         listed = subprocess.run(['docker', 'ps', '-aq', '--filter', f'label=com.docker.compose.project={project}'],
@@ -1044,7 +1051,7 @@ def reset_installation(state, project):
                            MARTINFLIX_GID=str(os.getgid()), MARTINFLIX_DASHBOARD_BIND='127.0.0.1',
                            MARTINFLIX_DASHBOARD_PORT='8765', MARTINFLIX_SONARR_PORT='8989', MARTINFLIX_RADARR_PORT='7878',
                            MARTINFLIX_IMAGE=OWN_IMAGE, MARTINFLIX_BACKUP_DIR='/nonexistent',
-                           MARTINFLIX_BACKUP_HOST_DIR='/nonexistent')
+                           MARTINFLIX_BACKUP_HOST_DIR='/nonexistent', MARTINFLIX_NAMES=container_prefix(state, project))
         subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-p', project, '-f', str(COMPOSE_FILE),
                         'down', '--remove-orphans'], env=environment, timeout=120, check=True)
         archive = Path(tempfile.mkdtemp(prefix='reset-backup-', dir=state))
@@ -1181,6 +1188,7 @@ def plan_installation(args, state, previous, project, overlay_file, fresh_arr=Fa
                        MARTINFLIX_VPN_PROTOCOL=vpn_protocol)
     environment.update({f'MARTINFLIX_{service.upper()}_PORT': str(port) for service, port in ports.items()})
     environment['MARTINFLIX_IMAGE'] = OWN_IMAGE
+    environment['MARTINFLIX_NAMES'] = container_prefix(state, project)
     channel = args.channel or previous.get('channel') or (os.environ.get('MARTINFLIX_CHANNEL') if
                                                           os.environ.get('MARTINFLIX_CHANNEL') in CHANNELS else 'edge')
     options['channel'] = channel
@@ -1786,7 +1794,7 @@ def run_installation(plan, state, previous, mode='install'):
         except (OSError, ValueError):
             previous_version = None
         write_secret(state / 'controller' / 'compose.json', json.dumps({
-            'project': project, 'compose': compose[1:], 'stateDir': str(state),
+            'project': project, 'names': environment['MARTINFLIX_NAMES'], 'compose': compose[1:], 'stateDir': str(state),
             'backupDir': environment['MARTINFLIX_BACKUP_DIR'], 'host': socket.gethostname(),
             'image': OWN_IMAGE, 'version': VERSION, 'revision': REVISION, 'channel': options['channel'],
             'setup': {'home': str(home), 'runAs': f'{os.getuid()}:{os.getgid()}',

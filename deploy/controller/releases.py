@@ -108,7 +108,13 @@ class Releases:
                 'repo': self.environ.get('MARTINFLIX_IMAGE_REPO', 'ghcr.io/descalzi/martinflix')}
 
     def updater_name(self):
-        return f'{self.stack.config()["project"]}-updater'
+        config = self.stack.config()
+        return f'{config.get("names") or config["project"]}-updater'
+
+    def updater_names(self):
+        """This updater's name, then the one from before containers had short names, so an update started under the
+        old name is still reported and tidied."""
+        return list(dict.fromkeys([self.updater_name(), f'{self.stack.config()["project"]}-updater']))
 
     # Checking for a newer version
 
@@ -157,8 +163,10 @@ class Releases:
     def updater(self):
         """The last update, settings change or restore: its state, and the end of setup's output. None if there was
         none. Once it has finished, its result is saved and its container removed, so nothing is left behind."""
-        name = self.updater_name()
-        inspected = self.stack.run(['inspect', name], timeout=30)
+        for name in self.updater_names():
+            inspected = self.stack.run(['inspect', name], timeout=30)
+            if not inspected.returncode:
+                break
         if inspected.returncode:
             try:
                 return json.loads(self.last_run_file().read_text())
