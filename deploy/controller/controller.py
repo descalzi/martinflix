@@ -192,7 +192,7 @@ class Stack:
         newer = self.app_updates.available if self.app_updates else {}
         return {'services': {name: {**containers.get(name, {'state': 'missing'}), 'dependents': dependents(services, name),
                                     'canUpdate': self.updatable(spec),
-                                    'updateAvailable': name in newer and newer[name] != containers.get(name, {}).get('imageId')}
+                                    'updateAvailable': name in newer and newer[name] == containers.get(name, {}).get('imageId')}
                              for name, spec in services.items()},
                 'appUpdatesCheckedAt': self.app_updates.checked_at if self.app_updates else None}
 
@@ -222,7 +222,7 @@ class Stack:
         if started.returncode:
             raise RuntimeError(f'Starting {name} failed: {tail(started)}')
         if self.app_updates:
-            # It runs the newest image now, whether or not it had to change; the next check looks again.
+            # It runs the newest image now; the next check looks again.
             self.app_updates.available.pop(name, None)
         if self.containers().get(name, {}).get('id') == before:
             return {'updated': False, 'followed': [], 'image': services[name].get('image')}
@@ -235,11 +235,12 @@ class Stack:
 
 
 class AppUpdates:
-    """Which apps have a newer image than the one they run, checked once a day.
+    """Which apps have a newer image in their registry than the one they run, checked once a day.
 
-    Like MartinFlix's own check, Docker downloads the images, so the controller stays off the internet, and an
-    Update from the dashboard then only has to restart the app. An app pinned to a version, such as Listenarr, only
-    changes when setup moves the pin.
+    Nothing is downloaded: the controller has no internet access, so a short-lived container of the MartinFlix image
+    asks each registry which digest the app's tag points at now (registry.py), and that is compared with the digests
+    of the image the app runs. Update on the Services page then downloads it. An app pinned to a version, such as
+    Listenarr, only changes when setup moves the pin.
     """
 
     def __init__(self, stack, clock=time.time, sleep=time.sleep, busy=lambda: False):
@@ -247,9 +248,30 @@ class AppUpdates:
         self.clock = clock
         self.sleep = sleep
         self.busy = busy
+        # The image ID each app ran when its newer version was found: once it runs another, the flag goes.
         self.available = {}
         self.checked_at = None
         self.lock = threading.Lock()
+
+    def remote_digests(self, references):
+        image = self.stack.config()['env'].get('MARTINFLIX_IMAGE')
+        if not image:
+            raise RuntimeError('the MartinFlix image is not known')
+        result = self.stack.run(['run', '--rm', '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
+                                 '--security-opt', 'no-new-privileges', '--user', '65534:65534', '--entrypoint', 'python',
+                                 image, '-B', '/app/deploy/controller/registry.py', *references], timeout=600)
+        if result.returncode:
+            raise RuntimeError('the registry check could not run: ' + tail(result, 300))
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    def running_digests(self, image_ids):
+        """The registry digests each running image was downloaded as, by image ID."""
+        found = {}
+        for image_id in image_ids:
+            inspected = self.stack.run(['image', 'inspect', '--format', '{{json .RepoDigests}}', image_id], timeout=60)
+            if not inspected.returncode:
+                found[image_id] = {entry.rpartition('@')[2] for entry in json.loads(inspected.stdout or '[]') or []}
+        return found
 
     def check(self):
         if not self.lock.acquire(blocking=False):
@@ -257,24 +279,24 @@ class AppUpdates:
         try:
             if self.busy():
                 return
-            services = {name: spec for name, spec in self.stack.controllable().items()
-                        if self.stack.updatable(spec) and spec.get('image')}
-            if not services:
+            services = {name: spec['image'] for name, spec in self.stack.controllable().items()
+                        if self.stack.updatable(spec) and spec.get('image') and '@' not in spec['image']}
+            running = {name: info.get('imageId') for name, info in self.stack.containers().items()
+                       if name in services and info.get('imageId')}
+            if not running:
                 return
-            # One app's registry being down shouldn't hide the others' updates.
-            self.stack.compose('pull', '--quiet', '--ignore-pull-failures', *sorted(services), timeout=3600)
-            running = self.stack.containers()
+            remote = self.remote_digests(sorted({services[name] for name in running}))
+            local = self.running_digests(set(running.values()))
             found = {}
-            for name, spec in services.items():
-                inspected = self.stack.run(['image', 'inspect', '--format', '{{.Id}}', spec['image']], timeout=60)
-                latest = inspected.stdout.strip() if not inspected.returncode else ''
-                current = running.get(name, {}).get('imageId')
-                if latest and current and latest != current:
-                    found[name] = latest
+            for name, image_id in running.items():
+                latest, have = remote.get(services[name]), local.get(image_id)
+                # An image built here, or a registry that didn't answer, is left alone.
+                if latest and have and latest not in have:
+                    found[name] = image_id
             self.available = found
             self.checked_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             if found:
-                print(f'Updates downloaded for: {", ".join(sorted(found))}.', flush=True)
+                print(f'Newer images available for: {", ".join(sorted(found))}.', flush=True)
         except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as exc:
             print(f'Checking apps for updates failed: {exc}', flush=True)
         finally:
