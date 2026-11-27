@@ -142,6 +142,7 @@ function serviceCard(service, groupServices) {
       <div><h4>${title}</h4><p>${esc(app.role)}</p></div>
       ${statusChip(service)}
     </div>
+    ${service.control?.updateAvailable ? `<p class="service-update"><span class="badge ok">Update available</span></p>` : ''}
     ${tone === 'ok' || !service.status ? '' : `<p class="service-detail">${esc(service.status)}</p>`}
     ${appHealth(service)}
     ${localOnly ? '<p class="service-note">Its web page only opens on the host itself. Rerun setup with your LAN address to reach it from here.</p>' : ''}
@@ -159,7 +160,9 @@ function controlButtons(service, extra = '') {
   return `<div class="service-actions">
     ${extra}
     <button class="button button-quiet button-small" type="button" data-control="restart" data-service="${name}">${icon('refresh')}${serviceIsUp(service) ? 'Restart' : 'Start'}</button>
-    ${service.control.canUpdate === false ? '' : `<button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>`}
+    ${service.control.canUpdate === false ? '' : service.control.updateAvailable
+      ? `<button class="button button-primary button-small" type="button" data-control="update" data-service="${name}" title="A newer version is downloaded and ready">${icon('up')}Update</button>`
+      : `<button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>`}
   </div>`;
 }
 
@@ -216,6 +219,7 @@ function gatewayBar(service) {
     ${appIcon(service.name)}
     <div class="gateway-name"><h4>${esc(app.name)}</h4><p>${esc(app.role)}</p></div>
     ${statusChip(service)}
+    ${service.control?.updateAvailable ? `<span class="badge ok">Update available</span>` : ''}
     ${controlButtons(service, test)}
     ${vpn ? `<div class="vpn-slot">${vpnResult()}</div>` : ''}
   </div>`;
@@ -596,10 +600,14 @@ async function status() {
     const problems = attentionRows(docker, services).length;
     $('#nav-flag').hidden = problems === 0;
     $('#nav-flag').innerHTML = `${problems}<span class="sr-only"> ${problems === 1 ? 'issue' : 'issues'}</span>`;
+    const updates = services.filter(service => service.control?.updateAvailable).length;
+    $('#nav-app-updates').hidden = updates === 0;
+    $('#nav-app-updates').innerHTML = `${updates}<span class="sr-only"> ${updates === 1 ? 'update' : 'updates'} available</span>`;
     if (servicesPage) {
-      $('#services-description').textContent = probes
+      $('#services-description').textContent = (probes
         ? 'Live health checks for the services this installer set up.'
-        : 'Container status from Docker, grouped by stack, with each app’s own health alerts.';
+        : 'Container status from Docker, grouped by stack, with each app’s own health alerts.')
+        + (updates ? ` ${updates === 1 ? 'One app has' : `${updates} apps have`} a newer version ready: Update restarts it on the new one.` : '');
       controlServices.clear();
       for (const service of services) if (service.control) controlServices.set(service.name, service);
       $('#services-content').innerHTML = docker.available

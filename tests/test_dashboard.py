@@ -450,7 +450,7 @@ class ControlTests(unittest.TestCase):
             'radarr': {'state': 'exited', 'exitCode': 137, 'dependents': []},
             'sonarr': {'state': 'running', 'startedAt': '2026-11-20T08:59:00Z', 'dependents': []}})
         self.assertEqual(services[0]['startedAt'], '2026-11-20T08:00:00Z')
-        self.assertEqual(services[0]['control'], {'followers': ['transmission-daemon'], 'canUpdate': True},
+        self.assertEqual(services[0]['control'], {'followers': ['transmission-daemon'], 'canUpdate': True, 'updateAvailable': False},
                          'helper sidecars stay out of the list')
         self.assertEqual((services[1]['state'], services[1]['status']), ('exited', 'Exited (exit code 137)'))
         self.assertEqual(services[2]['startedAt'], '2026-11-20T09:00:00Z', 'an app\'s own start time wins')

@@ -612,6 +612,7 @@
     background: var(--tint); color: var(--fg); text-decoration: none;
   }
   .update-banner:hover { border-color: var(--accent); }
+  .service-update { margin: 0; }
   .password-banner { width: 100%; margin-bottom: var(--space-4); font: inherit; text-align: left; cursor: pointer; }
   .update-banner > span { flex: 1; min-width: 0; }
   .update-banner .icon { flex: none; color: var(--accent); }

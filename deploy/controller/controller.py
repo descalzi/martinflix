@@ -15,6 +15,7 @@ import secrets
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -25,6 +26,9 @@ import vpncheck
 # Restarting these ends the request that asked for it, so the controller answers first and restarts them after.
 SELF = frozenset({'dashboard', 'controller'})
 RESTART_DELAY_SECONDS = 1.0
+# Apps are checked for newer images once a day, starting a while after the controller does.
+APP_UPDATES_FIRST_SECONDS = 10 * 60
+APP_UPDATES_EVERY_SECONDS = 24 * 3600
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300
 PIN_LENGTHS = range(4, 9)
@@ -127,6 +131,7 @@ class Stack:
         self.runner = runner
         self.cached = (None, None)
         self.later = later or (lambda action: threading.Timer(RESTART_DELAY_SECONDS, action).start())
+        self.app_updates = None
 
     def config(self):
         return json.loads(self.config_file.read_text())
@@ -177,16 +182,19 @@ class Stack:
             result[service] = {
                 'id': item['Id'], 'state': state.get('Status', 'unknown'), 'startedAt': state.get('StartedAt'),
                 'health': (state.get('Health') or {}).get('Status'), 'exitCode': state.get('ExitCode'),
-                'image': item['Config'].get('Image'),
+                'image': item['Config'].get('Image'), 'imageId': item.get('Image'),
             }
         return result
 
     def status(self):
         services = self.controllable()
         containers = self.containers()
+        newer = self.app_updates.available if self.app_updates else {}
         return {'services': {name: {**containers.get(name, {'state': 'missing'}), 'dependents': dependents(services, name),
-                                    'canUpdate': self.updatable(spec)}
-                             for name, spec in services.items()}}
+                                    'canUpdate': self.updatable(spec),
+                                    'updateAvailable': name in newer and newer[name] != containers.get(name, {}).get('imageId')}
+                             for name, spec in services.items()},
+                'appUpdatesCheckedAt': self.app_updates.checked_at if self.app_updates else None}
 
     def restart(self, name):
         services = self.controllable()
@@ -213,6 +221,9 @@ class Stack:
         started = self.compose('up', '-d', '--no-deps', name)
         if started.returncode:
             raise RuntimeError(f'Starting {name} failed: {tail(started)}')
+        if self.app_updates:
+            # It runs the newest image now, whether or not it had to change; the next check looks again.
+            self.app_updates.available.pop(name, None)
         if self.containers().get(name, {}).get('id') == before:
             return {'updated': False, 'followed': [], 'image': services[name].get('image')}
         if follow:
@@ -221,6 +232,59 @@ class Stack:
             if recreated.returncode:
                 raise RuntimeError(f'Recreating {", ".join(follow)} failed: {tail(recreated)}')
         return {'updated': True, 'followed': follow, 'image': services[name].get('image')}
+
+
+class AppUpdates:
+    """Which apps have a newer image than the one they run, checked once a day.
+
+    Like MartinFlix's own check, Docker downloads the images, so the controller stays off the internet, and an
+    Update from the dashboard then only has to restart the app. An app pinned to a version, such as Listenarr, only
+    changes when setup moves the pin.
+    """
+
+    def __init__(self, stack, clock=time.time, sleep=time.sleep, busy=lambda: False):
+        self.stack = stack
+        self.clock = clock
+        self.sleep = sleep
+        self.busy = busy
+        self.available = {}
+        self.checked_at = None
+        self.lock = threading.Lock()
+
+    def check(self):
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
+            if self.busy():
+                return
+            services = {name: spec for name, spec in self.stack.controllable().items()
+                        if self.stack.updatable(spec) and spec.get('image')}
+            if not services:
+                return
+            # One app's registry being down shouldn't hide the others' updates.
+            self.stack.compose('pull', '--quiet', '--ignore-pull-failures', *sorted(services), timeout=3600)
+            running = self.stack.containers()
+            found = {}
+            for name, spec in services.items():
+                inspected = self.stack.run(['image', 'inspect', '--format', '{{.Id}}', spec['image']], timeout=60)
+                latest = inspected.stdout.strip() if not inspected.returncode else ''
+                current = running.get(name, {}).get('imageId')
+                if latest and current and latest != current:
+                    found[name] = latest
+            self.available = found
+            self.checked_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            if found:
+                print(f'Updates downloaded for: {", ".join(sorted(found))}.', flush=True)
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(f'Checking apps for updates failed: {exc}', flush=True)
+        finally:
+            self.lock.release()
+
+    def check_forever(self):
+        self.sleep(APP_UPDATES_FIRST_SECONDS)
+        while True:
+            self.check()
+            self.sleep(APP_UPDATES_EVERY_SECONDS)
 
 
 class TransmissionPassword:
@@ -453,6 +517,8 @@ def serve():
     server.transmission = TransmissionPassword(server.stack, server.busy, marker)
     server.backups = Backups(server.stack)
     server.releases = Releases(server.stack)
+    server.stack.app_updates = AppUpdates(server.stack, busy=lambda: updating(server))
+    threading.Thread(target=server.stack.app_updates.check_forever, daemon=True).start()
     threading.Thread(target=server.releases.check_forever, daemon=True).start()
     threading.Thread(target=server.releases.tidy_forever, daemon=True).start()
     if server.stack.config().get('backupDir'):

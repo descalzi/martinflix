@@ -28,7 +28,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / 'web'
 SESSION_COOKIE = 'martinflix_session'
-SESSION_SECONDS = 12 * 60 * 60
+# A sign-in lasts 30 days on that browser: the dashboard is for the home network, and restarts, updates and
+# backups still ask for the PIN.
+SESSION_SECONDS = 30 * 24 * 60 * 60
 MIN_PERSONAL_PASSWORD = 8
 ARR_COMPOSE_ADDRESSES = {'sonarr': 'http://sonarr:8989', 'radarr': 'http://radarr:7878'}
 ARR_HEALTH_ENDPOINTS = {
@@ -142,7 +144,9 @@ def apply_control_status(services, control):
             continue
         followers = [CATALOG_NAMES.get(name, name) for name in info.get('dependents', [])]
         service['control'] = {'followers': [name for name in followers if name in CATALOG['apps'] and name not in HELPERS],
-                              'canUpdate': info.get('canUpdate', True)}
+                              'canUpdate': info.get('canUpdate', True),
+                              # The controller's daily check has downloaded a newer image than the one running.
+                              'updateAvailable': bool(info.get('updateAvailable'))}
         if info.get('state') != 'running':
             service['state'] = 'exited' if info.get('state') in ('exited', 'dead') else info.get('state', 'unknown')
             code = info.get('exitCode')
