@@ -153,17 +153,19 @@ function serviceCard(service, groupServices) {
   </li>`;
 }
 
-/** Restart and Update, when the controller can act on this app. */
+/** Restart and Update, when the controller can act on this app. They show when the card is hovered or focused,
+ * except Start for an app that's down and Update when a newer version is out, which always show. */
 function controlButtons(service, extra = '') {
   if (!service.control) return '';
   const name = esc(service.name);
-  return `<div class="service-actions">
-    ${extra}
-    <button class="button button-quiet button-small" type="button" data-control="restart" data-service="${name}">${icon('refresh')}${serviceIsUp(service) ? 'Restart' : 'Start'}</button>
-    ${service.control.canUpdate === false ? '' : service.control.updateAvailable
-      ? `<button class="button button-primary button-small" type="button" data-control="update" data-service="${name}" title="A newer version is downloaded and ready">${icon('up')}Update</button>`
-      : `<button class="button button-quiet button-small" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button>`}
-  </div>`;
+  const up = serviceIsUp(service);
+  const hover = up ? ' hover-action' : '';
+  const restart = `<button class="button button-quiet button-small${hover}" type="button" data-control="restart" data-service="${name}">${icon('refresh')}${up ? 'Restart' : 'Start'}</button>`;
+  if (service.control.canUpdate === false) return `<div class="service-actions">${extra}${restart}</div>`;
+  // A waiting update leads, so it sits at the start of the row while Restart is hidden.
+  return service.control.updateAvailable
+    ? `<div class="service-actions">${extra}<button class="button button-primary button-small" type="button" data-control="update" data-service="${name}" title="A newer version is available">${icon('up')}Update</button>${restart}</div>`
+    : `<div class="service-actions">${extra}${restart}<button class="button button-quiet button-small${hover}" type="button" data-control="update" data-service="${name}">${icon('up')}Update</button></div>`;
 }
 
 /* The VPN test: where the downloads really leave from, and whether that is through the VPN. */
